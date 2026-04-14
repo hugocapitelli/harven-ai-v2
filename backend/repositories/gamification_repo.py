@@ -1,7 +1,6 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from models.gamification import UserActivity, UserStats, UserAchievement, Certificate
-from models.progress import CourseProgress
+from models.gamification import UserActivity, UserStats, UserAchievement, Certificate, CourseProgress
 from .base import BaseRepository
 
 

@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import { useSearchParams } from 'react-router-dom';

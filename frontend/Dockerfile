@@ -13,4 +13,4 @@ COPY nginx.conf /etc/nginx/templates/default.conf.template
 ENV API_UPSTREAM=http://backend:8000
 EXPOSE 80
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -q --spider http://localhost/health || exit 1
-CMD ["/bin/sh", "-c", "sed -i 's|API_UPSTREAM_PLACEHOLDER|'\"$API_UPSTREAM\"'|g' /etc/nginx/templates/default.conf.template && cp /etc/nginx/templates/default.conf.template /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"]
+CMD ["nginx", "-g", "daemon off;"]

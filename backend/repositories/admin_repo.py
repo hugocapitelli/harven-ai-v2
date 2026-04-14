@@ -1,6 +1,6 @@
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
-from models.admin import SystemSettings, SystemLog, SystemBackup
+from models.settings import SystemSettings, SystemLog, SystemBackup
 from .base import BaseRepository
 
 

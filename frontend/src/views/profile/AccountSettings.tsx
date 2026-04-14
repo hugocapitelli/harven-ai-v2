@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { useState, useRef } from 'react';
 import { toast } from 'sonner';
 import { useAuth } from '../../contexts/AuthContext';

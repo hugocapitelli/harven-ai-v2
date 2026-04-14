@@ -6,9 +6,11 @@ type TabItem = string | { id: string; label: string; icon?: string };
 interface TabsProps {
   items: TabItem[];
   value?: string;
+  activeTab?: string;
   defaultValue?: string;
   onChange?: (value: string) => void;
   className?: string;
+  ariaLabel?: string;
 }
 
 function getTabId(item: TabItem): string {
@@ -23,13 +25,14 @@ function getTabIcon(item: TabItem): string | undefined {
   return typeof item === 'string' ? undefined : item.icon;
 }
 
-function Tabs({ items, value, defaultValue, onChange, className }: TabsProps) {
+function Tabs({ items, value, activeTab, defaultValue, onChange, className, ariaLabel }: TabsProps) {
+  const resolvedValue = value ?? activeTab;
   const [internalValue, setInternalValue] = useState(
-    defaultValue || getTabId(items[0])
+    defaultValue || getTabId(items[0]!)
   );
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
-  const activeValue = value ?? internalValue;
+  const activeValue = resolvedValue ?? internalValue;
 
   const handleSelect = useCallback(
     (id: string) => {
@@ -61,7 +64,9 @@ function Tabs({ items, value, defaultValue, onChange, className }: TabsProps) {
       }
 
       e.preventDefault();
-      const nextId = getTabId(items[nextIndex]);
+      const nextItem = items[nextIndex];
+      if (!nextItem) return;
+      const nextId = getTabId(nextItem);
       handleSelect(nextId);
       tabRefs.current[nextIndex]?.focus();
     },
@@ -71,6 +76,7 @@ function Tabs({ items, value, defaultValue, onChange, className }: TabsProps) {
   return (
     <div
       role="tablist"
+      aria-label={ariaLabel}
       aria-orientation="horizontal"
       className={cn(
         'inline-flex items-center gap-1 rounded-lg bg-harven-bg p-1',

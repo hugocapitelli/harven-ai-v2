@@ -4,7 +4,7 @@ import { cn } from '../../lib/utils';
 type AvatarSize = 'sm' | 'md' | 'lg' | 'xl';
 
 interface AvatarProps extends Omit<ImgHTMLAttributes<HTMLImageElement>, 'size'> {
-  src?: string | null;
+  src?: string;
   fallback?: string;
   size?: AvatarSize;
 }
