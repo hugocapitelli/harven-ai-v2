@@ -1,0 +1,37 @@
+services:
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - ENVIRONMENT=production
+      - PORT=8000
+    volumes:
+      - harven-uploads:/app/uploads
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:8000/health']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - harven-network
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        - VITE_API_URL=${VITE_API_URL:-https://api.harven.eximiaventures.com.br}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - harven-network
+
+volumes:
+  harven-uploads:
+    driver: local
+
+networks:
+  harven-network:
+    driver: bridge
