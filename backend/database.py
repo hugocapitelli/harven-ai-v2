@@ -1,29 +1,18 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import declarative_base, sessionmaker
+"""Supabase client — single instance shared across the app."""
+import os
+from supabase import create_client, Client
 
-from config import get_settings
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
-settings = get_settings()
+supabase: Client | None = None
 
-engine = create_engine(
-    settings.DATABASE_URL,
-    connect_args={"check_same_thread": False} if settings.DATABASE_URL.startswith("sqlite") else {},
-    pool_pre_ping=True,
-)
-
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-Base = declarative_base()
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-def init_db():
-    import models  # noqa: F401 — ensure all models are registered
-    Base.metadata.create_all(bind=engine)
+def get_supabase() -> Client:
+    """FastAPI dependency — returns the Supabase client."""
+    if supabase is None:
+        raise RuntimeError("Supabase not configured. Set SUPABASE_URL and SUPABASE_KEY.")
+    return supabase

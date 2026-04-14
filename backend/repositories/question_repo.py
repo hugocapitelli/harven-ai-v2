@@ -1,28 +1,26 @@
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-from models.course import Question
+"""Question repository — Supabase client API."""
+from typing import Dict, List
+from supabase import Client
 from .base import BaseRepository
 
 
 class QuestionRepository(BaseRepository):
-    def __init__(self, db: Session):
-        super().__init__(db, Question)
+    def __init__(self, client: Client):
+        super().__init__(client, "questions")
 
-    def get_by_content(self, content_id: str):
-        query = select(Question).where(Question.content_id == content_id)
-        return self.db.execute(query).scalars().all()
+    def get_by_content(self, content_id: str) -> List[Dict]:
+        res = (
+            self.client.table(self.table)
+            .select("*")
+            .eq("content_id", content_id)
+            .execute()
+        )
+        return res.data or []
 
-    def batch_create(self, content_id: str, questions: list):
-        objects = []
+    def batch_create(self, content_id: str, questions: list) -> List[Dict]:
+        data = []
         for q in questions:
             q["content_id"] = content_id
-            objects.append(Question(**q))
-        self.db.add_all(objects)
-        try:
-            self.db.commit()
-        except Exception:
-            self.db.rollback()
-            raise
-        for obj in objects:
-            self.db.refresh(obj)
-        return objects
+            data.append(q)
+        res = self.client.table(self.table).insert(data).execute()
+        return res.data or []

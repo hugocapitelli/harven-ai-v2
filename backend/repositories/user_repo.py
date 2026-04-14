@@ -1,26 +1,22 @@
-from sqlalchemy import select, func
-from sqlalchemy.orm import Session
-from models.user import User
+"""User repository — Supabase client API."""
+from typing import Optional, Dict, List, Tuple
+from supabase import Client
 from .base import BaseRepository
 
 
 class UserRepository(BaseRepository):
-    def __init__(self, db: Session):
-        super().__init__(db, User)
+    def __init__(self, client: Client):
+        super().__init__(client, "users")
 
-    def get_by_ra(self, ra: str):
-        query = select(User).where(User.ra == ra)
-        return self.db.execute(query).scalar_one_or_none()
+    def get_by_ra(self, ra: str) -> Optional[Dict]:
+        res = self.client.table(self.table).select("*").eq("ra", ra).maybe_single().execute()
+        return res.data
 
-    def search(self, query_str: str, role: str = None, skip: int = 0, limit: int = 20):
-        pattern = f"%{query_str}%"
-        query = select(User).where(
-            (User.name.ilike(pattern)) | (User.email.ilike(pattern)) | (User.ra.ilike(pattern))
-        )
+    def search(self, query_str: str, role: str = None, skip: int = 0, limit: int = 20) -> Tuple[List[Dict], int]:
+        q = self.client.table(self.table).select("*", count="exact")
+        q = q.or_(f"name.ilike.%{query_str}%,email.ilike.%{query_str}%,ra.ilike.%{query_str}%")
         if role:
-            query = query.where(User.role == role)
-        count_query = select(func.count()).select_from(query.subquery())
-        total = self.db.execute(count_query).scalar() or 0
-        query = query.offset(skip).limit(limit)
-        rows = self.db.execute(query).scalars().all()
-        return rows, total
+            q = q.eq("role", role)
+        q = q.order("name").range(skip, skip + limit - 1)
+        res = q.execute()
+        return res.data or [], res.count or 0

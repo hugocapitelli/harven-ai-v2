@@ -1,57 +1,43 @@
-from sqlalchemy import select, func, update
-from sqlalchemy.orm import Session
-from models.notification import Notification
+"""Notification repository — Supabase client API."""
+from typing import Dict, List, Tuple
+from supabase import Client
 from .base import BaseRepository
 
 
 class NotificationRepository(BaseRepository):
-    def __init__(self, db: Session):
-        super().__init__(db, Notification)
+    def __init__(self, client: Client):
+        super().__init__(client, "notifications")
 
-    def get_by_user(self, user_id: str, skip: int = 0, limit: int = 50):
-        query = (
-            select(Notification)
-            .where(Notification.user_id == user_id)
-            .order_by(Notification.created_at.desc())
+    def get_by_user(self, user_id: str, skip: int = 0, limit: int = 50) -> Tuple[List[Dict], int]:
+        q = (
+            self.client.table(self.table)
+            .select("*", count="exact")
+            .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .range(skip, skip + limit - 1)
         )
-        count_query = select(func.count()).select_from(
-            select(Notification).where(Notification.user_id == user_id).subquery()
-        )
-        total = self.db.execute(count_query).scalar() or 0
-        query = query.offset(skip).limit(limit)
-        rows = self.db.execute(query).scalars().all()
-        return rows, total
+        res = q.execute()
+        return res.data or [], res.count or 0
 
     def count_unread(self, user_id: str) -> int:
-        query = select(func.count()).where(
-            Notification.user_id == user_id,
-            Notification.read.is_(False),
+        res = (
+            self.client.table(self.table)
+            .select("id", count="exact")
+            .eq("user_id", user_id)
+            .eq("is_read", False)
+            .execute()
         )
-        return self.db.execute(query).scalar() or 0
+        return res.count or 0
 
-    def mark_read(self, notification_id: str):
-        stmt = (
-            update(Notification)
-            .where(Notification.id == notification_id)
-            .values(read=True)
-        )
-        self.db.execute(stmt)
-        try:
-            self.db.commit()
-        except Exception:
-            self.db.rollback()
-            raise
+    def mark_read(self, notification_id: str) -> None:
+        self.client.table(self.table).update({"is_read": True}).eq("id", notification_id).execute()
 
     def mark_all_read(self, user_id: str) -> int:
-        stmt = (
-            update(Notification)
-            .where(Notification.user_id == user_id, Notification.read.is_(False))
-            .values(read=True)
+        res = (
+            self.client.table(self.table)
+            .update({"is_read": True})
+            .eq("user_id", user_id)
+            .eq("is_read", False)
+            .execute()
         )
-        result = self.db.execute(stmt)
-        try:
-            self.db.commit()
-        except Exception:
-            self.db.rollback()
-            raise
-        return result.rowcount
+        return len(res.data) if res.data else 0

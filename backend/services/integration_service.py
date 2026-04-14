@@ -11,8 +11,6 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from sqlalchemy.orm import Session
-
 from config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -239,8 +237,8 @@ class MoodleClient:
 
 
 class IntegrationService:
-    def __init__(self, db: Session, settings: Optional[Dict[str, str]] = None):
-        self.db = db
+    def __init__(self, client, settings: Optional[Dict[str, str]] = None):
+        self.client = client
         s = settings or {}
         self.jacad = JacadClient(s.get("jacad_base_url", ""), s.get("jacad_api_key", ""))
         self.moodle = MoodleClient(s.get("moodle_url", ""), s.get("moodle_token", ""))
@@ -271,7 +269,6 @@ class IntegrationService:
         )
         try:
             from auth import hash_password
-            from models.user import User
             disciplines = await self.jacad.get_disciplines()
             all_students: List[Dict] = []
             for disc in disciplines:
@@ -286,24 +283,27 @@ class IntegrationService:
                 seen_ra.add(ra)
                 result.records_processed += 1
                 try:
-                    existing = self.db.query(User).filter(User.ra == ra).first()
-                    if existing:
-                        existing.name = s.get("name", existing.name)
-                        existing.email = s.get("email", existing.email)
+                    existing = self.client.table("users").select("*").eq("ra", ra).maybe_single().execute()
+                    if existing.data:
+                        self.client.table("users").update({
+                            "name": s.get("name", existing.data.get("name", "")),
+                            "email": s.get("email", existing.data.get("email", "")),
+                        }).eq("ra", ra).execute()
                         result.records_updated += 1
                     else:
-                        self.db.add(User(
-                            ra=ra, name=s.get("name", ""), email=s.get("email"),
-                            role="STUDENT", password_hash=hash_password(ra),
-                        ))
+                        self.client.table("users").insert({
+                            "ra": ra,
+                            "name": s.get("name", ""),
+                            "email": s.get("email"),
+                            "role": "STUDENT",
+                            "password_hash": hash_password(ra),
+                        }).execute()
                         result.records_created += 1
                 except Exception as e:
                     result.records_failed += 1
                     logger.warning(f"Failed to upsert student {ra}: {e}")
 
-            self.db.commit()
         except Exception as e:
-            self.db.rollback()
             result.status = "failed"
             result.error_message = str(e)
 
@@ -318,24 +318,24 @@ class IntegrationService:
             status="success", records_processed=0, started_at=started,
         )
         try:
-            from models.discipline import Discipline
             disciplines = await self.jacad.get_disciplines()
             for d in disciplines:
                 result.records_processed += 1
                 code = d.get("codigo", "")
-                existing = self.db.query(Discipline).filter(Discipline.code == code).first()
-                if existing:
-                    existing.name = d.get("name", existing.name)
+                existing = self.client.table("disciplines").select("*").eq("code", code).maybe_single().execute()
+                if existing.data:
+                    self.client.table("disciplines").update({
+                        "name": d.get("name", existing.data.get("name", "")),
+                    }).eq("code", code).execute()
                     result.records_updated += 1
                 else:
-                    self.db.add(Discipline(
-                        name=d.get("name", ""), code=code,
-                        department=d.get("department"),
-                    ))
+                    self.client.table("disciplines").insert({
+                        "name": d.get("name", ""),
+                        "code": code,
+                        "department": d.get("department"),
+                    }).execute()
                     result.records_created += 1
-            self.db.commit()
         except Exception as e:
-            self.db.rollback()
             result.status = "failed"
             result.error_message = str(e)
 
@@ -358,25 +358,25 @@ class IntegrationService:
             status="success", records_processed=0, started_at=started,
         )
         try:
-            from models.chat import ChatSession
-            query = self.db.query(ChatSession).filter(ChatSession.moodle_export_id.is_(None))
+            query = self.client.table("chat_sessions").select("*").is_("moodle_export_id", "null")
             if filters:
                 if filters.get("user_id"):
-                    query = query.filter(ChatSession.user_id == filters["user_id"])
-            sessions = query.all()
+                    query = query.eq("user_id", filters["user_id"])
+            response = query.execute()
+            sessions = response.data or []
 
             for session in sessions:
                 result.records_processed += 1
                 try:
                     export_id = f"HARVEN-MOODLE-{uuid4().hex[:8]}"
-                    session.moodle_export_id = export_id
+                    self.client.table("chat_sessions").update({
+                        "moodle_export_id": export_id,
+                    }).eq("id", session["id"]).execute()
                     result.records_created += 1
                 except Exception:
                     result.records_failed += 1
 
-            self.db.commit()
         except Exception as e:
-            self.db.rollback()
             result.status = "failed"
             result.error_message = str(e)
 
@@ -395,17 +395,17 @@ class IntegrationService:
         return result
 
     async def get_moodle_ratings(self, filters: Optional[Dict] = None) -> List[Dict]:
-        from models.integration import MoodleRating
-        query = self.db.query(MoodleRating)
+        query = self.client.table("moodle_ratings").select("*")
         if filters:
             if filters.get("session_id"):
-                query = query.filter(MoodleRating.session_id == filters["session_id"])
-        rows = query.all()
+                query = query.eq("session_id", filters["session_id"])
+        response = query.execute()
+        rows = response.data or []
         return [
             {
-                "id": r.id, "session_id": r.session_id, "student_id": r.student_id,
-                "teacher_id": r.teacher_id, "rating": r.rating, "feedback": r.feedback,
-                "rated_at": r.rated_at.isoformat() if r.rated_at else None,
+                "id": r.get("id"), "session_id": r.get("session_id"), "student_id": r.get("student_id"),
+                "teacher_id": r.get("teacher_id"), "rating": r.get("rating"), "feedback": r.get("feedback"),
+                "rated_at": r.get("rated_at"),
             }
             for r in rows
         ]
@@ -420,54 +420,50 @@ class IntegrationService:
         return {"status": "unknown_event", "event": event_type}
 
     async def _handle_rating_submitted(self, payload: Dict) -> Dict[str, Any]:
-        from models.integration import MoodleRating
-        self.db.add(MoodleRating(
-            session_id=payload.get("session_id"),
-            student_id=payload.get("student_id", ""),
-            teacher_id=payload.get("teacher_id", ""),
-            rating=payload.get("rating"),
-            feedback=payload.get("feedback"),
-        ))
         try:
-            self.db.commit()
-        except Exception:
-            self.db.rollback()
+            self.client.table("moodle_ratings").insert({
+                "session_id": payload.get("session_id"),
+                "student_id": payload.get("student_id", ""),
+                "teacher_id": payload.get("teacher_id", ""),
+                "rating": payload.get("rating"),
+                "feedback": payload.get("feedback"),
+            }).execute()
+        except Exception as e:
+            logger.warning(f"Failed to insert moodle rating: {e}")
         return {"status": "processed", "event": "rating_submitted"}
 
     # ---- Logging ----
 
     async def _log_sync(self, sync_result: SyncResult) -> None:
         try:
-            from models.integration import IntegrationLog
-            self.db.add(IntegrationLog(
-                system=sync_result.system,
-                operation=sync_result.operation,
-                direction=sync_result.direction,
-                status=sync_result.status,
-                records_processed=sync_result.records_processed,
-                error_message=sync_result.error_message,
-            ))
-            self.db.commit()
+            self.client.table("integration_logs").insert({
+                "system": sync_result.system,
+                "operation": sync_result.operation,
+                "direction": sync_result.direction,
+                "status": sync_result.status,
+                "records_processed": sync_result.records_processed,
+                "error_message": sync_result.error_message,
+            }).execute()
         except Exception as e:
-            self.db.rollback()
             logger.warning(f"Failed to log sync result: {e}")
 
     async def get_logs(self, filters: Optional[Dict] = None, limit: int = 50) -> List[Dict]:
-        from models.integration import IntegrationLog
-        query = self.db.query(IntegrationLog).order_by(IntegrationLog.created_at.desc())
+        query = self.client.table("integration_logs").select("*").order("created_at", desc=True)
         if filters:
             if filters.get("system"):
-                query = query.filter(IntegrationLog.system == filters["system"])
+                query = query.eq("system", filters["system"])
             if filters.get("status"):
-                query = query.filter(IntegrationLog.status == filters["status"])
-        rows = query.limit(limit).all()
+                query = query.eq("status", filters["status"])
+        query = query.limit(limit)
+        response = query.execute()
+        rows = response.data or []
         return [
             {
-                "id": r.id, "system": r.system, "operation": r.operation,
-                "direction": r.direction, "status": r.status,
-                "records_processed": r.records_processed,
-                "error_message": r.error_message,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "id": r.get("id"), "system": r.get("system"), "operation": r.get("operation"),
+                "direction": r.get("direction"), "status": r.get("status"),
+                "records_processed": r.get("records_processed"),
+                "error_message": r.get("error_message"),
+                "created_at": r.get("created_at"),
             }
             for r in rows
         ]
@@ -475,17 +471,17 @@ class IntegrationService:
     # ---- Mappings ----
 
     async def get_mappings(self, entity_type: Optional[str] = None) -> List[Dict]:
-        from models.integration import ExternalMapping
-        query = self.db.query(ExternalMapping)
+        query = self.client.table("external_mappings").select("*")
         if entity_type:
-            query = query.filter(ExternalMapping.entity_type == entity_type)
-        rows = query.all()
+            query = query.eq("entity_type", entity_type)
+        response = query.execute()
+        rows = response.data or []
         return [
             {
-                "id": r.id, "entity_type": r.entity_type,
-                "local_id": r.local_id, "external_id": r.external_id,
-                "external_system": r.external_system,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "id": r.get("id"), "entity_type": r.get("entity_type"),
+                "local_id": r.get("local_id"), "external_id": r.get("external_id"),
+                "external_system": r.get("external_system"),
+                "created_at": r.get("created_at"),
             }
             for r in rows
         ]

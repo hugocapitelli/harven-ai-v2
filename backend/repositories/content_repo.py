@@ -1,17 +1,19 @@
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-from models.course import Content
+"""Content repository — Supabase client API."""
+from typing import Dict, List
+from supabase import Client
 from .base import BaseRepository
 
 
 class ContentRepository(BaseRepository):
-    def __init__(self, db: Session):
-        super().__init__(db, Content)
+    def __init__(self, client: Client):
+        super().__init__(client, "contents")
 
-    def get_by_chapter(self, chapter_id: str):
-        query = (
-            select(Content)
-            .where(Content.chapter_id == chapter_id)
-            .order_by(Content.order.asc())
+    def get_by_chapter(self, chapter_id: str) -> List[Dict]:
+        res = (
+            self.client.table(self.table)
+            .select("*")
+            .eq("chapter_id", chapter_id)
+            .order("order")
+            .execute()
         )
-        return self.db.execute(query).scalars().all()
+        return res.data or []

@@ -17,20 +17,11 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, or_
-from sqlalchemy.orm import Session
+from supabase import Client
 
 from auth import get_current_user, require_role
 from config import get_settings
-from database import get_db
-from models.chat import ChatMessage, ChatSession
-from models.course import Chapter, Content, Course
-from models.discipline import Discipline, DisciplineStudent, DisciplineTeacher
-from models.gamification import Certificate, CourseProgress, UserAchievement, UserActivity, UserStats
-from models.integration import SessionReview
-from models.notification import Notification
-from models.settings import SystemBackup, SystemLog, SystemSettings
-from models.user import User
+from database import get_supabase
 
 router = APIRouter()
 logger = logging.getLogger("harven")
@@ -61,6 +52,17 @@ PUBLIC_SETTINGS_FIELDS = {
 
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5 MB
+
+# URL fields in system_settings (used to filter empty strings on save)
+SETTINGS_URL_FIELDS = {
+    "logo_url",
+    "login_logo_url",
+    "login_bg_url",
+    "favicon_url",
+}
+
+# Fields that must never be overwritten via the settings save endpoint
+SETTINGS_READONLY_FIELDS = {"id", "created_at", "updated_at"}
 
 # ---------------------------------------------------------------------------
 # Pydantic schemas
@@ -100,11 +102,6 @@ class CertificateCreate(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _settings_to_dict(row: SystemSettings) -> dict:
-    """Convert a SystemSettings ORM row to a plain dict (excluding internal SA state)."""
-    return {c.name: getattr(row, c.name) for c in row.__table__.columns}
-
-
 def _mask_sensitive(data: dict) -> dict:
     """Mask sensitive fields: show first 4 chars + ****."""
     out = dict(data)
@@ -123,21 +120,21 @@ def _sanitize_search(q: str) -> str:
     return sanitized[:200]
 
 
-def _get_or_create_settings(db: Session) -> SystemSettings:
+def _get_or_create_settings(client: Client) -> dict:
     """Return the single settings row or create one if missing."""
-    row = db.query(SystemSettings).first()
-    if row is None:
-        row = SystemSettings(id=str(uuid4()), platform_name="Harven.AI")
-        db.add(row)
-        db.commit()
-        db.refresh(row)
-    return row
+    res = client.table("system_settings").select("*").limit(1).maybe_single().execute()
+    if res.data is not None:
+        return res.data
+    new_row = {"id": str(uuid4()), "platform_name": "Harven.AI"}
+    ins = client.table("system_settings").insert(new_row).execute()
+    return ins.data[0] if ins.data else new_row
 
 
-def _log(db: Session, message: str, author: str = "system", log_type: str = "info", st: str = "ok"):
+def _log(client: Client, message: str, author: str = "system", log_type: str = "info", st: str = "ok"):
     """Append a row to system_logs."""
-    db.add(SystemLog(id=str(uuid4()), message=message, author=author, log_type=log_type, status=st))
-    db.commit()
+    client.table("system_logs").insert(
+        {"id": str(uuid4()), "message": message, "author": author, "log_type": log_type, "status": st}
+    ).execute()
 
 
 def _save_upload(upload: UploadFile, subfolder: str) -> str:
@@ -174,33 +171,32 @@ def _validate_image(upload: UploadFile):
 
 
 @router.get("/settings/public", tags=["Settings"], summary="Configuracoes publicas")
-async def get_public_settings(db: Session = Depends(get_db)):
+async def get_public_settings(client: Client = Depends(get_supabase)):
     """Returns public-facing settings (no auth required)."""
-    row = _get_or_create_settings(db)
-    data = _settings_to_dict(row)
+    data = _get_or_create_settings(client)
     return {k: v for k, v in data.items() if k in PUBLIC_SETTINGS_FIELDS}
 
 
 @router.get("/admin/settings", tags=["Admin Settings"], summary="Todas as configuracoes (admin)")
 async def get_admin_settings(
-    _admin: User = Depends(require_role("ADMIN")),
-    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_role("ADMIN")),
+    client: Client = Depends(get_supabase),
 ):
-    row = _get_or_create_settings(db)
-    return _mask_sensitive(_settings_to_dict(row))
+    data = _get_or_create_settings(client)
+    return _mask_sensitive(data)
 
 
 @router.post("/admin/settings", tags=["Admin Settings"], summary="Salvar configuracoes (admin)")
 async def save_admin_settings(
     payload: dict,
-    admin: User = Depends(require_role("ADMIN")),
-    db: Session = Depends(get_db),
+    admin: dict = Depends(require_role("ADMIN")),
+    client: Client = Depends(get_supabase),
 ):
-    row = _get_or_create_settings(db)
+    row = _get_or_create_settings(client)
+    row_id = row["id"]
 
     # Filter out empty-string URL fields so they aren't overwritten to ""
-    url_fields = {c.name for c in row.__table__.columns if c.name.endswith("_url")}
-    cleaned = {k: v for k, v in payload.items() if not (k in url_fields and v == "")}
+    cleaned = {k: v for k, v in payload.items() if not (k in SETTINGS_URL_FIELDS and v == "")}
 
     # Never accept raw sensitive fields that look like masked values
     for key in SENSITIVE_FIELDS:
@@ -208,58 +204,57 @@ async def save_admin_settings(
         if isinstance(val, str) and val.endswith("****"):
             cleaned.pop(key, None)
 
-    for key, val in cleaned.items():
-        if hasattr(row, key) and key not in ("id", "created_at", "updated_at"):
-            setattr(row, key, val)
+    # Remove read-only fields
+    for key in SETTINGS_READONLY_FIELDS:
+        cleaned.pop(key, None)
 
-    db.commit()
-    db.refresh(row)
-    _log(db, f"Settings atualizadas por {admin.name}", author=admin.name, log_type="settings")
-    return _mask_sensitive(_settings_to_dict(row))
+    if cleaned:
+        client.table("system_settings").update(cleaned).eq("id", row_id).execute()
+
+    updated = _get_or_create_settings(client)
+    _log(client, f"Settings atualizadas por {admin['name']}", author=admin["name"], log_type="settings")
+    return _mask_sensitive(updated)
 
 
 @router.post("/admin/settings/upload-logo", tags=["Admin Settings"], summary="Upload logo principal")
 async def upload_logo(
     file: UploadFile = File(...),
-    admin: User = Depends(require_role("ADMIN")),
-    db: Session = Depends(get_db),
+    admin: dict = Depends(require_role("ADMIN")),
+    client: Client = Depends(get_supabase),
 ):
     _validate_image(file)
     url = _save_upload(file, "logos")
-    row = _get_or_create_settings(db)
-    row.logo_url = url
-    db.commit()
-    _log(db, f"Logo atualizado por {admin.name}", author=admin.name, log_type="settings")
+    row = _get_or_create_settings(client)
+    client.table("system_settings").update({"logo_url": url}).eq("id", row["id"]).execute()
+    _log(client, f"Logo atualizado por {admin['name']}", author=admin["name"], log_type="settings")
     return {"logo_url": url}
 
 
 @router.post("/admin/settings/upload-login-logo", tags=["Admin Settings"], summary="Upload logo do login")
 async def upload_login_logo(
     file: UploadFile = File(...),
-    admin: User = Depends(require_role("ADMIN")),
-    db: Session = Depends(get_db),
+    admin: dict = Depends(require_role("ADMIN")),
+    client: Client = Depends(get_supabase),
 ):
     _validate_image(file)
     url = _save_upload(file, "logos")
-    row = _get_or_create_settings(db)
-    row.login_logo_url = url
-    db.commit()
-    _log(db, f"Login logo atualizado por {admin.name}", author=admin.name, log_type="settings")
+    row = _get_or_create_settings(client)
+    client.table("system_settings").update({"login_logo_url": url}).eq("id", row["id"]).execute()
+    _log(client, f"Login logo atualizado por {admin['name']}", author=admin["name"], log_type="settings")
     return {"login_logo_url": url}
 
 
 @router.post("/admin/settings/upload-login-bg", tags=["Admin Settings"], summary="Upload background do login")
 async def upload_login_bg(
     file: UploadFile = File(...),
-    admin: User = Depends(require_role("ADMIN")),
-    db: Session = Depends(get_db),
+    admin: dict = Depends(require_role("ADMIN")),
+    client: Client = Depends(get_supabase),
 ):
     _validate_image(file)
     url = _save_upload(file, "backgrounds")
-    row = _get_or_create_settings(db)
-    row.login_bg_url = url
-    db.commit()
-    _log(db, f"Login background atualizado por {admin.name}", author=admin.name, log_type="settings")
+    row = _get_or_create_settings(client)
+    client.table("system_settings").update({"login_bg_url": url}).eq("id", row["id"]).execute()
+    _log(client, f"Login background atualizado por {admin['name']}", author=admin["name"], log_type="settings")
     return {"login_bg_url": url}
 
 
@@ -270,18 +265,33 @@ async def upload_login_bg(
 
 @router.get("/admin/stats", tags=["Admin Monitoring"], summary="Estatisticas gerais")
 async def admin_stats(
-    _admin: User = Depends(require_role("ADMIN")),
-    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_role("ADMIN")),
+    client: Client = Depends(get_supabase),
 ):
-    users_total = db.query(func.count(User.id)).scalar() or 0
-    users_by_role = dict(
-        db.query(User.role, func.count(User.id)).group_by(User.role).all()
-    )
-    courses_total = db.query(func.count(Course.id)).scalar() or 0
-    disciplines_total = db.query(func.count(Discipline.id)).scalar() or 0
-    sessions_total = db.query(func.count(ChatSession.id)).scalar() or 0
-    messages_total = db.query(func.count(ChatMessage.id)).scalar() or 0
-    notifications_total = db.query(func.count(Notification.id)).scalar() or 0
+    users_res = client.table("users").select("id", count="exact").execute()
+    users_total = users_res.count or 0
+
+    # Users by role
+    all_users = client.table("users").select("role").execute()
+    users_by_role: dict[str, int] = {}
+    for u in (all_users.data or []):
+        role = u.get("role", "unknown")
+        users_by_role[role] = users_by_role.get(role, 0) + 1
+
+    courses_res = client.table("courses").select("id", count="exact").execute()
+    courses_total = courses_res.count or 0
+
+    disciplines_res = client.table("disciplines").select("id", count="exact").execute()
+    disciplines_total = disciplines_res.count or 0
+
+    sessions_res = client.table("chat_sessions").select("id", count="exact").execute()
+    sessions_total = sessions_res.count or 0
+
+    messages_res = client.table("chat_messages").select("id", count="exact").execute()
+    messages_total = messages_res.count or 0
+
+    notifications_res = client.table("notifications").select("id", count="exact").execute()
+    notifications_total = notifications_res.count or 0
 
     return {
         "users": {"total": users_total, "by_role": users_by_role},
@@ -295,28 +305,41 @@ async def admin_stats(
 
 @router.get("/admin/performance", tags=["Admin Monitoring"], summary="Metricas de performance")
 async def admin_performance(
-    _admin: User = Depends(require_role("ADMIN")),
-    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_role("ADMIN")),
+    client: Client = Depends(get_supabase),
 ):
-    avg_score = db.query(func.avg(ChatSession.performance_score)).filter(
-        ChatSession.performance_score.isnot(None)
-    ).scalar()
-    avg_messages = db.query(func.avg(ChatSession.total_messages)).scalar()
-    active_sessions = db.query(func.count(ChatSession.id)).filter(
-        ChatSession.status == "active"
-    ).scalar() or 0
+    # Fetch sessions that have a performance_score
+    scored = client.table("chat_sessions").select("performance_score, total_messages").not_.is_("performance_score", "null").execute()
+    rows = scored.data or []
+
+    if rows:
+        scores = [r["performance_score"] for r in rows if r.get("performance_score") is not None]
+        avg_score = sum(scores) / len(scores) if scores else 0
+    else:
+        avg_score = 0
+
+    all_sessions = client.table("chat_sessions").select("total_messages").execute()
+    all_rows = all_sessions.data or []
+    if all_rows:
+        msgs = [r.get("total_messages") or 0 for r in all_rows]
+        avg_messages = sum(msgs) / len(msgs) if msgs else 0
+    else:
+        avg_messages = 0
+
+    active_res = client.table("chat_sessions").select("id", count="exact").eq("status", "active").execute()
+    active_sessions = active_res.count or 0
 
     return {
-        "avg_performance_score": round(float(avg_score or 0), 2),
-        "avg_messages_per_session": round(float(avg_messages or 0), 1),
+        "avg_performance_score": round(float(avg_score), 2),
+        "avg_messages_per_session": round(float(avg_messages), 1),
         "active_sessions": active_sessions,
     }
 
 
 @router.get("/admin/storage", tags=["Admin Monitoring"], summary="Uso de armazenamento")
 async def admin_storage(
-    _admin: User = Depends(require_role("ADMIN")),
-    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_role("ADMIN")),
+    client: Client = Depends(get_supabase),
 ):
     settings = get_settings()
     upload_dir = settings.UPLOAD_DIR
@@ -346,24 +369,26 @@ async def get_logs(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     log_type: Optional[str] = None,
-    _admin: User = Depends(require_role("ADMIN")),
-    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_role("ADMIN")),
+    client: Client = Depends(get_supabase),
 ):
-    q = db.query(SystemLog)
+    q = client.table("system_logs").select("*", count="exact")
     if log_type:
-        q = q.filter(SystemLog.log_type == log_type)
-    total = q.count()
-    rows = q.order_by(SystemLog.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
+        q = q.eq("log_type", log_type)
+    total_res = q.order_by("created_at", desc=True).range((page - 1) * per_page, page * per_page - 1).execute()
+    total = total_res.count or 0
+    rows = total_res.data or []
+
     return {
         "data": [
             {
-                "id": r.id,
-                "message": r.message,
-                "author": r.author,
-                "status": r.status,
-                "log_type": r.log_type,
-                "details": r.details,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "id": r.get("id"),
+                "message": r.get("message"),
+                "author": r.get("author"),
+                "status": r.get("status"),
+                "log_type": r.get("log_type"),
+                "details": r.get("details"),
+                "created_at": r.get("created_at"),
             }
             for r in rows
         ],
@@ -381,35 +406,32 @@ async def search_logs(
     status_filter: Optional[str] = Query(None, alias="status"),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
-    _admin: User = Depends(require_role("ADMIN")),
-    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_role("ADMIN")),
+    client: Client = Depends(get_supabase),
 ):
-    query = db.query(SystemLog)
+    query = client.table("system_logs").select("*", count="exact")
     if q:
         safe = _sanitize_search(q)
-        query = query.filter(
-            or_(
-                SystemLog.message.ilike(f"%{safe}%"),
-                SystemLog.author.ilike(f"%{safe}%"),
-            )
-        )
+        query = query.or_(f"message.ilike.%{safe}%,author.ilike.%{safe}%")
     if log_type:
-        query = query.filter(SystemLog.log_type == log_type)
+        query = query.eq("log_type", log_type)
     if status_filter:
-        query = query.filter(SystemLog.status == status_filter)
+        query = query.eq("status", status_filter)
 
-    total = query.count()
-    rows = query.order_by(SystemLog.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
+    total_res = query.order_by("created_at", desc=True).range((page - 1) * per_page, page * per_page - 1).execute()
+    total = total_res.count or 0
+    rows = total_res.data or []
+
     return {
         "data": [
             {
-                "id": r.id,
-                "message": r.message,
-                "author": r.author,
-                "status": r.status,
-                "log_type": r.log_type,
-                "details": r.details,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "id": r.get("id"),
+                "message": r.get("message"),
+                "author": r.get("author"),
+                "status": r.get("status"),
+                "log_type": r.get("log_type"),
+                "details": r.get("details"),
+                "created_at": r.get("created_at"),
             }
             for r in rows
         ],
@@ -422,19 +444,20 @@ async def search_logs(
 @router.get("/admin/logs/export", tags=["Admin Logs"], summary="Exportar logs")
 async def export_logs(
     fmt: str = Query("json", regex="^(json|csv)$"),
-    _admin: User = Depends(require_role("ADMIN")),
-    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_role("ADMIN")),
+    client: Client = Depends(get_supabase),
 ):
     from fastapi.responses import StreamingResponse
 
-    rows = db.query(SystemLog).order_by(SystemLog.created_at.desc()).limit(5000).all()
+    res = client.table("system_logs").select("*").order("created_at", desc=True).limit(5000).execute()
+    rows = res.data or []
 
     if fmt == "csv":
         buf = io.StringIO()
         writer = csv.writer(buf)
         writer.writerow(["id", "message", "author", "status", "log_type", "created_at"])
         for r in rows:
-            writer.writerow([r.id, r.message, r.author, r.status, r.log_type, r.created_at])
+            writer.writerow([r.get("id"), r.get("message"), r.get("author"), r.get("status"), r.get("log_type"), r.get("created_at")])
         buf.seek(0)
         return StreamingResponse(
             iter([buf.getvalue()]),
@@ -444,12 +467,12 @@ async def export_logs(
 
     data = [
         {
-            "id": r.id,
-            "message": r.message,
-            "author": r.author,
-            "status": r.status,
-            "log_type": r.log_type,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "id": r.get("id"),
+            "message": r.get("message"),
+            "author": r.get("author"),
+            "status": r.get("status"),
+            "log_type": r.get("log_type"),
+            "created_at": r.get("created_at"),
         }
         for r in rows
     ]
@@ -467,19 +490,20 @@ async def export_logs(
 
 @router.get("/admin/backups", tags=["Admin Backups"], summary="Listar backups")
 async def list_backups(
-    _admin: User = Depends(require_role("ADMIN")),
-    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_role("ADMIN")),
+    client: Client = Depends(get_supabase),
 ):
-    rows = db.query(SystemBackup).order_by(SystemBackup.created_at.desc()).all()
+    res = client.table("system_backups").select("*").order("created_at", desc=True).execute()
+    rows = res.data or []
     return {
         "data": [
             {
-                "id": r.id,
-                "filename": r.filename,
-                "size": r.size,
-                "records_count": r.records_count,
-                "status": r.status,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "id": r.get("id"),
+                "filename": r.get("filename"),
+                "size": r.get("size"),
+                "records_count": r.get("records_count"),
+                "status": r.get("status"),
+                "created_at": r.get("created_at"),
             }
             for r in rows
         ]
@@ -488,8 +512,8 @@ async def list_backups(
 
 @router.post("/admin/backups", tags=["Admin Backups"], summary="Criar backup", status_code=201)
 async def create_backup(
-    admin: User = Depends(require_role("ADMIN")),
-    db: Session = Depends(get_db),
+    admin: dict = Depends(require_role("ADMIN")),
+    client: Client = Depends(get_supabase),
 ):
     settings = get_settings()
     backup_dir = os.path.join(settings.UPLOAD_DIR, "backups")
@@ -500,11 +524,16 @@ async def create_backup(
     filepath = os.path.join(backup_dir, filename)
 
     # Collect counts per table
+    users_cnt = (client.table("users").select("id", count="exact").execute()).count or 0
+    courses_cnt = (client.table("courses").select("id", count="exact").execute()).count or 0
+    disciplines_cnt = (client.table("disciplines").select("id", count="exact").execute()).count or 0
+    sessions_cnt = (client.table("chat_sessions").select("id", count="exact").execute()).count or 0
+
     counts = {
-        "users": db.query(func.count(User.id)).scalar() or 0,
-        "courses": db.query(func.count(Course.id)).scalar() or 0,
-        "disciplines": db.query(func.count(Discipline.id)).scalar() or 0,
-        "chat_sessions": db.query(func.count(ChatSession.id)).scalar() or 0,
+        "users": users_cnt,
+        "courses": courses_cnt,
+        "disciplines": disciplines_cnt,
+        "chat_sessions": sessions_cnt,
     }
     total_records = sum(counts.values())
 
@@ -514,21 +543,22 @@ async def create_backup(
         json.dump(meta, f, indent=2)
 
     fsize = os.path.getsize(filepath)
-    row = SystemBackup(
-        id=str(uuid4()),
-        filename=filename,
-        size=fsize,
-        records_count=total_records,
-        status="completed",
-        storage_path=filepath,
-    )
-    db.add(row)
-    db.commit()
+    new_id = str(uuid4())
+    client.table("system_backups").insert(
+        {
+            "id": new_id,
+            "filename": filename,
+            "size": fsize,
+            "records_count": total_records,
+            "status": "completed",
+            "storage_path": filepath,
+        }
+    ).execute()
 
-    _log(db, f"Backup criado: {filename}", author=admin.name, log_type="backup")
+    _log(client, f"Backup criado: {filename}", author=admin["name"], log_type="backup")
 
     return {
-        "id": row.id,
+        "id": new_id,
         "filename": filename,
         "size": fsize,
         "records_count": total_records,
@@ -539,33 +569,36 @@ async def create_backup(
 @router.get("/admin/backups/{backup_id}/download", tags=["Admin Backups"], summary="Download backup")
 async def download_backup(
     backup_id: str,
-    _admin: User = Depends(require_role("ADMIN")),
-    db: Session = Depends(get_db),
+    _admin: dict = Depends(require_role("ADMIN")),
+    client: Client = Depends(get_supabase),
 ):
     from fastapi.responses import FileResponse
 
-    row = db.query(SystemBackup).filter(SystemBackup.id == backup_id).first()
+    res = client.table("system_backups").select("*").eq("id", backup_id).maybe_single().execute()
+    row = res.data
     if not row:
         raise HTTPException(status_code=404, detail="Backup nao encontrado")
-    if not row.storage_path or not os.path.isfile(row.storage_path):
+    storage_path = row.get("storage_path")
+    if not storage_path or not os.path.isfile(storage_path):
         raise HTTPException(status_code=404, detail="Arquivo de backup nao encontrado no disco")
-    return FileResponse(row.storage_path, filename=row.filename, media_type="application/json")
+    return FileResponse(storage_path, filename=row.get("filename"), media_type="application/json")
 
 
 @router.delete("/admin/backups/{backup_id}", tags=["Admin Backups"], summary="Excluir backup")
 async def delete_backup(
     backup_id: str,
-    admin: User = Depends(require_role("ADMIN")),
-    db: Session = Depends(get_db),
+    admin: dict = Depends(require_role("ADMIN")),
+    client: Client = Depends(get_supabase),
 ):
-    row = db.query(SystemBackup).filter(SystemBackup.id == backup_id).first()
+    res = client.table("system_backups").select("*").eq("id", backup_id).maybe_single().execute()
+    row = res.data
     if not row:
         raise HTTPException(status_code=404, detail="Backup nao encontrado")
-    if row.storage_path and os.path.isfile(row.storage_path):
-        os.remove(row.storage_path)
-    db.delete(row)
-    db.commit()
-    _log(db, f"Backup excluido: {row.filename}", author=admin.name, log_type="backup")
+    storage_path = row.get("storage_path")
+    if storage_path and os.path.isfile(storage_path):
+        os.remove(storage_path)
+    client.table("system_backups").delete().eq("id", backup_id).execute()
+    _log(client, f"Backup excluido: {row.get('filename')}", author=admin["name"], log_type="backup")
     return {"deleted": True}
 
 
@@ -576,8 +609,8 @@ async def delete_backup(
 
 @router.post("/admin/force-logout", tags=["Admin Security"], summary="Invalidar todos os tokens")
 async def force_logout(
-    admin: User = Depends(require_role("ADMIN")),
-    db: Session = Depends(get_db),
+    admin: dict = Depends(require_role("ADMIN")),
+    client: Client = Depends(get_supabase),
 ):
     """
     Rotate the JWT secret so every existing token becomes invalid.
@@ -605,18 +638,18 @@ async def force_logout(
     from config import get_settings as _gs
     _gs.cache_clear()
 
-    _log(db, f"Force logout executado por {admin.name}", author=admin.name, log_type="security")
+    _log(client, f"Force logout executado por {admin['name']}", author=admin["name"], log_type="security")
     return {"message": "Todos os tokens foram invalidados. Usuarios deverao fazer login novamente."}
 
 
 @router.post("/admin/clear-cache", tags=["Admin Security"], summary="Limpar cache interno")
 async def clear_cache(
-    admin: User = Depends(require_role("ADMIN")),
-    db: Session = Depends(get_db),
+    admin: dict = Depends(require_role("ADMIN")),
+    client: Client = Depends(get_supabase),
 ):
     from config import get_settings as _gs
     _gs.cache_clear()
-    _log(db, f"Cache limpo por {admin.name}", author=admin.name, log_type="security")
+    _log(client, f"Cache limpo por {admin['name']}", author=admin["name"], log_type="security")
     return {"message": "Cache interno limpo com sucesso."}
 
 
@@ -628,16 +661,17 @@ async def clear_cache(
 @router.get("/notifications/{user_id}/count", tags=["Notifications"], summary="Contagem de nao lidas")
 async def notification_count(
     user_id: str,
-    _user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
-    total = (
-        db.query(func.count(Notification.id))
-        .filter(Notification.user_id == user_id, Notification.is_read == False)  # noqa: E712
-        .scalar()
-        or 0
+    res = (
+        client.table("notifications")
+        .select("id", count="exact")
+        .eq("user_id", user_id)
+        .eq("is_read", False)
+        .execute()
     )
-    return {"unread": total}
+    return {"unread": res.count or 0}
 
 
 @router.get("/notifications/{user_id}", tags=["Notifications"], summary="Listar notificacoes")
@@ -645,22 +679,30 @@ async def list_notifications(
     user_id: str,
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
-    _user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
-    q = db.query(Notification).filter(Notification.user_id == user_id)
-    total = q.count()
-    rows = q.order_by(Notification.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
+    res = (
+        client.table("notifications")
+        .select("*", count="exact")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .range((page - 1) * per_page, page * per_page - 1)
+        .execute()
+    )
+    total = res.count or 0
+    rows = res.data or []
+
     return {
         "data": [
             {
-                "id": r.id,
-                "title": r.title,
-                "message": r.message,
-                "type": r.notification_type,
-                "link": r.link,
-                "read": r.is_read,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "id": r.get("id"),
+                "title": r.get("title"),
+                "message": r.get("message"),
+                "type": r.get("notification_type"),
+                "link": r.get("link"),
+                "read": r.get("is_read"),
+                "created_at": r.get("created_at"),
             }
             for r in rows
         ],
@@ -674,69 +716,67 @@ async def list_notifications(
 @router.post("/notifications", tags=["Notifications"], summary="Criar notificacao", status_code=201)
 async def create_notification(
     body: NotificationCreate,
-    _user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
-    row = Notification(
-        id=str(uuid4()),
-        user_id=body.user_id,
-        title=body.title,
-        message=body.message,
-        notification_type=body.notification_type,
-        link=body.link,
-    )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
+    new_id = str(uuid4())
+    res = client.table("notifications").insert(
+        {
+            "id": new_id,
+            "user_id": body.user_id,
+            "title": body.title,
+            "message": body.message,
+            "notification_type": body.notification_type,
+            "link": body.link,
+        }
+    ).execute()
+    row = res.data[0] if res.data else {}
     return {
-        "id": row.id,
-        "title": row.title,
-        "message": row.message,
-        "type": row.notification_type,
-        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "id": row.get("id", new_id),
+        "title": row.get("title", body.title),
+        "message": row.get("message", body.message),
+        "type": row.get("notification_type", body.notification_type),
+        "created_at": row.get("created_at"),
     }
 
 
 @router.put("/notifications/{notification_id}/read", tags=["Notifications"], summary="Marcar como lida")
 async def mark_read(
     notification_id: str,
-    _user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
-    row = db.query(Notification).filter(Notification.id == notification_id).first()
-    if not row:
+    res = client.table("notifications").select("id").eq("id", notification_id).maybe_single().execute()
+    if not res.data:
         raise HTTPException(status_code=404, detail="Notificacao nao encontrada")
-    row.is_read = True
-    db.commit()
+    client.table("notifications").update({"is_read": True}).eq("id", notification_id).execute()
     return {"id": notification_id, "read": True}
 
 
 @router.put("/notifications/{user_id}/read-all", tags=["Notifications"], summary="Marcar todas como lidas")
 async def mark_all_read(
     user_id: str,
-    _user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
-    count = (
-        db.query(Notification)
-        .filter(Notification.user_id == user_id, Notification.is_read == False)  # noqa: E712
-        .update({"is_read": True})
-    )
-    db.commit()
-    return {"marked_read": count}
+    # Supabase doesn't return an update count directly; update all matching rows
+    client.table("notifications").update({"is_read": True}).eq("user_id", user_id).eq("is_read", False).execute()
+    # Count remaining unread to confirm (should be 0)
+    remaining = client.table("notifications").select("id", count="exact").eq("user_id", user_id).eq("is_read", False).execute()
+    marked = (remaining.count or 0)
+    return {"marked_read": "all", "remaining_unread": marked}
 
 
 @router.delete("/notifications/{notification_id}", tags=["Notifications"], summary="Excluir notificacao")
 async def delete_notification(
     notification_id: str,
-    _user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
-    row = db.query(Notification).filter(Notification.id == notification_id).first()
-    if not row:
+    res = client.table("notifications").select("id").eq("id", notification_id).maybe_single().execute()
+    if not res.data:
         raise HTTPException(status_code=404, detail="Notificacao nao encontrada")
-    db.delete(row)
-    db.commit()
+    client.table("notifications").delete().eq("id", notification_id).execute()
     return {"deleted": True}
 
 
@@ -748,46 +788,47 @@ async def delete_notification(
 @router.get("/search", tags=["Search"], summary="Busca global")
 async def global_search(
     q: str = Query(..., min_length=2, max_length=200),
-    _user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
     safe = _sanitize_search(q)
     if len(safe) < 2:
         return {"users": [], "courses": [], "disciplines": []}
 
-    pattern = f"%{safe}%"
-
-    users = (
-        db.query(User)
-        .filter(or_(User.name.ilike(pattern), User.email.ilike(pattern), User.ra.ilike(pattern)))
+    users_res = (
+        client.table("users")
+        .select("id, name, email, role, ra")
+        .or_(f"name.ilike.%{safe}%,email.ilike.%{safe}%,ra.ilike.%{safe}%")
         .limit(10)
-        .all()
+        .execute()
     )
-    courses = (
-        db.query(Course)
-        .filter(or_(Course.title.ilike(pattern), Course.description.ilike(pattern)))
+    courses_res = (
+        client.table("courses")
+        .select("id, title, status, discipline_id")
+        .or_(f"title.ilike.%{safe}%,description.ilike.%{safe}%")
         .limit(10)
-        .all()
+        .execute()
     )
-    disciplines = (
-        db.query(Discipline)
-        .filter(or_(Discipline.name.ilike(pattern), Discipline.code.ilike(pattern)))
+    disciplines_res = (
+        client.table("disciplines")
+        .select("id, name, code")
+        .or_(f"name.ilike.%{safe}%,code.ilike.%{safe}%")
         .limit(10)
-        .all()
+        .execute()
     )
 
     return {
         "users": [
-            {"id": u.id, "name": u.name, "email": u.email, "role": u.role, "ra": u.ra}
-            for u in users
+            {"id": u.get("id"), "name": u.get("name"), "email": u.get("email"), "role": u.get("role"), "ra": u.get("ra")}
+            for u in (users_res.data or [])
         ],
         "courses": [
-            {"id": c.id, "title": c.title, "status": c.status, "discipline_id": c.discipline_id}
-            for c in courses
+            {"id": c.get("id"), "title": c.get("title"), "status": c.get("status"), "discipline_id": c.get("discipline_id")}
+            for c in (courses_res.data or [])
         ],
         "disciplines": [
-            {"id": d.id, "name": d.name, "code": d.code}
-            for d in disciplines
+            {"id": d.get("id"), "name": d.get("name"), "code": d.get("code")}
+            for d in (disciplines_res.data or [])
         ],
     }
 
@@ -799,65 +840,57 @@ async def global_search(
 
 @router.get("/dashboard/stats", tags=["Dashboard"], summary="Estatisticas agregadas")
 async def dashboard_stats(
-    _user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
-    total_users = db.query(func.count(User.id)).scalar() or 0
-    total_courses = db.query(func.count(Course.id)).scalar() or 0
-    total_disciplines = db.query(func.count(Discipline.id)).scalar() or 0
-    total_sessions = db.query(func.count(ChatSession.id)).scalar() or 0
-    avg_score = db.query(func.avg(ChatSession.performance_score)).filter(
-        ChatSession.performance_score.isnot(None)
-    ).scalar()
+    total_users = (client.table("users").select("id", count="exact").execute()).count or 0
+    total_courses = (client.table("courses").select("id", count="exact").execute()).count or 0
+    total_disciplines = (client.table("disciplines").select("id", count="exact").execute()).count or 0
+    total_sessions = (client.table("chat_sessions").select("id", count="exact").execute()).count or 0
+
+    scored = client.table("chat_sessions").select("performance_score").not_.is_("performance_score", "null").execute()
+    scores = [r["performance_score"] for r in (scored.data or []) if r.get("performance_score") is not None]
+    avg_score = sum(scores) / len(scores) if scores else 0
 
     return {
         "total_users": total_users,
         "total_courses": total_courses,
         "total_disciplines": total_disciplines,
         "total_sessions": total_sessions,
-        "avg_performance_score": round(float(avg_score or 0), 2),
+        "avg_performance_score": round(float(avg_score), 2),
     }
 
 
 @router.get("/classes/{class_id}/stats", tags=["Dashboard"], summary="Estatisticas de turma")
 async def class_stats(
     class_id: str,
-    _user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
     """class_id maps to a Discipline id."""
-    disc = db.query(Discipline).filter(Discipline.id == class_id).first()
+    disc_res = client.table("disciplines").select("id, name").eq("id", class_id).maybe_single().execute()
+    disc = disc_res.data
     if not disc:
         raise HTTPException(status_code=404, detail="Turma nao encontrada")
 
-    student_count = (
-        db.query(func.count(DisciplineStudent.id))
-        .filter(DisciplineStudent.discipline_id == class_id)
-        .scalar()
-        or 0
-    )
-    course_count = (
-        db.query(func.count(Course.id))
-        .filter(Course.discipline_id == class_id)
-        .scalar()
-        or 0
-    )
+    student_res = client.table("discipline_students").select("id", count="exact").eq("discipline_id", class_id).execute()
+    student_count = student_res.count or 0
+
+    course_res = client.table("courses").select("id", count="exact").eq("discipline_id", class_id).execute()
+    course_count = course_res.count or 0
+
     # Sessions from students in this discipline
-    student_ids = (
-        db.query(DisciplineStudent.student_id)
-        .filter(DisciplineStudent.discipline_id == class_id)
-        .subquery()
-    )
-    session_count = (
-        db.query(func.count(ChatSession.id))
-        .filter(ChatSession.user_id.in_(student_ids.select()))
-        .scalar()
-        or 0
-    )
+    students_res = client.table("discipline_students").select("student_id").eq("discipline_id", class_id).execute()
+    student_ids = [s["student_id"] for s in (students_res.data or [])]
+
+    session_count = 0
+    if student_ids:
+        session_res = client.table("chat_sessions").select("id", count="exact").in_("user_id", student_ids).execute()
+        session_count = session_res.count or 0
 
     return {
         "discipline_id": class_id,
-        "discipline_name": disc.name,
+        "discipline_name": disc.get("name"),
         "student_count": student_count,
         "course_count": course_count,
         "session_count": session_count,
@@ -871,41 +904,55 @@ async def class_stats(
 )
 async def discipline_students_stats(
     discipline_id: str,
-    _user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
-    disc = db.query(Discipline).filter(Discipline.id == discipline_id).first()
+    disc_res = client.table("disciplines").select("id, name").eq("id", discipline_id).maybe_single().execute()
+    disc = disc_res.data
     if not disc:
         raise HTTPException(status_code=404, detail="Disciplina nao encontrada")
 
-    rows = (
-        db.query(
-            User.id,
-            User.name,
-            User.ra,
-            func.count(ChatSession.id).label("sessions"),
-            func.avg(ChatSession.performance_score).label("avg_score"),
+    # Get student IDs for this discipline
+    ds_res = client.table("discipline_students").select("student_id").eq("discipline_id", discipline_id).execute()
+    student_ids = [s["student_id"] for s in (ds_res.data or [])]
+
+    if not student_ids:
+        return {"discipline_id": discipline_id, "discipline_name": disc.get("name"), "students": []}
+
+    # Fetch user info for these students
+    users_res = client.table("users").select("id, name, ra").in_("id", student_ids).execute()
+    users_map = {u["id"]: u for u in (users_res.data or [])}
+
+    # Fetch all sessions for these students
+    sessions_res = client.table("chat_sessions").select("user_id, performance_score").in_("user_id", student_ids).execute()
+
+    # Aggregate per student
+    student_sessions: dict[str, list] = {sid: [] for sid in student_ids}
+    for s in (sessions_res.data or []):
+        uid = s.get("user_id")
+        if uid in student_sessions:
+            student_sessions[uid].append(s)
+
+    students = []
+    for sid in student_ids:
+        u = users_map.get(sid, {})
+        sess = student_sessions.get(sid, [])
+        scores = [s["performance_score"] for s in sess if s.get("performance_score") is not None]
+        avg_score = sum(scores) / len(scores) if scores else 0
+        students.append(
+            {
+                "id": sid,
+                "name": u.get("name"),
+                "ra": u.get("ra"),
+                "sessions": len(sess),
+                "avg_score": round(float(avg_score), 2),
+            }
         )
-        .join(DisciplineStudent, DisciplineStudent.student_id == User.id)
-        .outerjoin(ChatSession, ChatSession.user_id == User.id)
-        .filter(DisciplineStudent.discipline_id == discipline_id)
-        .group_by(User.id, User.name, User.ra)
-        .all()
-    )
 
     return {
         "discipline_id": discipline_id,
-        "discipline_name": disc.name,
-        "students": [
-            {
-                "id": r.id,
-                "name": r.name,
-                "ra": r.ra,
-                "sessions": r.sessions or 0,
-                "avg_score": round(float(r.avg_score or 0), 2),
-            }
-            for r in rows
-        ],
+        "discipline_name": disc.get("name"),
+        "students": students,
     }
 
 
@@ -917,10 +964,11 @@ async def discipline_students_stats(
 @router.get("/users/{user_id}/stats", tags=["Gamification"], summary="Stats do usuario")
 async def user_stats(
     user_id: str,
-    _user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
-    row = db.query(UserStats).filter(UserStats.user_id == user_id).first()
+    res = client.table("user_stats").select("*").eq("user_id", user_id).maybe_single().execute()
+    row = res.data
     if not row:
         return {
             "user_id": user_id,
@@ -932,11 +980,11 @@ async def user_stats(
         }
     return {
         "user_id": user_id,
-        "courses_completed": row.courses_completed,
-        "hours_studied": row.hours_studied,
-        "average_score": row.average_score,
-        "streak_days": row.streak_days,
-        "total_points": row.total_points,
+        "courses_completed": row.get("courses_completed", 0),
+        "hours_studied": row.get("hours_studied", 0.0),
+        "average_score": row.get("average_score", 0.0),
+        "streak_days": row.get("streak_days", 0),
+        "total_points": row.get("total_points", 0),
     }
 
 
@@ -945,21 +993,29 @@ async def user_activities(
     user_id: str,
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
-    _user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
-    q = db.query(UserActivity).filter(UserActivity.user_id == user_id)
-    total = q.count()
-    rows = q.order_by(UserActivity.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
+    res = (
+        client.table("user_activities")
+        .select("*", count="exact")
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .range((page - 1) * per_page, page * per_page - 1)
+        .execute()
+    )
+    total = res.count or 0
+    rows = res.data or []
+
     return {
         "data": [
             {
-                "id": r.id,
-                "activity_type": r.activity_type,
-                "description": r.description,
-                "points": r.points,
-                "metadata": r.metadata_,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "id": r.get("id"),
+                "activity_type": r.get("activity_type"),
+                "description": r.get("description"),
+                "points": r.get("points"),
+                "metadata": r.get("metadata_") or r.get("metadata"),
+                "created_at": r.get("created_at"),
             }
             for r in rows
         ],
@@ -974,59 +1030,67 @@ async def user_activities(
 async def create_activity(
     user_id: str,
     body: ActivityCreate,
-    _user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
-    row = UserActivity(
-        id=str(uuid4()),
-        user_id=user_id,
-        activity_type=body.activity_type,
-        description=body.description,
-        points=body.points,
-        metadata_=body.metadata_,
-    )
-    db.add(row)
+    new_id = str(uuid4())
+    res = client.table("user_activities").insert(
+        {
+            "id": new_id,
+            "user_id": user_id,
+            "activity_type": body.activity_type,
+            "description": body.description,
+            "points": body.points,
+            "metadata_": body.metadata_,
+        }
+    ).execute()
+    row = res.data[0] if res.data else {}
 
     # Update user stats (upsert)
-    stats = db.query(UserStats).filter(UserStats.user_id == user_id).first()
-    if not stats:
-        stats = UserStats(id=str(uuid4()), user_id=user_id, total_points=0)
-        db.add(stats)
-    stats.total_points = (stats.total_points or 0) + body.points
+    stats_res = client.table("user_stats").select("*").eq("user_id", user_id).maybe_single().execute()
+    if stats_res.data:
+        current_points = stats_res.data.get("total_points", 0) or 0
+        client.table("user_stats").update(
+            {"total_points": current_points + body.points}
+        ).eq("user_id", user_id).execute()
+    else:
+        client.table("user_stats").insert(
+            {"id": str(uuid4()), "user_id": user_id, "total_points": body.points}
+        ).execute()
 
-    db.commit()
-    db.refresh(row)
     return {
-        "id": row.id,
-        "activity_type": row.activity_type,
-        "points": row.points,
-        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "id": row.get("id", new_id),
+        "activity_type": row.get("activity_type", body.activity_type),
+        "points": row.get("points", body.points),
+        "created_at": row.get("created_at"),
     }
 
 
 @router.get("/users/{user_id}/achievements", tags=["Gamification"], summary="Conquistas do usuario")
 async def user_achievements(
     user_id: str,
-    _user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
-    rows = (
-        db.query(UserAchievement)
-        .filter(UserAchievement.user_id == user_id)
-        .order_by(UserAchievement.unlocked_at.desc())
-        .all()
+    res = (
+        client.table("user_achievements")
+        .select("*")
+        .eq("user_id", user_id)
+        .order("unlocked_at", desc=True)
+        .execute()
     )
+    rows = res.data or []
     return {
         "data": [
             {
-                "id": r.id,
-                "name": r.name,
-                "description": r.description,
-                "icon": r.icon,
-                "category": r.category,
-                "rarity": r.rarity,
-                "points": r.points,
-                "unlocked_at": r.unlocked_at.isoformat() if r.unlocked_at else None,
+                "id": r.get("id"),
+                "name": r.get("name"),
+                "description": r.get("description"),
+                "icon": r.get("icon"),
+                "category": r.get("category"),
+                "rarity": r.get("rarity"),
+                "points": r.get("points"),
+                "unlocked_at": r.get("unlocked_at"),
             }
             for r in rows
         ]
@@ -1042,53 +1106,63 @@ async def user_achievements(
 async def unlock_achievement(
     user_id: str,
     achievement_id: str,
-    _user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
     # Prevent duplicates
-    existing = (
-        db.query(UserAchievement)
-        .filter(UserAchievement.user_id == user_id, UserAchievement.id == achievement_id)
-        .first()
+    existing_res = (
+        client.table("user_achievements")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("id", achievement_id)
+        .maybe_single()
+        .execute()
     )
-    if existing:
+    if existing_res.data:
         return {
-            "id": existing.id,
-            "name": existing.name,
+            "id": existing_res.data.get("id"),
+            "name": existing_res.data.get("name"),
             "already_unlocked": True,
         }
 
-    row = UserAchievement(
-        id=achievement_id,
-        user_id=user_id,
-        name=achievement_id,
-        unlocked_at=datetime.now(timezone.utc),
-    )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    return {"id": row.id, "name": row.name, "unlocked_at": row.unlocked_at.isoformat()}
+    now = datetime.now(timezone.utc).isoformat()
+    res = client.table("user_achievements").insert(
+        {
+            "id": achievement_id,
+            "user_id": user_id,
+            "name": achievement_id,
+            "unlocked_at": now,
+        }
+    ).execute()
+    row = res.data[0] if res.data else {}
+    return {
+        "id": row.get("id", achievement_id),
+        "name": row.get("name", achievement_id),
+        "unlocked_at": row.get("unlocked_at", now),
+    }
 
 
 @router.get("/users/{user_id}/certificates", tags=["Gamification"], summary="Certificados do usuario")
 async def user_certificates(
     user_id: str,
-    _user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
-    rows = (
-        db.query(Certificate)
-        .filter(Certificate.user_id == user_id)
-        .order_by(Certificate.issued_at.desc())
-        .all()
+    res = (
+        client.table("certificates")
+        .select("*")
+        .eq("user_id", user_id)
+        .order("issued_at", desc=True)
+        .execute()
     )
+    rows = res.data or []
     return {
         "data": [
             {
-                "id": r.id,
-                "course_id": r.course_id,
-                "certificate_number": r.certificate_number,
-                "issued_at": r.issued_at.isoformat() if r.issued_at else None,
+                "id": r.get("id"),
+                "course_id": r.get("course_id"),
+                "certificate_number": r.get("certificate_number"),
+                "issued_at": r.get("issued_at"),
             }
             for r in rows
         ]
@@ -1099,37 +1173,42 @@ async def user_certificates(
 async def issue_certificate(
     user_id: str,
     body: CertificateCreate,
-    _user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
     # Prevent duplicate
-    existing = (
-        db.query(Certificate)
-        .filter(Certificate.user_id == user_id, Certificate.course_id == body.course_id)
-        .first()
+    existing_res = (
+        client.table("certificates")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("course_id", body.course_id)
+        .maybe_single()
+        .execute()
     )
-    if existing:
+    if existing_res.data:
         return {
-            "id": existing.id,
-            "certificate_number": existing.certificate_number,
+            "id": existing_res.data.get("id"),
+            "certificate_number": existing_res.data.get("certificate_number"),
             "already_issued": True,
         }
 
     cert_number = f"HARVEN-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid4().hex[:8].upper()}"
-    row = Certificate(
-        id=str(uuid4()),
-        user_id=user_id,
-        course_id=body.course_id,
-        certificate_number=cert_number,
-        issued_at=datetime.now(timezone.utc),
-    )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
+    now = datetime.now(timezone.utc).isoformat()
+    new_id = str(uuid4())
+    res = client.table("certificates").insert(
+        {
+            "id": new_id,
+            "user_id": user_id,
+            "course_id": body.course_id,
+            "certificate_number": cert_number,
+            "issued_at": now,
+        }
+    ).execute()
+    row = res.data[0] if res.data else {}
     return {
-        "id": row.id,
-        "certificate_number": row.certificate_number,
-        "issued_at": row.issued_at.isoformat(),
+        "id": row.get("id", new_id),
+        "certificate_number": row.get("certificate_number", cert_number),
+        "issued_at": row.get("issued_at", now),
     }
 
 
@@ -1141,14 +1220,18 @@ async def issue_certificate(
 async def user_course_progress(
     user_id: str,
     course_id: str,
-    _user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
-    row = (
-        db.query(CourseProgress)
-        .filter(CourseProgress.user_id == user_id, CourseProgress.course_id == course_id)
-        .first()
+    res = (
+        client.table("course_progress")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("course_id", course_id)
+        .maybe_single()
+        .execute()
     )
+    row = res.data
     if not row:
         return {
             "user_id": user_id,
@@ -1160,10 +1243,10 @@ async def user_course_progress(
     return {
         "user_id": user_id,
         "course_id": course_id,
-        "progress_percent": row.progress_percent,
-        "completed_contents": row.completed_contents,
-        "total_contents": row.total_contents,
-        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "progress_percent": row.get("progress_percent", 0.0),
+        "completed_contents": row.get("completed_contents", 0),
+        "total_contents": row.get("total_contents", 0),
+        "updated_at": row.get("updated_at"),
     }
 
 
@@ -1176,69 +1259,83 @@ async def complete_content(
     user_id: str,
     course_id: str,
     content_id: str,
-    _user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
     # Verify content exists
-    content = db.query(Content).filter(Content.id == content_id).first()
+    content_res = client.table("contents").select("id, title").eq("id", content_id).maybe_single().execute()
+    content = content_res.data
     if not content:
         raise HTTPException(status_code=404, detail="Conteudo nao encontrado")
 
-    # Count total contents in the course
-    total_contents = (
-        db.query(func.count(Content.id))
-        .join(Chapter, Chapter.id == Content.chapter_id)
-        .filter(Chapter.course_id == course_id)
-        .scalar()
-        or 0
-    )
+    # Count total contents in the course: chapters belonging to course_id, then contents in those chapters
+    chapters_res = client.table("chapters").select("id").eq("course_id", course_id).execute()
+    chapter_ids = [ch["id"] for ch in (chapters_res.data or [])]
+
+    total_contents = 0
+    if chapter_ids:
+        contents_res = client.table("contents").select("id", count="exact").in_("chapter_id", chapter_ids).execute()
+        total_contents = contents_res.count or 0
 
     # Upsert course progress
-    progress = (
-        db.query(CourseProgress)
-        .filter(CourseProgress.user_id == user_id, CourseProgress.course_id == course_id)
-        .first()
+    progress_res = (
+        client.table("course_progress")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("course_id", course_id)
+        .maybe_single()
+        .execute()
     )
-    if not progress:
-        progress = CourseProgress(
-            id=str(uuid4()),
-            user_id=user_id,
-            course_id=course_id,
-            completed_contents=0,
-            total_contents=total_contents,
-        )
-        db.add(progress)
+    progress = progress_res.data
 
-    progress.completed_contents = min((progress.completed_contents or 0) + 1, total_contents)
-    progress.total_contents = total_contents
-    progress.progress_percent = (
-        round(progress.completed_contents / total_contents * 100, 1) if total_contents > 0 else 0
-    )
+    if not progress:
+        new_completed = 1
+        progress_percent = round(new_completed / total_contents * 100, 1) if total_contents > 0 else 0
+        new_id = str(uuid4())
+        client.table("course_progress").insert(
+            {
+                "id": new_id,
+                "user_id": user_id,
+                "course_id": course_id,
+                "completed_contents": new_completed,
+                "total_contents": total_contents,
+                "progress_percent": progress_percent,
+            }
+        ).execute()
+        completed_contents = new_completed
+    else:
+        completed_contents = min((progress.get("completed_contents") or 0) + 1, total_contents)
+        progress_percent = round(completed_contents / total_contents * 100, 1) if total_contents > 0 else 0
+        client.table("course_progress").update(
+            {
+                "completed_contents": completed_contents,
+                "total_contents": total_contents,
+                "progress_percent": progress_percent,
+            }
+        ).eq("id", progress["id"]).execute()
 
     # Log activity
-    db.add(
-        UserActivity(
-            id=str(uuid4()),
-            user_id=user_id,
-            activity_type="content_completed",
-            description=f"Conteudo {content.title} completo",
-            points=10,
-        )
-    )
+    client.table("user_activities").insert(
+        {
+            "id": str(uuid4()),
+            "user_id": user_id,
+            "activity_type": "content_completed",
+            "description": f"Conteudo {content.get('title', '')} completo",
+            "points": 10,
+        }
+    ).execute()
 
-    db.commit()
-    db.refresh(progress)
     return {
         "course_id": course_id,
         "content_id": content_id,
-        "progress_percent": progress.progress_percent,
-        "completed_contents": progress.completed_contents,
-        "total_contents": progress.total_contents,
+        "progress_percent": progress_percent,
+        "completed_contents": completed_contents,
+        "total_contents": total_contents,
     }
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# SESSION REVIEW (professor ↔ aluno)
+# SESSION REVIEW (professor <-> aluno)
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -1246,73 +1343,78 @@ async def complete_content(
 async def create_review(
     session_id: str,
     body: SessionReviewCreate,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
-    session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    session_res = client.table("chat_sessions").select("id, user_id").eq("id", session_id).maybe_single().execute()
+    session = session_res.data
     if not session:
         raise HTTPException(status_code=404, detail="Sessao nao encontrada")
 
-    existing = db.query(SessionReview).filter(SessionReview.session_id == session_id).first()
-    if existing:
+    existing_res = client.table("session_reviews").select("id").eq("session_id", session_id).maybe_single().execute()
+    if existing_res.data:
         raise HTTPException(status_code=409, detail="Review ja existe para esta sessao")
 
-    row = SessionReview(
-        id=str(uuid4()),
-        session_id=session_id,
-        reviewer_id=user.id,
-        rating=body.rating,
-        feedback=body.feedback,
-        status="pending_student",
-    )
-    db.add(row)
+    new_id = str(uuid4())
+    res = client.table("session_reviews").insert(
+        {
+            "id": new_id,
+            "session_id": session_id,
+            "reviewer_id": user["id"],
+            "rating": body.rating,
+            "feedback": body.feedback,
+            "status": "pending_student",
+        }
+    ).execute()
+    row = res.data[0] if res.data else {}
 
     # Notify student
-    db.add(
-        Notification(
-            id=str(uuid4()),
-            user_id=session.user_id,
-            title="Sessao avaliada pelo professor",
-            message=body.feedback or "Sua sessao de dialogo socratico foi avaliada.",
-            notification_type="review",
-            link=f"/chat-sessions/{session_id}/review",
-        )
-    )
+    client.table("notifications").insert(
+        {
+            "id": str(uuid4()),
+            "user_id": session["user_id"],
+            "title": "Sessao avaliada pelo professor",
+            "message": body.feedback or "Sua sessao de dialogo socratico foi avaliada.",
+            "notification_type": "review",
+            "link": f"/chat-sessions/{session_id}/review",
+        }
+    ).execute()
 
-    db.commit()
-    db.refresh(row)
     return {
-        "id": row.id,
+        "id": row.get("id", new_id),
         "session_id": session_id,
-        "rating": row.rating,
-        "feedback": row.feedback,
-        "status": row.status,
-        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "rating": row.get("rating", body.rating),
+        "feedback": row.get("feedback", body.feedback),
+        "status": row.get("status", "pending_student"),
+        "created_at": row.get("created_at"),
     }
 
 
 @router.get("/chat-sessions/{session_id}/review", tags=["Session Review"], summary="Ver review")
 async def get_review(
     session_id: str,
-    _user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
-    row = db.query(SessionReview).filter(SessionReview.session_id == session_id).first()
+    res = client.table("session_reviews").select("*").eq("session_id", session_id).maybe_single().execute()
+    row = res.data
     if not row:
         raise HTTPException(status_code=404, detail="Review nao encontrado")
 
-    reviewer = db.query(User).filter(User.id == row.reviewer_id).first()
+    reviewer_res = client.table("users").select("name").eq("id", row.get("reviewer_id", "")).maybe_single().execute()
+    reviewer_name = reviewer_res.data.get("name") if reviewer_res.data else None
+
     return {
-        "id": row.id,
+        "id": row.get("id"),
         "session_id": session_id,
-        "reviewer_id": row.reviewer_id,
-        "reviewer_name": reviewer.name if reviewer else None,
-        "rating": row.rating,
-        "feedback": row.feedback,
-        "student_reply": row.student_reply,
-        "status": row.status,
-        "created_at": row.created_at.isoformat() if row.created_at else None,
-        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "reviewer_id": row.get("reviewer_id"),
+        "reviewer_name": reviewer_name,
+        "rating": row.get("rating"),
+        "feedback": row.get("feedback"),
+        "student_reply": row.get("student_reply"),
+        "status": row.get("status"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
     }
 
 
@@ -1320,27 +1422,29 @@ async def get_review(
 async def update_review(
     session_id: str,
     body: SessionReviewCreate,
-    _user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
-    row = db.query(SessionReview).filter(SessionReview.session_id == session_id).first()
+    res = client.table("session_reviews").select("*").eq("session_id", session_id).maybe_single().execute()
+    row = res.data
     if not row:
         raise HTTPException(status_code=404, detail="Review nao encontrado")
 
+    update_data: dict = {"status": "pending_student"}
     if body.rating is not None:
-        row.rating = body.rating
+        update_data["rating"] = body.rating
     if body.feedback is not None:
-        row.feedback = body.feedback
-    row.status = "pending_student"
+        update_data["feedback"] = body.feedback
 
-    db.commit()
-    db.refresh(row)
+    updated = client.table("session_reviews").update(update_data).eq("id", row["id"]).execute()
+    updated_row = updated.data[0] if updated.data else row
+
     return {
-        "id": row.id,
-        "rating": row.rating,
-        "feedback": row.feedback,
-        "status": row.status,
-        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "id": updated_row.get("id"),
+        "rating": updated_row.get("rating"),
+        "feedback": updated_row.get("feedback"),
+        "status": updated_row.get("status"),
+        "updated_at": updated_row.get("updated_at"),
     }
 
 
@@ -1348,34 +1452,35 @@ async def update_review(
 async def reply_review(
     session_id: str,
     body: SessionReviewReply,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
-    row = db.query(SessionReview).filter(SessionReview.session_id == session_id).first()
+    res = client.table("session_reviews").select("*").eq("session_id", session_id).maybe_single().execute()
+    row = res.data
     if not row:
         raise HTTPException(status_code=404, detail="Review nao encontrado")
 
-    row.student_reply = body.reply
-    row.status = "replied"
+    updated = client.table("session_reviews").update(
+        {"student_reply": body.reply, "status": "replied"}
+    ).eq("id", row["id"]).execute()
+    updated_row = updated.data[0] if updated.data else row
 
     # Notify reviewer
-    db.add(
-        Notification(
-            id=str(uuid4()),
-            user_id=row.reviewer_id,
-            title="Aluno respondeu a avaliacao",
-            message=f"{user.name} respondeu: {body.reply[:100]}",
-            notification_type="review_reply",
-            link=f"/chat-sessions/{session_id}/review",
-        )
-    )
+    client.table("notifications").insert(
+        {
+            "id": str(uuid4()),
+            "user_id": row["reviewer_id"],
+            "title": "Aluno respondeu a avaliacao",
+            "message": f"{user['name']} respondeu: {body.reply[:100]}",
+            "notification_type": "review_reply",
+            "link": f"/chat-sessions/{session_id}/review",
+        }
+    ).execute()
 
-    db.commit()
-    db.refresh(row)
     return {
-        "id": row.id,
-        "student_reply": row.student_reply,
-        "status": row.status,
+        "id": updated_row.get("id"),
+        "student_reply": updated_row.get("student_reply"),
+        "status": updated_row.get("status"),
     }
 
 
@@ -1389,47 +1494,67 @@ async def discipline_sessions(
     status_filter: Optional[str] = Query(None, alias="status"),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
-    _user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    _user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
     # Get course IDs for this discipline
-    course_ids = [c.id for c in db.query(Course.id).filter(Course.discipline_id == discipline_id).all()]
+    courses_res = client.table("courses").select("id").eq("discipline_id", discipline_id).execute()
+    course_ids = [c["id"] for c in (courses_res.data or [])]
     if not course_ids:
         return {"data": [], "total": 0, "page": page, "per_page": per_page, "has_more": False}
 
-    # Get content IDs for those courses
-    content_ids = [
-        c.id
-        for c in db.query(Content.id)
-        .join(Chapter, Chapter.id == Content.chapter_id)
-        .filter(Chapter.course_id.in_(course_ids))
-        .all()
-    ]
+    # Get chapter IDs for those courses
+    chapters_res = client.table("chapters").select("id").in_("course_id", course_ids).execute()
+    chapter_ids = [ch["id"] for ch in (chapters_res.data or [])]
+    if not chapter_ids:
+        return {"data": [], "total": 0, "page": page, "per_page": per_page, "has_more": False}
+
+    # Get content IDs for those chapters
+    contents_res = client.table("contents").select("id").in_("chapter_id", chapter_ids).execute()
+    content_ids = [c["id"] for c in (contents_res.data or [])]
     if not content_ids:
         return {"data": [], "total": 0, "page": page, "per_page": per_page, "has_more": False}
 
-    q = db.query(ChatSession).filter(ChatSession.content_id.in_(content_ids))
+    # Get chat sessions for those content IDs
+    q = client.table("chat_sessions").select("*", count="exact").in_("content_id", content_ids)
     if status_filter:
-        q = q.filter(ChatSession.status == status_filter)
+        q = q.eq("status", status_filter)
 
-    total = q.count()
-    rows = q.order_by(ChatSession.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
+    sessions_res = q.order("created_at", desc=True).range((page - 1) * per_page, page * per_page - 1).execute()
+    total = sessions_res.count or 0
+    rows = sessions_res.data or []
+
+    # Collect user IDs and session IDs for batch lookups
+    user_ids = list({s["user_id"] for s in rows if s.get("user_id")})
+    session_ids = [s["id"] for s in rows]
+
+    # Batch fetch users
+    users_map: dict[str, dict] = {}
+    if user_ids:
+        users_res = client.table("users").select("id, name").in_("id", user_ids).execute()
+        users_map = {u["id"]: u for u in (users_res.data or [])}
+
+    # Batch fetch reviews
+    reviews_map: dict[str, dict] = {}
+    if session_ids:
+        reviews_res = client.table("session_reviews").select("session_id, status").in_("session_id", session_ids).execute()
+        reviews_map = {r["session_id"]: r for r in (reviews_res.data or [])}
 
     result = []
     for s in rows:
-        user = db.query(User).filter(User.id == s.user_id).first()
-        review = db.query(SessionReview).filter(SessionReview.session_id == s.id).first()
+        u = users_map.get(s.get("user_id", ""), {})
+        review = reviews_map.get(s.get("id", ""))
         result.append(
             {
-                "id": s.id,
-                "user_id": s.user_id,
-                "user_name": user.name if user else None,
-                "content_id": s.content_id,
-                "status": s.status,
-                "total_messages": s.total_messages,
-                "performance_score": s.performance_score,
-                "review_status": review.status if review else None,
-                "created_at": s.created_at.isoformat() if s.created_at else None,
+                "id": s.get("id"),
+                "user_id": s.get("user_id"),
+                "user_name": u.get("name"),
+                "content_id": s.get("content_id"),
+                "status": s.get("status"),
+                "total_messages": s.get("total_messages"),
+                "performance_score": s.get("performance_score"),
+                "review_status": review.get("status") if review else None,
+                "created_at": s.get("created_at"),
             }
         )
 

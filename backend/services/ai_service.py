@@ -7,7 +7,10 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from sqlalchemy.orm import Session
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    pass  # No DB type needed — token tracking uses in-memory cache
 
 from config import get_settings
 
@@ -201,48 +204,21 @@ class AIService:
     # Token budget
     # ------------------------------------------------------------------
 
-    def check_token_budget(self, user_id: Optional[str], db: Optional[Session] = None) -> None:
+    def check_token_budget(self, user_id: Optional[str], db=None) -> None:
         if not user_id:
             return
         today = date.today().isoformat()
-        if db:
-            try:
-                from models.integration import TokenUsage
-                row = db.query(TokenUsage).filter(
-                    TokenUsage.user_id == user_id,
-                    TokenUsage.usage_date == date.today(),
-                ).first()
-                used = row.tokens_used if row else 0
-            except Exception:
-                used = _user_token_cache.get(user_id, {}).get(today, 0)
-        else:
-            used = _user_token_cache.get(user_id, {}).get(today, 0)
+        used = _user_token_cache.get(user_id, {}).get(today, 0)
 
         if used >= self.daily_token_limit:
             raise AIServiceError("Limite diario de tokens excedido. Tente novamente amanha.")
 
-    def track_token_usage(self, user_id: Optional[str], tokens: int, db: Optional[Session] = None) -> None:
+    def track_token_usage(self, user_id: Optional[str], tokens: int, db=None) -> None:
         if not user_id or tokens <= 0:
             return
         today = date.today().isoformat()
         _user_token_cache.setdefault(user_id, {})
         _user_token_cache[user_id][today] = _user_token_cache[user_id].get(today, 0) + tokens
-
-        if db:
-            try:
-                from models.integration import TokenUsage
-                row = db.query(TokenUsage).filter(
-                    TokenUsage.user_id == user_id,
-                    TokenUsage.usage_date == date.today(),
-                ).first()
-                if row:
-                    row.tokens_used += tokens
-                else:
-                    db.add(TokenUsage(user_id=user_id, usage_date=date.today(), tokens_used=tokens))
-                db.commit()
-            except Exception as e:
-                db.rollback()
-                logger.warning(f"Token tracking DB failed: {e}")
 
     # ------------------------------------------------------------------
     # Internal OpenAI call
@@ -304,7 +280,7 @@ class AIService:
         difficulty: str = "intermediario",
         max_questions: int = 3,
         user_id: Optional[str] = None,
-        db: Optional[Session] = None,
+        db=None,
     ) -> Dict[str, Any]:
         self.check_token_budget(user_id, db)
 
@@ -379,7 +355,7 @@ class AIService:
         interactions_remaining: int = 3,
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
-        db: Optional[Session] = None,
+        db=None,
     ) -> Dict[str, Any]:
         self.check_token_budget(user_id, db)
 

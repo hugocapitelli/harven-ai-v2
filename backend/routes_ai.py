@@ -8,13 +8,11 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session, joinedload
+from supabase import Client
 
 from auth import create_access_token, get_current_user, require_role
 from config import get_settings
-from database import get_db
-from models.chat import ChatMessage, ChatSession
-from models.user import User
+from database import get_supabase
 from services.ai_service import AIService, AIServiceError, sanitize_ai_error
 from services.integration_service import (
     IntegrationService,
@@ -50,9 +48,9 @@ def get_storage_service() -> StorageService:
     return _storage_service
 
 
-def get_integration_service(db: Session = Depends(get_db)) -> IntegrationService:
+def get_integration_service(client: Client = Depends(get_supabase)) -> IntegrationService:
     settings = get_settings()
-    return IntegrationService(db, {
+    return IntegrationService(client, {
         "jacad_base_url": os.getenv("JACAD_BASE_URL", ""),
         "jacad_api_key": os.getenv("JACAD_API_KEY", ""),
         "moodle_url": os.getenv("MOODLE_URL", ""),
@@ -139,8 +137,8 @@ async def ai_status():
 @router.post("/api/ai/creator/generate", tags=["AI"])
 async def ai_creator_generate(
     req: QuestionGenerationRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
     try:
         return await get_ai_service().generate_questions(
@@ -149,8 +147,8 @@ async def ai_creator_generate(
             learning_objective=req.learning_objective or "",
             difficulty=req.difficulty or "intermediario",
             max_questions=req.max_questions or 3,
-            user_id=current_user.id,
-            db=db,
+            user_id=current_user["id"],
+            db=client,
         )
     except AIServiceError as e:
         raise HTTPException(status_code=503, detail=sanitize_ai_error(e))
@@ -162,8 +160,8 @@ async def ai_creator_generate(
 @router.post("/api/ai/socrates/dialogue", tags=["AI"])
 async def ai_socrates_dialogue(
     req: SocraticDialogueRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
     try:
         return await get_ai_service().socratic_dialogue(
@@ -173,8 +171,8 @@ async def ai_socrates_dialogue(
             conversation_history=req.conversation_history,
             interactions_remaining=req.interactions_remaining or 3,
             session_id=req.session_id,
-            user_id=current_user.id,
-            db=db,
+            user_id=current_user["id"],
+            db=client,
         )
     except AIServiceError as e:
         raise HTTPException(status_code=503, detail=sanitize_ai_error(e))
@@ -186,7 +184,7 @@ async def ai_socrates_dialogue(
 @router.post("/api/ai/analyst/detect", tags=["AI"])
 async def ai_analyst_detect(
     req: AIDetectionRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
 ):
     try:
         return await get_ai_service().detect_ai_content(
@@ -204,7 +202,7 @@ async def ai_analyst_detect(
 @router.post("/api/ai/editor/edit", tags=["AI"])
 async def ai_editor_edit(
     req: EditResponseRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
 ):
     try:
         return await get_ai_service().edit_response(
@@ -221,7 +219,7 @@ async def ai_editor_edit(
 @router.post("/api/ai/tester/validate", tags=["AI"])
 async def ai_tester_validate(
     req: ValidateResponseRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
 ):
     try:
         return await get_ai_service().validate_response(
@@ -238,7 +236,7 @@ async def ai_tester_validate(
 @router.post("/api/ai/organizer/session", tags=["AI"])
 async def ai_organizer_session(
     req: OrganizeSessionRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
 ):
     try:
         return await get_ai_service().organize_session(
@@ -256,7 +254,7 @@ async def ai_organizer_session(
 @router.post("/api/ai/organizer/prepare-export", tags=["AI"])
 async def ai_organizer_prepare_export(
     session_data: dict,
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
 ):
     try:
         return get_ai_service().prepare_moodle_export(session_data)
@@ -301,7 +299,7 @@ async def tts_voices():
 async def tts_generate(
     text: str = "",
     voice: str = "alloy",
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
 ):
     return {"status": "mock", "message": "TTS nao configurado — retornando stub", "audio_url": None}
 
@@ -314,7 +312,7 @@ async def tts_status():
 @router.post("/api/ai/transcribe", tags=["AI - TTS"])
 async def ai_transcribe(
     file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
 ):
     return {"status": "mock", "text": "", "message": "Transcricao nao configurada"}
 
@@ -324,59 +322,38 @@ async def ai_transcribe(
 # ===================================================================
 
 
-def _session_to_dict(session: ChatSession) -> Dict[str, Any]:
-    d: Dict[str, Any] = {}
-    for c in ChatSession.__table__.columns:
-        val = getattr(session, c.key, None)
-        if hasattr(val, "isoformat"):
-            val = val.isoformat()
-        d[c.name] = val
-    return d
-
-
-def _message_to_dict(msg: ChatMessage) -> Dict[str, Any]:
-    return {
-        "id": msg.id,
-        "session_id": msg.session_id,
-        "role": msg.role,
-        "content": msg.content,
-        "agent_type": msg.agent_type,
-        "metadata": msg.metadata_,
-        "created_at": msg.created_at.isoformat() if msg.created_at else None,
-    }
-
-
 @router.post("/chat-sessions", tags=["Chat Sessions"])
 async def create_or_get_chat_session(
     data: ChatSessionCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
+    current_user: dict = Depends(get_current_user),
 ):
     try:
-        existing = db.query(ChatSession).filter(
-            ChatSession.user_id == data.user_id,
-            ChatSession.content_id == data.content_id,
-        ).first()
+        result = client.table("chat_sessions").select("*").eq(
+            "user_id", data.user_id
+        ).eq(
+            "content_id", data.content_id
+        ).maybe_single().execute()
+
+        existing = result.data
 
         if existing:
-            if existing.status in ("abandoned", "completed"):
-                existing.status = "active"
-                db.commit()
-                db.refresh(existing)
-            return _session_to_dict(existing)
+            if existing.get("status") in ("abandoned", "completed"):
+                updated = client.table("chat_sessions").update(
+                    {"status": "active"}
+                ).eq("id", existing["id"]).execute()
+                return updated.data[0] if updated.data else existing
+            return existing
 
-        session = ChatSession(
-            user_id=data.user_id,
-            content_id=data.content_id,
-            status="active",
-            total_messages=0,
-        )
-        db.add(session)
-        db.commit()
-        db.refresh(session)
-        return _session_to_dict(session)
+        new_session = {
+            "user_id": data.user_id,
+            "content_id": data.content_id,
+            "status": "active",
+            "total_messages": 0,
+        }
+        insert_result = client.table("chat_sessions").insert(new_session).execute()
+        return insert_result.data[0] if insert_result.data else new_session
     except Exception as e:
-        db.rollback()
         logger.error(f"create_or_get_chat_session error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Erro interno do servidor")
 
@@ -384,122 +361,156 @@ async def create_or_get_chat_session(
 @router.get("/chat-sessions/{session_id}", tags=["Chat Sessions"])
 async def get_chat_session(
     session_id: str,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
+    current_user: dict = Depends(get_current_user),
 ):
-    session = db.query(ChatSession).options(joinedload(ChatSession.messages)).filter(
-        ChatSession.id == session_id,
-    ).first()
+    result = client.table("chat_sessions").select("*").eq(
+        "id", session_id
+    ).maybe_single().execute()
+
+    session = result.data
     if not session:
         raise HTTPException(status_code=404, detail="Sessao nao encontrada")
-    d = _session_to_dict(session)
-    d["messages"] = [_message_to_dict(m) for m in session.messages]
-    return d
+
+    messages_result = client.table("chat_messages").select("*").eq(
+        "session_id", session_id
+    ).order("created_at").execute()
+
+    session["messages"] = messages_result.data or []
+    return session
 
 
 @router.get("/chat-sessions/{session_id}/messages", tags=["Chat Sessions"])
 async def get_session_messages(
     session_id: str,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
+    current_user: dict = Depends(get_current_user),
 ):
-    messages = db.query(ChatMessage).filter(
-        ChatMessage.session_id == session_id,
-    ).order_by(ChatMessage.created_at).all()
-    return [_message_to_dict(m) for m in messages]
+    result = client.table("chat_messages").select("*").eq(
+        "session_id", session_id
+    ).order("created_at").execute()
+    return result.data or []
 
 
 @router.post("/chat-sessions/{session_id}/messages", tags=["Chat Sessions"])
 async def add_session_message(
     session_id: str,
     data: ChatMessageCreate,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
+    current_user: dict = Depends(get_current_user),
 ):
-    session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+    # Verify session exists
+    session_result = client.table("chat_sessions").select("id, total_messages").eq(
+        "id", session_id
+    ).maybe_single().execute()
+
+    session = session_result.data
     if not session:
         raise HTTPException(status_code=404, detail="Sessao nao encontrada")
 
-    msg = ChatMessage(
-        session_id=session_id,
-        role=data.role,
-        content=data.content,
-        agent_type=data.agent_type,
-        metadata_=data.metadata,
-    )
-    db.add(msg)
-    session.total_messages = (session.total_messages or 0) + 1
+    new_message = {
+        "session_id": session_id,
+        "role": data.role,
+        "content": data.content,
+        "agent_type": data.agent_type,
+        "metadata": data.metadata,
+    }
+
     try:
-        db.commit()
-        db.refresh(msg)
+        msg_result = client.table("chat_messages").insert(new_message).execute()
+
+        new_count = (session.get("total_messages") or 0) + 1
+        client.table("chat_sessions").update(
+            {"total_messages": new_count}
+        ).eq("id", session_id).execute()
+
+        return msg_result.data[0] if msg_result.data else new_message
     except Exception:
-        db.rollback()
         raise HTTPException(status_code=500, detail="Erro ao salvar mensagem")
-    return _message_to_dict(msg)
 
 
 @router.get("/chat-sessions/by-content/{content_id}", tags=["Chat Sessions"])
 async def get_session_by_content(
     content_id: str,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
+    current_user: dict = Depends(get_current_user),
 ):
-    session = db.query(ChatSession).filter(
-        ChatSession.content_id == content_id,
-        ChatSession.user_id == current_user.id,
-    ).first()
+    result = client.table("chat_sessions").select("*").eq(
+        "content_id", content_id
+    ).eq(
+        "user_id", current_user["id"]
+    ).maybe_single().execute()
+
+    session = result.data
     if not session:
         raise HTTPException(status_code=404, detail="Sessao nao encontrada para este conteudo")
-    return _session_to_dict(session)
+    return session
 
 
 @router.get("/users/{user_id}/chat-sessions", tags=["Chat Sessions"])
 async def get_user_chat_sessions(
     user_id: str,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
+    current_user: dict = Depends(get_current_user),
 ):
-    sessions = db.query(ChatSession).filter(
-        ChatSession.user_id == user_id,
-    ).order_by(ChatSession.created_at.desc()).all()
-    return [_session_to_dict(s) for s in sessions]
+    result = client.table("chat_sessions").select("*").eq(
+        "user_id", user_id
+    ).order("created_at", desc=True).execute()
+    return result.data or []
 
 
 @router.put("/chat-sessions/{session_id}/complete", tags=["Chat Sessions"])
 async def complete_chat_session(
     session_id: str,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
+    current_user: dict = Depends(get_current_user),
 ):
-    session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
-    if not session:
+    result = client.table("chat_sessions").select("id").eq(
+        "id", session_id
+    ).maybe_single().execute()
+
+    if not result.data:
         raise HTTPException(status_code=404, detail="Sessao nao encontrada")
-    session.status = "completed"
-    db.commit()
-    db.refresh(session)
-    return _session_to_dict(session)
+
+    updated = client.table("chat_sessions").update(
+        {"status": "completed"}
+    ).eq("id", session_id).execute()
+
+    return updated.data[0] if updated.data else {"id": session_id, "status": "completed"}
 
 
 @router.post("/chat-sessions/{session_id}/export-moodle", tags=["Chat Sessions"])
 async def export_session_moodle(
     session_id: str,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
+    current_user: dict = Depends(get_current_user),
 ):
-    session = db.query(ChatSession).options(joinedload(ChatSession.messages)).filter(
-        ChatSession.id == session_id,
-    ).first()
+    session_result = client.table("chat_sessions").select("*").eq(
+        "id", session_id
+    ).maybe_single().execute()
+
+    session = session_result.data
     if not session:
         raise HTTPException(status_code=404, detail="Sessao nao encontrada")
 
-    session_data = _session_to_dict(session)
-    session_data["messages"] = [_message_to_dict(m) for m in session.messages]
-    session_data["session_id"] = session.id
-    session_data["user_name"] = session.user.name if session.user else ""
-    session_data["user_email"] = session.user.email if session.user else ""
+    messages_result = client.table("chat_messages").select("*").eq(
+        "session_id", session_id
+    ).order("created_at").execute()
+
+    session["messages"] = messages_result.data or []
+    session["session_id"] = session["id"]
+
+    # Fetch user info for export
+    user_result = client.table("users").select("name, email").eq(
+        "id", session.get("user_id", "")
+    ).maybe_single().execute()
+
+    user_data = user_result.data
+    session["user_name"] = user_data.get("name", "") if user_data else ""
+    session["user_email"] = user_data.get("email", "") if user_data else ""
 
     svc = get_ai_service()
-    return svc.prepare_moodle_export(session_data)
+    return svc.prepare_moodle_export(session)
 
 
 # ===================================================================
@@ -511,7 +522,7 @@ async def export_session_moodle(
 async def integration_test_connection(
     system: str = Query(...),
     svc: IntegrationService = Depends(get_integration_service),
-    current_user: User = Depends(require_role("ADMIN", "TEACHER")),
+    current_user: dict = Depends(require_role("ADMIN", "TEACHER")),
 ):
     return await svc.test_connection(system)
 
@@ -529,7 +540,7 @@ async def integration_logs(
     status: Optional[str] = None,
     limit: int = Query(50, le=200),
     svc: IntegrationService = Depends(get_integration_service),
-    current_user: User = Depends(require_role("ADMIN")),
+    current_user: dict = Depends(require_role("ADMIN")),
 ):
     filters = {}
     if system:
@@ -543,7 +554,7 @@ async def integration_logs(
 async def integration_mappings(
     entity_type: Optional[str] = None,
     svc: IntegrationService = Depends(get_integration_service),
-    current_user: User = Depends(require_role("ADMIN")),
+    current_user: dict = Depends(require_role("ADMIN")),
 ):
     return await svc.get_mappings(entity_type)
 
@@ -553,7 +564,7 @@ async def integration_mappings(
 @router.post("/integrations/jacad/sync", tags=["Integrations - JACAD"])
 async def jacad_sync(
     svc: IntegrationService = Depends(get_integration_service),
-    current_user: User = Depends(require_role("ADMIN")),
+    current_user: dict = Depends(require_role("ADMIN")),
 ):
     users_result = await svc.sync_users_from_jacad()
     disc_result = await svc.sync_disciplines_from_jacad()
@@ -563,7 +574,7 @@ async def jacad_sync(
 @router.post("/integrations/jacad/import-students", tags=["Integrations - JACAD"])
 async def jacad_import_students(
     svc: IntegrationService = Depends(get_integration_service),
-    current_user: User = Depends(require_role("ADMIN")),
+    current_user: dict = Depends(require_role("ADMIN")),
 ):
     result = await svc.sync_users_from_jacad()
     return result.to_dict()
@@ -572,7 +583,7 @@ async def jacad_import_students(
 @router.post("/integrations/jacad/import-disciplines", tags=["Integrations - JACAD"])
 async def jacad_import_disciplines(
     svc: IntegrationService = Depends(get_integration_service),
-    current_user: User = Depends(require_role("ADMIN")),
+    current_user: dict = Depends(require_role("ADMIN")),
 ):
     result = await svc.sync_disciplines_from_jacad()
     return result.to_dict()
@@ -582,7 +593,7 @@ async def jacad_import_disciplines(
 async def jacad_student(
     ra: str,
     svc: IntegrationService = Depends(get_integration_service),
-    current_user: User = Depends(require_role("ADMIN", "TEACHER")),
+    current_user: dict = Depends(require_role("ADMIN", "TEACHER")),
 ):
     student = await svc.get_jacad_student(ra)
     if not student:
@@ -595,7 +606,7 @@ async def jacad_student(
 @router.post("/integrations/moodle/sync", tags=["Integrations - Moodle"])
 async def moodle_sync(
     svc: IntegrationService = Depends(get_integration_service),
-    current_user: User = Depends(require_role("ADMIN")),
+    current_user: dict = Depends(require_role("ADMIN")),
 ):
     export_result = await svc.export_sessions_to_moodle()
     import_result = await svc.import_ratings_from_moodle()
@@ -605,7 +616,7 @@ async def moodle_sync(
 @router.post("/integrations/moodle/import-users", tags=["Integrations - Moodle"])
 async def moodle_import_users(
     svc: IntegrationService = Depends(get_integration_service),
-    current_user: User = Depends(require_role("ADMIN")),
+    current_user: dict = Depends(require_role("ADMIN")),
 ):
     return {"status": "not_implemented", "message": "Import de usuarios via Moodle nao implementado"}
 
@@ -614,7 +625,7 @@ async def moodle_import_users(
 async def moodle_export_sessions(
     filters: Optional[dict] = None,
     svc: IntegrationService = Depends(get_integration_service),
-    current_user: User = Depends(require_role("ADMIN", "TEACHER")),
+    current_user: dict = Depends(require_role("ADMIN", "TEACHER")),
 ):
     result = await svc.export_sessions_to_moodle(filters)
     return result.to_dict()
@@ -624,7 +635,7 @@ async def moodle_export_sessions(
 async def moodle_ratings(
     session_id: Optional[str] = None,
     svc: IntegrationService = Depends(get_integration_service),
-    current_user: User = Depends(require_role("ADMIN", "TEACHER")),
+    current_user: dict = Depends(require_role("ADMIN", "TEACHER")),
 ):
     filters = {}
     if session_id:
@@ -653,7 +664,7 @@ async def moodle_webhook(
 @router.post("/lti/launch", tags=["LTI"])
 async def lti_launch(
     request: Request,
-    db: Session = Depends(get_db),
+    client: Client = Depends(get_supabase),
 ):
     settings = get_settings()
     lti_key = os.getenv("LTI_CONSUMER_KEY", "")
@@ -676,35 +687,39 @@ async def lti_launch(
     # Find or create user
     user = None
     if launch_data.ra:
-        user = db.query(User).filter(User.ra == launch_data.ra).first()
+        result = client.table("users").select("*").eq("ra", launch_data.ra).maybe_single().execute()
+        user = result.data
     if not user and launch_data.email:
-        user = db.query(User).filter(User.email == launch_data.email).first()
+        result = client.table("users").select("*").eq("email", launch_data.email).maybe_single().execute()
+        user = result.data
 
     auto_create = os.getenv("LTI_AUTO_CREATE_USERS", "true").lower() == "true"
     if not user and auto_create:
         from auth import hash_password
-        user = User(
-            ra=launch_data.ra or f"lti-{launch_data.user_id}",
-            name=launch_data.name or "LTI User",
-            email=launch_data.email,
-            role=launch_data.role,
-            password_hash=hash_password(launch_data.ra or launch_data.user_id),
-            moodle_user_id=launch_data.user_id,
-        )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
+        new_user = {
+            "ra": launch_data.ra or f"lti-{launch_data.user_id}",
+            "name": launch_data.name or "LTI User",
+            "email": launch_data.email,
+            "role": launch_data.role,
+            "password_hash": hash_password(launch_data.ra or launch_data.user_id),
+            "moodle_user_id": launch_data.user_id,
+        }
+        insert_result = client.table("users").insert(new_user).execute()
+        user = insert_result.data[0] if insert_result.data else None
     elif user:
-        if launch_data.name and user.name != launch_data.name:
-            user.name = launch_data.name
-        if not user.moodle_user_id:
-            user.moodle_user_id = launch_data.user_id
-        db.commit()
+        updates = {}
+        if launch_data.name and user.get("name") != launch_data.name:
+            updates["name"] = launch_data.name
+        if not user.get("moodle_user_id"):
+            updates["moodle_user_id"] = launch_data.user_id
+        if updates:
+            update_result = client.table("users").update(updates).eq("id", user["id"]).execute()
+            user = update_result.data[0] if update_result.data else user
 
     if not user:
         raise HTTPException(status_code=403, detail="Usuario nao encontrado e criacao automatica desabilitada")
 
-    token = create_access_token(user.id, user.role)
+    token = create_access_token(user["id"], user["role"])
     return RedirectResponse(url=f"{redirect_url}?token={token}", status_code=302)
 
 
@@ -739,7 +754,7 @@ async def lti_status():
 @router.post("/upload", tags=["Upload"])
 async def upload_file(
     file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
 ):
     try:
         storage = get_storage_service()
@@ -755,7 +770,7 @@ async def upload_file(
 @router.post("/upload/video", tags=["Upload"])
 async def upload_video(
     file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
 ):
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
     if ext not in ("mp4", "mov", "avi", "webm"):
@@ -774,7 +789,7 @@ async def upload_video(
 @router.post("/upload/audio", tags=["Upload"])
 async def upload_audio(
     file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
 ):
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
     if ext not in ("mp3", "wav", "ogg", "m4a"):
