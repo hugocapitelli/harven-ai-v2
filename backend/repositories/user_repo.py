@@ -10,7 +10,7 @@ class UserRepository(BaseRepository):
 
     def get_by_ra(self, ra: str) -> Optional[Dict]:
         res = self.client.table(self.table).select("*").eq("ra", ra).maybe_single().execute()
-        return res.data
+        return res.data if res else None
 
     def search(self, query_str: str, role: str = None, skip: int = 0, limit: int = 20) -> Tuple[List[Dict], int]:
         q = self.client.table(self.table).select("*", count="exact")
