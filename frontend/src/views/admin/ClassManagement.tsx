@@ -60,9 +60,20 @@ export default function ClassManagement() {
       setLoading(true);
       const res = await disciplinesApi.list();
       if (controller.signal.aborted) return;
-      // Backend returns paginated response: { data: [...], total, page, per_page }
-      const list = Array.isArray(res) ? res : (Array.isArray(res?.data) ? res.data : []);
+      const list = unwrapList<Discipline>(res);
       setDisciplines(list);
+      // Enrich each discipline with real stats (courses_count, students count)
+      list.forEach(async (d) => {
+        try {
+          const stats = await disciplinesApi.getStats(d.id) as Record<string, unknown>;
+          if (controller.signal.aborted) return;
+          setDisciplines((prev) => prev.map((x) =>
+            x.id === d.id
+              ? { ...x, courses_count: Number(stats.courses_count ?? stats.total_courses ?? x.courses_count ?? 0), students: Number(stats.students_count ?? stats.total_students ?? x.students ?? 0) }
+              : x,
+          ));
+        } catch { /* ignore stats errors */ }
+      });
     } catch {
       if (controller.signal.aborted) return;
     } finally {
@@ -182,13 +193,31 @@ export default function ClassManagement() {
     const text = await file.text();
     const ras = text.trim().split('\n').slice(1).map((l) => l.split(',')[0]?.trim()).filter(Boolean);
     if (ras.length === 0) { toast.error('CSV vazio.'); return; }
+
+    // Resolve RAs → student IDs via allUsers lookup
+    const raToId = new Map(allUsers.filter((u) => u.role === 'STUDENT' && u.ra).map((u) => [u.ra!.trim(), u.id]));
+    const resolved = ras.map((ra) => raToId.get(ra!)).filter((id): id is string => !!id);
+    const missing = ras.length - resolved.length;
+
+    if (resolved.length === 0) {
+      toast.error(`Nenhum RA encontrado. Cadastre os alunos primeiro em "Usuários".`);
+      if (csvRef.current) csvRef.current.value = '';
+      return;
+    }
+
     setSaving(true);
     try {
-      await disciplinesApi.addStudentsBatch(editState.discipline.id, ras.map((ra) => ({ ra })) as Record<string, unknown>[]);
-      toast.success(`${ras.length} alunos importados.`);
+      await disciplinesApi.addStudentsBatch(editState.discipline.id, resolved);
+      const msg = missing > 0
+        ? `${resolved.length} adicionados. ${missing} RAs não encontrados.`
+        : `${resolved.length} alunos importados.`;
+      toast.success(msg);
       const s = await disciplinesApi.getStudents(editState.discipline.id);
-      setStudents(unwrapList(s));
-    } catch { toast.error('Erro na importação.'); }
+      const studentList = unwrapList(s).map((link: any) => link.student ?? link).filter(Boolean);
+      setStudents(studentList);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail || 'Erro na importação.');
+    }
     finally { setSaving(false); if (csvRef.current) csvRef.current.value = ''; }
   };
 
@@ -334,11 +363,13 @@ export default function ClassManagement() {
                       try {
                         const title = window.prompt('Título do curso:', '');
                         if (!title || !title.trim()) return;
-                        await coursesApi.create({ title: title.trim(), discipline_id: editState.discipline!.id, status: 'draft' } as Record<string, unknown>);
+                        await coursesApi.createInClass(editState.discipline!.id, { title: title.trim(), status: 'draft' } as Record<string, unknown>);
                         const c = await coursesApi.listByClass(editState.discipline!.id);
                         setCourses(unwrapList(c));
                         toast.success('Curso criado.');
-                      } catch { toast.error('Erro.'); }
+                      } catch (err: any) {
+                        toast.error(err?.response?.data?.detail || 'Erro ao criar curso.');
+                      }
                     }}>
                       <span className="material-symbols-outlined text-[16px] mr-1">add</span> Curso
                     </Button>
