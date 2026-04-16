@@ -206,7 +206,7 @@ export default function ClassManagement() {
   );
 
   const availableTeachers = allUsers.filter(
-    (u) => u.role === 'INSTRUCTOR' && !teachers.some((t) => t.id === u.id) && u.name.toLowerCase().includes(userSearch.toLowerCase()),
+    (u) => (u.role === 'INSTRUCTOR' || u.role === 'TEACHER') && !teachers.some((t) => t.id === u.id) && u.name.toLowerCase().includes(userSearch.toLowerCase()),
   );
 
   const availableStudents = allUsers.filter(
@@ -364,7 +364,7 @@ export default function ClassManagement() {
                     <div className="border border-border rounded-lg max-h-48 overflow-y-auto mt-2">
                       {availableTeachers.length === 0 ? (
                         <p className="text-sm text-muted-foreground text-center py-3">
-                          {allUsers.filter((u) => u.role === 'INSTRUCTOR').length === 0
+                          {allUsers.filter((u) => u.role === 'INSTRUCTOR' || u.role === 'TEACHER').length === 0
                             ? 'Nenhum professor cadastrado. Crie em Usuarios.'
                             : 'Todos os professores já estão vinculados.'}
                         </p>
