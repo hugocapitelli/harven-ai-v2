@@ -331,7 +331,9 @@ async def login(request: Request, body: LoginRequest, client: Client = Depends(g
     token = create_access_token(user["id"], role)
 
     return {
+        "access_token": token,
         "token": token,
+        "token_type": "bearer",
         "user": {
             "id": user["id"],
             "name": user["name"],
