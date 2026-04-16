@@ -2,7 +2,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { coursesApi, disciplinesApi } from '../../services/api';
+import { coursesApi, usersApi } from '../../services/api';
 import { cn } from '../../lib/utils';
 import type { UserRole } from '../../types';
 
@@ -16,8 +16,9 @@ export default function CourseList({ userRole }: CourseListProps) {
   const [activeTab, setActiveTab] = useState('Todos');
   const [selectedCategory, setSelectedCategory] = useState('Todas');
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [newCourse, setNewCourse] = useState({ title: '', instructor: '', category: 'Geral' });
+  const [newCourse, setNewCourse] = useState({ title: '', instructor_id: '', category: 'Geral' });
   const [isCreating, setIsCreating] = useState(false);
+  const [instructors, setInstructors] = useState<Array<{ id: string; name: string }>>([]);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -31,6 +32,18 @@ export default function CourseList({ userRole }: CourseListProps) {
     })();
     return () => ctrl.abort();
   }, []);
+
+  // Load instructors list when admin opens the create modal
+  useEffect(() => {
+    if (!showCreateModal || userRole !== 'ADMIN') return;
+    (async () => {
+      try {
+        const res = await usersApi.list({ role: 'INSTRUCTOR', per_page: 100 });
+        const users = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : []);
+        setInstructors(users.map((u: Record<string, unknown>) => ({ id: String(u.id), name: String(u.name) })));
+      } catch { toast.error('Erro ao carregar instrutores'); }
+    })();
+  }, [showCreateModal, userRole]);
 
   const categories = useMemo(() => ['Todas', ...new Set(courses.map(c => String(c.category || 'Geral')))], [courses]);
 
@@ -50,11 +63,14 @@ export default function CourseList({ userRole }: CourseListProps) {
     e.preventDefault();
     setIsCreating(true);
     try {
-      await disciplinesApi.create(newCourse);
+      const payload: Record<string, unknown> = { title: newCourse.title, status: 'draft' };
+      if (newCourse.instructor_id) payload.instructor_id = newCourse.instructor_id;
+      await coursesApi.create(payload);
       const data = await coursesApi.list();
       setCourses(Array.isArray(data) ? data.filter((c: Record<string, unknown>) => c.title && String(c.title).trim()) : []);
       setShowCreateModal(false);
-      setNewCourse({ title: '', instructor: '', category: 'Geral' });
+      setNewCourse({ title: '', instructor_id: '', category: 'Geral' });
+      toast.success('Curso criado com sucesso');
     } catch { toast.error('Erro ao criar curso'); }
     finally { setIsCreating(false); }
   };
@@ -118,7 +134,7 @@ export default function CourseList({ userRole }: CourseListProps) {
           );
         })}
 
-        {userRole === 'INSTRUCTOR' && (
+        {(userRole === 'INSTRUCTOR' || userRole === 'ADMIN') && (
           <div onClick={() => setShowCreateModal(true)} className="flex flex-col items-center justify-center p-6 gap-4 text-center border-2 border-dashed border-gray-300 rounded-xl bg-muted/20 min-h-[300px] cursor-pointer hover:border-primary hover:bg-white transition-all">
             <div className="size-12 rounded-full bg-muted flex items-center justify-center"><span className="material-symbols-outlined text-muted-foreground">add</span></div>
             <p className="text-sm font-bold">Criar Novo Curso</p>
@@ -131,8 +147,28 @@ export default function CourseList({ userRole }: CourseListProps) {
           <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
             <h3 className="text-xl font-bold mb-4">Novo Curso</h3>
             <form onSubmit={handleCreate} className="space-y-4">
-              <div><label className="text-[10px] font-bold uppercase text-gray-400">Titulo</label><input value={newCourse.title} onChange={e => setNewCourse({...newCourse, title: e.target.value})} className="w-full bg-harven-bg border-none rounded-lg px-4 py-2 text-sm focus:ring-1 focus:ring-primary mt-1" required /></div>
-              <div><label className="text-[10px] font-bold uppercase text-gray-400">Instrutor</label><input value={newCourse.instructor} onChange={e => setNewCourse({...newCourse, instructor: e.target.value})} className="w-full bg-harven-bg border-none rounded-lg px-4 py-2 text-sm focus:ring-1 focus:ring-primary mt-1" /></div>
+              <div>
+                <label className="text-[10px] font-bold uppercase text-gray-400">Titulo</label>
+                <input value={newCourse.title} onChange={e => setNewCourse({...newCourse, title: e.target.value})} className="w-full bg-harven-bg border-none rounded-lg px-4 py-2 text-sm focus:ring-1 focus:ring-primary mt-1" required />
+              </div>
+              {userRole === 'ADMIN' && (
+                <div>
+                  <label className="text-[10px] font-bold uppercase text-gray-400">Atribuir ao Instrutor</label>
+                  <select
+                    value={newCourse.instructor_id}
+                    onChange={e => setNewCourse({...newCourse, instructor_id: e.target.value})}
+                    className="w-full bg-harven-bg border-none rounded-lg px-4 py-2 text-sm focus:ring-1 focus:ring-primary mt-1"
+                  >
+                    <option value="">Selecione um instrutor (opcional)</option>
+                    {instructors.map(i => (
+                      <option key={i.id} value={i.id}>{i.name}</option>
+                    ))}
+                  </select>
+                  {instructors.length === 0 && (
+                    <p className="text-[10px] text-gray-400 mt-1">Nenhum instrutor cadastrado. Crie um em Usuarios.</p>
+                  )}
+                </div>
+              )}
               <div className="flex gap-2 pt-4">
                 <button type="button" onClick={() => setShowCreateModal(false)} className="flex-1 py-2 rounded-lg border border-harven-border text-sm font-bold hover:bg-gray-50">Cancelar</button>
                 <button type="submit" disabled={isCreating} className="flex-1 py-2 rounded-lg bg-primary text-harven-dark text-sm font-bold disabled:opacity-50">{isCreating ? 'Criando...' : 'Criar'}</button>
