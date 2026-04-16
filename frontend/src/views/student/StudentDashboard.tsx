@@ -19,7 +19,7 @@ export default function StudentDashboard() {
       try {
         if (!user) return;
         const [statsData, disciplinesData] = await Promise.all([
-          dashboardApi.getStats(user.id),
+          dashboardApi.getStats(),
           disciplinesApi.list(),
         ]);
         if (ctrl.signal.aborted) return;

@@ -93,6 +93,10 @@ class TeacherAdd(BaseModel):
     teacher_id: str
 
 
+class TeacherBatchAdd(BaseModel):
+    teacher_ids: List[str]
+
+
 class StudentAdd(BaseModel):
     student_id: str
 
@@ -463,6 +467,22 @@ async def update_user(
     return _exclude_password(user)
 
 
+@app.delete("/users/{user_id}", tags=["Users"])
+async def delete_user(
+    user_id: str,
+    current_user: dict = Depends(require_role("ADMIN")),
+    client: Client = Depends(get_supabase),
+):
+    if current_user.get("id") == user_id:
+        raise HTTPException(status_code=403, detail="Nao e possivel excluir o proprio usuario")
+    user_repo = UserRepository(client)
+    if not user_repo.get_by_id(user_id):
+        raise HTTPException(status_code=404, detail="Usuario nao encontrado")
+    if not user_repo.delete(user_id):
+        raise HTTPException(status_code=404, detail="Usuario nao encontrado")
+    return {"message": "Usuario removido"}
+
+
 @app.post("/users/{user_id}/avatar", tags=["Users"])
 async def upload_avatar(
     user_id: str,
@@ -566,6 +586,20 @@ async def update_discipline(
     return discipline
 
 
+@app.delete("/disciplines/{discipline_id}", tags=["Disciplines"])
+async def delete_discipline(
+    discipline_id: str,
+    current_user: dict = Depends(require_role("ADMIN")),
+    client: Client = Depends(get_supabase),
+):
+    disc_repo = DisciplineRepository(client)
+    if not disc_repo.get_by_id(discipline_id):
+        raise HTTPException(status_code=404, detail="Disciplina nao encontrada")
+    if not disc_repo.delete(discipline_id):
+        raise HTTPException(status_code=404, detail="Disciplina nao encontrada")
+    return {"message": "Disciplina removida"}
+
+
 @app.get("/disciplines/{discipline_id}/teachers", tags=["Disciplines"])
 async def list_discipline_teachers(
     discipline_id: str,
@@ -603,6 +637,35 @@ async def add_discipline_teacher(
             raise HTTPException(status_code=409, detail="Professor ja vinculado a esta disciplina")
         raise
     return {"id": link.get("id"), "discipline_id": discipline_id, "teacher_id": body.teacher_id}
+
+
+@app.post("/disciplines/{discipline_id}/teachers/batch", tags=["Disciplines"], status_code=201)
+async def batch_add_discipline_teachers(
+    discipline_id: str,
+    body: TeacherBatchAdd,
+    current_user: dict = Depends(require_role("ADMIN")),
+    client: Client = Depends(get_supabase),
+):
+    disc_repo = DisciplineRepository(client)
+    if not disc_repo.get_by_id(discipline_id):
+        raise HTTPException(status_code=404, detail="Disciplina nao encontrada")
+    created = []
+    duplicates = 0
+    for teacher_id in body.teacher_ids:
+        try:
+            link = disc_repo.add_teacher(discipline_id, teacher_id)
+            if link:
+                created.append(link)
+        except Exception as e:
+            if "duplicate" in str(e).lower() or "unique" in str(e).lower():
+                duplicates += 1
+                continue
+            raise
+    return {
+        "message": f"{len(created)} professores adicionados",
+        "count": len(created),
+        "duplicates_skipped": duplicates,
+    }
 
 
 @app.delete("/disciplines/{discipline_id}/teachers/{teacher_id}", tags=["Disciplines"])

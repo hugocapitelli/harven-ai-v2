@@ -59,7 +59,7 @@ function StarInput({ value, onChange }: { value: number; onChange: (v: number) =
 export default function SessionReview() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  useAuth();
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const [session, setSession] = useState<SessionData | null>(null);
@@ -80,7 +80,7 @@ export default function SessionReview() {
         setLoading(true);
         const [msgs, reviewData] = await Promise.all([
           chatSessionsApi.getMessages(sessionId),
-          sessionReviewsApi.list(sessionId).catch(() => null),
+          sessionReviewsApi.get(sessionId).catch(() => null),
         ]);
         if (controller.signal.aborted) return;
 
@@ -118,12 +118,12 @@ export default function SessionReview() {
     if (!sessionId || rating === 0) { toast.error('Selecione uma avaliação.'); return; }
     setSubmitting(true);
     try {
-      const payload = { session_id: sessionId, rating, feedback, reviewer_id: user?.id };
+      const payload = { rating, feedback };
       if (review) {
-        await sessionReviewsApi.update(review.id, payload as Record<string, unknown>);
+        await sessionReviewsApi.update(sessionId, payload as Record<string, unknown>);
         toast.success('Avaliação atualizada.');
       } else {
-        await sessionReviewsApi.create(payload as Record<string, unknown>);
+        await sessionReviewsApi.create(sessionId, payload as Record<string, unknown>);
         toast.success('Avaliação enviada.');
       }
       navigate(-1);

@@ -1336,6 +1336,109 @@ async def complete_content(
     }
 
 
+@router.post(
+    "/courses/{course_id}/complete",
+    tags=["Gamification"],
+    summary="Marcar curso como completo",
+)
+async def complete_course(
+    course_id: str,
+    user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
+):
+    user_id = user.get("id")
+    # Verify course exists
+    course_res = (
+        client.table("courses").select("id, title").eq("id", course_id).maybe_single().execute()
+        or type("_R", (), {"data": None})()
+    )
+    course = course_res.data
+    if not course:
+        raise HTTPException(status_code=404, detail="Curso nao encontrado")
+
+    # Count total contents (chapters -> contents)
+    chapters_res = client.table("chapters").select("id").eq("course_id", course_id).execute()
+    chapter_ids = [ch["id"] for ch in (chapters_res.data or [])]
+    total_contents = 0
+    if chapter_ids:
+        contents_res = (
+            client.table("contents").select("id", count="exact").in_("chapter_id", chapter_ids).execute()
+        )
+        total_contents = contents_res.count or 0
+
+    # Upsert course_progress to 100%
+    progress_res = (
+        client.table("course_progress")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("course_id", course_id)
+        .maybe_single()
+        .execute()
+    )
+    progress = progress_res.data
+    already_completed = bool(progress and (progress.get("progress_percent") or 0) >= 100)
+
+    if progress:
+        client.table("course_progress").update(
+            {
+                "progress_percent": 100.0,
+                "completed_contents": total_contents,
+                "total_contents": total_contents,
+            }
+        ).eq("id", progress["id"]).execute()
+    else:
+        client.table("course_progress").insert(
+            {
+                "id": str(uuid4()),
+                "user_id": user_id,
+                "course_id": course_id,
+                "progress_percent": 100.0,
+                "completed_contents": total_contents,
+                "total_contents": total_contents,
+            }
+        ).execute()
+
+    # Increment user_stats.courses_completed (only on first completion)
+    if not already_completed:
+        stats_res = (
+            client.table("user_stats").select("*").eq("user_id", user_id).maybe_single().execute()
+            or type("_R", (), {"data": None})()
+        )
+        if stats_res.data:
+            current = stats_res.data.get("courses_completed", 0) or 0
+            client.table("user_stats").update(
+                {"courses_completed": current + 1}
+            ).eq("user_id", user_id).execute()
+        else:
+            client.table("user_stats").insert(
+                {
+                    "id": str(uuid4()),
+                    "user_id": user_id,
+                    "courses_completed": 1,
+                }
+            ).execute()
+
+        # Log activity
+        client.table("user_activities").insert(
+            {
+                "id": str(uuid4()),
+                "user_id": user_id,
+                "activity_type": "course_completed",
+                "description": f"Curso {course.get('title', '')} completo",
+                "points": 100,
+            }
+        ).execute()
+
+    return {
+        "course_id": course_id,
+        "user_id": user_id,
+        "progress_percent": 100.0,
+        "completed_contents": total_contents,
+        "total_contents": total_contents,
+        "already_completed": already_completed,
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # SESSION REVIEW (professor <-> aluno)
 # ═══════════════════════════════════════════════════════════════════════════

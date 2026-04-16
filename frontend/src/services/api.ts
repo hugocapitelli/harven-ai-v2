@@ -75,40 +75,47 @@ export const authApi = {
 // Dashboard
 // ---------------------------------------------------------------------------
 export const dashboardApi = {
-  getStats: (userId: string) => api.get(`/dashboard/stats/${userId}`).then(d),
+  getStats:     ()                  => api.get('/dashboard/stats').then(d),
+  getClassStats:(classId: string)   => api.get(`/classes/${classId}/stats`).then(d),
 };
 
 // ---------------------------------------------------------------------------
-// Disciplines
+// Disciplines (a.k.a. "classes" in backend URL prefix for courses/stats)
 // ---------------------------------------------------------------------------
 export const disciplinesApi = {
   list:             ()                                          => api.get('/disciplines').then(d),
   get:              (id: string)                                => api.get(`/disciplines/${id}`).then(d),
   create:           (data: Record<string, unknown>)             => api.post('/disciplines', data).then(d),
   update:           (id: string, data: Record<string, unknown>) => api.put(`/disciplines/${id}`, data).then(d),
-  delete:           (id: string)                                => api.delete(`/disciplines/${id}`).then(d),
-  getStats:         (id: string)                                => api.get(`/disciplines/${id}/stats`).then(d),
-  getStudents:      (id: string)                                => api.get(`/disciplines/${id}/students`).then(d),
+  getStats:         (id: string)                                => api.get(`/classes/${id}/stats`).then(d),
   getStudentsStats: (id: string)                                => api.get(`/disciplines/${id}/students/stats`).then(d),
+  uploadImage:      (id: string, file: File)                    => upload(`/disciplines/${id}/image`, file, 'file'),
+  // Teachers
   getTeachers:      (id: string)                                => api.get(`/disciplines/${id}/teachers`).then(d),
-  addTeacher:       (id: string, userId: string)                => api.post(`/disciplines/${id}/teachers`, { user_id: userId }).then(d),
-  removeTeacher:    (id: string, userId: string)                => api.delete(`/disciplines/${id}/teachers/${userId}`).then(d),
-  addStudent:       (id: string, userId: string)                => api.post(`/disciplines/${id}/students`, { user_id: userId }).then(d),
-  removeStudent:    (id: string, userId: string)                => api.delete(`/disciplines/${id}/students/${userId}`).then(d),
-  addStudentsBatch: (id: string, students: Record<string, unknown>[]) =>
-    api.post(`/disciplines/${id}/students/batch`, { students }).then(d),
+  addTeacher:       (id: string, teacherId: string)             => api.post(`/disciplines/${id}/teachers`, { teacher_id: teacherId }).then(d),
+  removeTeacher:    (id: string, teacherId: string)             => api.delete(`/disciplines/${id}/teachers/${teacherId}`).then(d),
+  // Students
+  getStudents:      (id: string)                                => api.get(`/disciplines/${id}/students`).then(d),
+  addStudent:       (id: string, studentId: string)             => api.post(`/disciplines/${id}/students`, { student_id: studentId }).then(d),
+  removeStudent:    (id: string, studentId: string)             => api.delete(`/disciplines/${id}/students/${studentId}`).then(d),
+  addStudentsBatch: (id: string, studentIds: string[])          => api.post(`/disciplines/${id}/students/batch`, { student_ids: studentIds }).then(d),
+  // Sessions (review flow)
+  getSessions:      (id: string, status?: string)               => api.get(`/disciplines/${id}/sessions`, { params: status ? { status } : undefined }).then(d),
 };
 
 // ---------------------------------------------------------------------------
 // Courses
 // ---------------------------------------------------------------------------
 export const coursesApi = {
-  list:        ()                                          => api.get('/courses').then(d),
+  list:        (params?: Record<string, unknown>)         => api.get('/courses', { params }).then(d),
   get:         (id: string)                                => api.get(`/courses/${id}`).then(d),
   create:      (data: Record<string, unknown>)             => api.post('/courses', data).then(d),
   update:      (id: string, data: Record<string, unknown>) => api.put(`/courses/${id}`, data).then(d),
   delete:      (id: string)                                => api.delete(`/courses/${id}`).then(d),
-  listByClass: (classId: string)                           => api.get(`/disciplines/${classId}/courses`).then(d),
+  export:      (id: string)                                => api.get(`/courses/${id}/export`).then(d),
+  uploadImage: (id: string, file: File)                    => upload(`/courses/${id}/image`, file, 'file'),
+  listByClass: (classId: string)                           => api.get(`/classes/${classId}/courses`).then(d),
+  createInClass: (classId: string, data: Record<string, unknown>) => api.post(`/classes/${classId}/courses`, data).then(d),
 };
 
 // ---------------------------------------------------------------------------
@@ -127,11 +134,11 @@ export const chaptersApi = {
 export const contentsApi = {
   list:       (chapterId: string)                           => api.get(`/chapters/${chapterId}/contents`).then(d),
   get:        (id: string)                                  => api.get(`/contents/${id}`).then(d),
-  create:     (data: Record<string, unknown>)               => api.post('/contents', data).then(d),
+  create:     (chapterId: string, data: Record<string, unknown>) => api.post(`/chapters/${chapterId}/contents`, data).then(d),
   update:     (id: string, data: Record<string, unknown>)   => api.put(`/contents/${id}`, data).then(d),
   delete:     (id: string)                                  => api.delete(`/contents/${id}`).then(d),
   uploadFile: (chapterId: string, file: File, onProgress?: (pct: number) => void) =>
-    upload(`/chapters/${chapterId}/contents/upload`, file, 'file', undefined, onProgress),
+    upload(`/chapters/${chapterId}/upload`, file, 'file', undefined, onProgress),
 };
 
 // ---------------------------------------------------------------------------
@@ -139,14 +146,14 @@ export const contentsApi = {
 // ---------------------------------------------------------------------------
 export const questionsApi = {
   list:        (contentId: string)                          => api.get(`/contents/${contentId}/questions`).then(d),
-  create:      (data: Record<string, unknown>)              => api.post('/questions', data).then(d),
+  create:      (contentId: string, items: Record<string, unknown>[]) => api.post(`/contents/${contentId}/questions`, { items }).then(d),
   update:      (id: string, data: Record<string, unknown>)  => api.put(`/questions/${id}`, data).then(d),
   delete:      (id: string)                                 => api.delete(`/questions/${id}`).then(d),
-  updateBatch: (questions: Record<string, unknown>[])       => api.put('/questions/batch', { questions }).then(d),
+  updateBatch: (contentId: string, items: Record<string, unknown>[]) => api.put(`/contents/${contentId}/questions/batch`, { items }).then(d),
 };
 
 // ---------------------------------------------------------------------------
-// Upload (generic)
+// Upload (avatars / discipline images handled by specific endpoints above)
 // ---------------------------------------------------------------------------
 export const uploadApi = {
   upload: (file: File, type: string, onProgress?: (pct: number) => void) =>
@@ -154,25 +161,28 @@ export const uploadApi = {
 };
 
 // ---------------------------------------------------------------------------
-// AI
+// AI — 6 agents (Creator, Socrates, Analyst, Editor, Tester, Organizer)
 // ---------------------------------------------------------------------------
 export const aiApi = {
-  getStatus:         ()                                    => api.get('/ai/status').then(d),
-  generateQuestions: (contentId: string)                   => api.post('/ai/generate-questions', { content_id: contentId }).then(d),
-  socraticDialogue:  (sessionId: string, message: string) => api.post('/ai/socratic', { session_id: sessionId, message }).then(d),
-  detectAI:          (text: string)                        => api.post('/ai/detect', { text }).then(d),
-  generateSummary:   (contentId: string, style: string)   => api.post('/ai/summary', { content_id: contentId, style }).then(d),
-  transcribe:        (contentId: string)                   => api.post('/ai/transcribe', { content_id: contentId }).then(d),
+  getStatus:         ()                                                   => api.get('/api/ai/status').then(d),
+  generateQuestions: (data: Record<string, unknown>)                      => api.post('/api/ai/creator/generate', data).then(d),
+  socraticDialogue:  (data: Record<string, unknown>)                      => api.post('/api/ai/socrates/dialogue', data).then(d),
+  detectAI:          (data: Record<string, unknown>)                      => api.post('/api/ai/analyst/detect', data).then(d),
+  editResponse:      (data: Record<string, unknown>)                      => api.post('/api/ai/editor/edit', data).then(d),
+  validateResponse:  (data: Record<string, unknown>)                      => api.post('/api/ai/tester/validate', data).then(d),
+  organizeSession:   (data: Record<string, unknown>)                      => api.post('/api/ai/organizer/session', data).then(d),
+  prepareExport:     (data: Record<string, unknown>)                      => api.post('/api/ai/organizer/prepare-export', data).then(d),
+  estimateCost:      (prompt: number, completion: number, model?: string) => api.get('/api/ai/estimate-cost', { params: { prompt_tokens: prompt, completion_tokens: completion, model } }).then(d),
+  transcribe:        (file: File)                                         => upload('/api/ai/transcribe', file, 'file'),
 };
 
 // ---------------------------------------------------------------------------
 // TTS
 // ---------------------------------------------------------------------------
 export const ttsApi = {
-  generateSummary: (contentId: string, style: string) =>
-    api.post('/tts/summary', { content_id: contentId, style }).then(d),
-  transcribe: (contentId: string) =>
-    api.post('/tts/transcribe', { content_id: contentId }).then(d),
+  getStatus: ()                                                => api.get('/api/ai/tts/status').then(d),
+  listVoices:()                                                => api.get('/api/ai/tts/voices').then(d),
+  generate:  (text: string, voice = 'alloy')                   => api.post('/api/ai/tts/generate', null, { params: { text, voice } }).then(d),
 };
 
 // ---------------------------------------------------------------------------
@@ -182,9 +192,9 @@ export const usersApi = {
   list:         (params?: Record<string, unknown>) => api.get('/users', { params }).then(d),
   get:          (id: string)                       => api.get(`/users/${id}`).then(d),
   create:       (data: Record<string, unknown>)    => api.post('/users', data).then(d),
-  createBatch:  (users: Record<string, unknown>[]) => api.post('/users/batch', { users }).then(d),
+  createBatch:  (users: Record<string, unknown>[]) => api.post('/users/batch', users).then(d),
   update:       (id: string, data: Record<string, unknown>) => api.put(`/users/${id}`, data).then(d),
-  uploadAvatar: (id: string, file: File) => upload(`/users/${id}/avatar`, file, 'avatar'),
+  uploadAvatar: (id: string, file: File) => upload(`/users/${id}/avatar`, file, 'file'),
 };
 
 // ---------------------------------------------------------------------------
@@ -195,10 +205,10 @@ export const adminApi = {
   getSettings:     ()                                         => api.get('/admin/settings').then(d),
   updateSettings:  (data: Record<string, unknown>)            => api.post('/admin/settings', data).then(d),
   getLogs:         (params?: Record<string, unknown>)         => api.get('/admin/logs', { params }).then(d),
-  searchLogs:      (query: string, type?: string)             => api.get('/admin/logs/search', { params: { query, type } }).then(d),
-  uploadLogo:      (file: File)                               => upload('/admin/settings/upload-logo', file, 'logo'),
-  uploadLoginLogo: (file: File)                               => upload('/admin/settings/upload-login-logo', file, 'logo'),
-  uploadLoginBg:   (file: File)                               => upload('/admin/settings/upload-login-bg', file, 'bg'),
+  searchLogs:      (query: string, type?: string)             => api.get('/admin/logs/search', { params: { q: query, log_type: type } }).then(d),
+  uploadLogo:      (file: File)                               => upload('/admin/settings/upload-logo', file, 'file'),
+  uploadLoginLogo: (file: File)                               => upload('/admin/settings/upload-login-logo', file, 'file'),
+  uploadLoginBg:   (file: File)                               => upload('/admin/settings/upload-login-bg', file, 'file'),
   getPerformance:  ()                                         => api.get('/admin/performance').then(d),
   getStorageStats: ()                                         => api.get('/admin/storage').then(d),
   listBackups:     ()                                         => api.get('/admin/backups').then(d),
@@ -207,17 +217,19 @@ export const adminApi = {
   deleteBackup:    (id: string)                               => api.delete(`/admin/backups/${id}`).then(d),
   forceLogoutAll:  ()                                         => api.post('/admin/force-logout').then(d),
   clearCache:      ()                                         => api.post('/admin/clear-cache').then(d),
-  exportLogs:      (format: string)                           => api.get('/admin/logs/export', { params: { format }, responseType: 'blob' }).then(d),
-  createAction:    (data: Record<string, unknown>)            => api.post('/admin/actions', data).then(d),
+  exportLogs:      (fmt: string)                              => api.get('/admin/logs/export', { params: { fmt }, responseType: 'blob' }).then(d),
 };
 
 // ---------------------------------------------------------------------------
 // Notifications
 // ---------------------------------------------------------------------------
 export const notificationsApi = {
-  list:        (userId: string) => api.get(`/users/${userId}/notifications`).then(d),
-  markRead:    (id: string)     => api.put(`/notifications/${id}/read`).then(d),
-  markAllRead: (userId: string) => api.put(`/users/${userId}/notifications/read-all`).then(d),
+  list:        (userId: string)                    => api.get(`/users/${userId}/notifications`).then(d),
+  count:       (userId: string)                    => api.get(`/users/${userId}/notifications/count`).then(d),
+  create:      (data: Record<string, unknown>)     => api.post('/notifications', data).then(d),
+  markRead:    (id: string)                        => api.put(`/notifications/${id}/read`).then(d),
+  markAllRead: (userId: string)                    => api.put(`/notifications/${userId}/read-all`).then(d),
+  delete:      (id: string)                        => api.delete(`/notifications/${id}`).then(d),
 };
 
 // ---------------------------------------------------------------------------
@@ -228,33 +240,61 @@ export const searchApi = {
 };
 
 // ---------------------------------------------------------------------------
-// User Stats
+// User Stats / Gamification
 // ---------------------------------------------------------------------------
 export const userStatsApi = {
-  getStats:        (userId: string) => api.get(`/users/${userId}/stats`).then(d),
-  getActivities:   (userId: string) => api.get(`/users/${userId}/activities`).then(d),
-  getAchievements: (userId: string) => api.get(`/users/${userId}/achievements`).then(d),
-  getCertificates: (userId: string) => api.get(`/users/${userId}/certificates`).then(d),
+  getStats:        (userId: string)                                         => api.get(`/users/${userId}/stats`).then(d),
+  getActivities:   (userId: string, params?: Record<string, unknown>)       => api.get(`/users/${userId}/activities`, { params }).then(d),
+  createActivity:  (userId: string, data: Record<string, unknown>)          => api.post(`/users/${userId}/activities`, data).then(d),
+  getAchievements: (userId: string)                                         => api.get(`/users/${userId}/achievements`).then(d),
+  unlockAchievement: (userId: string, achievementId: string)                => api.post(`/users/${userId}/achievements/${achievementId}/unlock`).then(d),
+  getCertificates: (userId: string)                                         => api.get(`/users/${userId}/certificates`).then(d),
+  issueCertificate:(userId: string, courseId: string)                       => api.post(`/users/${userId}/certificates`, { course_id: courseId }).then(d),
+  getCourseProgress:(userId: string, courseId: string)                      => api.get(`/users/${userId}/courses/${courseId}/progress`).then(d),
+  completeContent: (userId: string, courseId: string, contentId: string)    => api.post(`/users/${userId}/courses/${courseId}/complete-content/${contentId}`).then(d),
 };
 
 // ---------------------------------------------------------------------------
 // Chat Sessions
 // ---------------------------------------------------------------------------
 export const chatSessionsApi = {
-  createOrGet: (params: Record<string, unknown>)               => api.post('/chat-sessions', params).then(d),
-  getMessages: (sessionId: string)                             => api.get(`/chat-sessions/${sessionId}/messages`).then(d),
-  addMessage:  (sessionId: string, data: Record<string, unknown>) => api.post(`/chat-sessions/${sessionId}/messages`, data).then(d),
-  complete:    (sessionId: string)                             => api.post(`/chat-sessions/${sessionId}/complete`).then(d),
+  createOrGet:  (data: Record<string, unknown>)                   => api.post('/chat-sessions', data).then(d),
+  get:          (sessionId: string)                               => api.get(`/chat-sessions/${sessionId}`).then(d),
+  byContent:    (contentId: string)                               => api.get(`/chat-sessions/by-content/${contentId}`).then(d),
+  byUser:       (userId: string)                                  => api.get(`/users/${userId}/chat-sessions`).then(d),
+  getMessages:  (sessionId: string)                               => api.get(`/chat-sessions/${sessionId}/messages`).then(d),
+  addMessage:   (sessionId: string, data: Record<string, unknown>) => api.post(`/chat-sessions/${sessionId}/messages`, data).then(d),
+  complete:     (sessionId: string)                               => api.put(`/chat-sessions/${sessionId}/complete`).then(d),
+  exportMoodle: (sessionId: string)                               => api.post(`/chat-sessions/${sessionId}/export-moodle`).then(d),
 };
 
 // ---------------------------------------------------------------------------
-// Session Reviews
+// Session Reviews (professor ↔ aluno feedback on chat sessions)
 // ---------------------------------------------------------------------------
 export const sessionReviewsApi = {
-  list:             (sessionId: string)                          => api.get(`/chat-sessions/${sessionId}/reviews`).then(d),
-  create:           (data: Record<string, unknown>)              => api.post('/session-reviews', data).then(d),
-  update:           (id: string, data: Record<string, unknown>)  => api.put(`/session-reviews/${id}`, data).then(d),
-  listByDiscipline: (disciplineId: string)                       => api.get(`/disciplines/${disciplineId}/session-reviews`).then(d),
+  get:    (sessionId: string)                                          => api.get(`/chat-sessions/${sessionId}/review`).then(d),
+  create: (sessionId: string, data: Record<string, unknown>)           => api.post(`/chat-sessions/${sessionId}/review`, data).then(d),
+  update: (sessionId: string, data: Record<string, unknown>)           => api.put(`/chat-sessions/${sessionId}/review`, data).then(d),
+  reply:  (sessionId: string, reply: string)                           => api.post(`/chat-sessions/${sessionId}/review/reply`, { reply }).then(d),
+};
+
+// ---------------------------------------------------------------------------
+// Integrations
+// ---------------------------------------------------------------------------
+export const integrationsApi = {
+  getStatus:         ()                                              => api.get('/integrations/status').then(d),
+  testConnection:    (system: string)                                => api.post('/integrations/test-connection', null, { params: { system } }).then(d),
+  getLogs:           (params?: Record<string, unknown>)              => api.get('/integrations/logs', { params }).then(d),
+  getMappings:       (entityType?: string)                           => api.get('/integrations/mappings', { params: entityType ? { entity_type: entityType } : undefined }).then(d),
+  // JACAD
+  jacadSync:         ()                                              => api.post('/integrations/jacad/sync').then(d),
+  jacadImportStudents:()                                             => api.post('/integrations/jacad/import-students').then(d),
+  jacadImportDisciplines:()                                          => api.post('/integrations/jacad/import-disciplines').then(d),
+  jacadGetStudent:   (ra: string)                                    => api.get(`/integrations/jacad/student/${ra}`).then(d),
+  // Moodle
+  moodleSync:        ()                                              => api.post('/integrations/moodle/sync').then(d),
+  moodleExportSessions:(filters?: Record<string, unknown>)           => api.post('/integrations/moodle/export-sessions', filters ?? {}).then(d),
+  moodleGetRatings:  (sessionId?: string)                            => api.get('/integrations/moodle/ratings', { params: sessionId ? { session_id: sessionId } : undefined }).then(d),
 };
 
 // ---------------------------------------------------------------------------

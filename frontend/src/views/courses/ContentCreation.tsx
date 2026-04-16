@@ -134,7 +134,7 @@ export default function ContentCreation() {
       await new Promise((r) => setTimeout(r, 1500));
       setAiStage('generating');
 
-      await aiApi.generateQuestions(uploadedContentId);
+      await aiApi.generateQuestions({ content_id: uploadedContentId, chapter_content: body ?? '', chapter_title: title, max_questions: 3 });
       setAiStage('done');
 
       setTimeout(() => {
@@ -172,8 +172,7 @@ export default function ContentCreation() {
     try {
       let contentId = uploadedContentId;
       if (!contentId) {
-        const result = await contentsApi.create({
-          chapter_id: chapterId,
+        const result = await contentsApi.create(chapterId, {
           title,
           body,
           content_type: contentType,
@@ -184,7 +183,7 @@ export default function ContentCreation() {
       }
 
       if (contentId && questions.length > 0) {
-        await aiApi.generateQuestions(contentId);
+        await aiApi.generateQuestions({ content_id: contentId, chapter_content: body ?? '', chapter_title: title, max_questions: questions.length });
       }
 
       navigate(
