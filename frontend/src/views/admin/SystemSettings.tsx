@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import { useSearchParams } from 'react-router-dom';
 import { adminApi } from '../../services/api';
+import { unwrapList } from '../../lib/utils';
 import { Button } from '../../components/ui/Button';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Input } from '../../components/ui/Input';
@@ -97,12 +98,12 @@ export default function SystemSettings() {
   }, [loadSettings]);
 
   useEffect(() => {
-    if (activeTab === 'backups') adminApi.listBackups().then((d) => setBackups(Array.isArray(d) ? d : [])).catch(() => {});
+    if (activeTab === 'backups') adminApi.listBackups().then((d) => setBackups(unwrapList<Backup>(d))).catch(() => {});
     if (activeTab === 'performance') {
       adminApi.getPerformance().then(setPerf).catch(() => {});
-      adminApi.getStorageStats().then((d) => setStorageStats(d ?? {})).catch(() => {});
+      adminApi.getStorageStats().then((d) => setStorageStats((d ?? {}) as Record<string, unknown>)).catch(() => {});
     }
-    if (activeTab === 'logs') adminApi.getLogs().then((d) => setLogs(Array.isArray(d) ? d : [])).catch(() => {});
+    if (activeTab === 'logs') adminApi.getLogs().then((d) => setLogs(unwrapList<LogEntry>(d))).catch(() => {});
   }, [activeTab]);
 
   const handleSave = async () => {
@@ -115,14 +116,22 @@ export default function SystemSettings() {
     finally { setSaving(false); }
   };
 
-  const handleLogoUpload = async (type: 'logo' | 'login-logo', file: File) => {
+  const handleLogoUpload = async (type: 'logo' | 'login-logo' | 'login-bg', file: File) => {
     try {
-      const fn = type === 'logo' ? adminApi.uploadLogo : adminApi.uploadLoginLogo;
-      const result = await fn(file);
-      const key = type === 'logo' ? 'logo_url' : 'login_logo_url';
-      setSettings((s) => ({ ...s, [key]: result.url ?? result[key] }));
-      toast.success('Logo atualizado.');
-    } catch { toast.error('Erro no upload.'); }
+      const fn =
+        type === 'logo' ? adminApi.uploadLogo :
+        type === 'login-logo' ? adminApi.uploadLoginLogo :
+        adminApi.uploadLoginBg;
+      const result = await fn(file) as Record<string, unknown>;
+      const key =
+        type === 'logo' ? 'logo_url' :
+        type === 'login-logo' ? 'login_logo_url' :
+        'login_bg_url';
+      setSettings((s) => ({ ...s, [key]: (result.url ?? result[key]) as string }));
+      toast.success('Imagem atualizada.');
+    } catch (err: any) {
+      toast.error(err?.response?.data?.detail || 'Erro no upload.');
+    }
   };
 
   const handleSearchLogs = async () => {
@@ -130,7 +139,7 @@ export default function SystemSettings() {
       const data = logSearch
         ? await adminApi.searchLogs(logSearch, logType !== 'all' ? logType : undefined)
         : await adminApi.getLogs({ log_type: logType !== 'all' ? logType : undefined } as Record<string, string>);
-      setLogs(Array.isArray(data) ? data : []);
+      setLogs(unwrapList<LogEntry>(data));
     } catch { toast.error('Erro na busca.'); }
   };
 
@@ -192,9 +201,15 @@ export default function SystemSettings() {
           <Card>
             <CardHeader><h2 className="text-sm font-bold text-foreground">Logos</h2></CardHeader>
             <CardContent className="flex flex-col gap-4">
-              {(['logo', 'login-logo'] as const).map((type) => {
-                const key = type === 'logo' ? 'logo_url' : 'login_logo_url';
-                const label = type === 'logo' ? 'Logo Principal' : 'Logo da Tela de Login';
+              {(['logo', 'login-logo', 'login-bg'] as const).map((type) => {
+                const key =
+                  type === 'logo' ? 'logo_url' :
+                  type === 'login-logo' ? 'login_logo_url' :
+                  'login_bg_url';
+                const label =
+                  type === 'logo' ? 'Logo Principal' :
+                  type === 'login-logo' ? 'Logo da Tela de Login' :
+                  'Imagem de Fundo (Login)';
                 return (
                   <div key={type} className="flex items-center gap-4">
                     <div className="h-16 w-16 rounded-lg bg-muted flex items-center justify-center overflow-hidden shrink-0">
@@ -270,7 +285,7 @@ export default function SystemSettings() {
           <CardHeader className="flex items-center justify-between">
             <h2 className="text-sm font-bold text-foreground">Backups</h2>
             <Button size="sm" onClick={async () => {
-              try { await adminApi.createBackup(); toast.success('Backup criado.'); const d = await adminApi.listBackups(); setBackups(Array.isArray(d) ? d : []); } catch { toast.error('Erro.'); }
+              try { await adminApi.createBackup(); toast.success('Backup criado.'); const d = await adminApi.listBackups(); setBackups(unwrapList<Backup>(d)); } catch { toast.error('Erro.'); }
             }}>
               <span className="material-symbols-outlined text-[16px] mr-1">add</span> Criar Backup
             </Button>
