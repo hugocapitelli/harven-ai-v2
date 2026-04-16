@@ -134,12 +134,7 @@ export default function CourseList({ userRole }: CourseListProps) {
           );
         })}
 
-        {(userRole === 'INSTRUCTOR' || userRole === 'ADMIN') && (
-          <div onClick={() => setShowCreateModal(true)} className="flex flex-col items-center justify-center p-6 gap-4 text-center border-2 border-dashed border-gray-300 rounded-xl bg-muted/20 min-h-[300px] cursor-pointer hover:border-primary hover:bg-white transition-all">
-            <div className="size-12 rounded-full bg-muted flex items-center justify-center"><span className="material-symbols-outlined text-muted-foreground">add</span></div>
-            <p className="text-sm font-bold">Criar Novo Curso</p>
-          </div>
-        )}
+        {/* Course creation is admin-only and happens in /admin/classes (ClassManagement) */}
       </div>
 
       {showCreateModal && (

@@ -36,7 +36,9 @@ export default function ClassManagement() {
   const [saving, setSaving] = useState(false);
 
   // Edit form state
-  const [editForm, setEditForm] = useState({ title: '', code: '', department: '' });
+  const [editForm, setEditForm] = useState({ name: '', code: '', semester: '', description: '' });
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [createForm, setCreateForm] = useState({ name: '', code: '', semester: '', description: '' });
   const [courses, setCourses] = useState<Course[]>([]);
   const [teachers, setTeachers] = useState<User[]>([]);
   const [students, setStudents] = useState<User[]>([]);
@@ -65,7 +67,7 @@ export default function ClassManagement() {
   }, [loadDisciplines]);
 
   const openEdit = async (disc: Discipline) => {
-    setEditForm({ title: disc.title, code: disc.code ?? '', department: disc.department ?? '' });
+    setEditForm({ name: disc.name ?? disc.title ?? '', code: disc.code ?? '', semester: disc.semester ?? '', description: disc.description ?? '' });
     setEditState({ open: true, discipline: disc, tab: 'info' });
     try {
       const [c, t, s, u] = await Promise.all([
@@ -93,16 +95,31 @@ export default function ClassManagement() {
     finally { setSaving(false); }
   };
 
-  const handleCreate = async () => {
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!createForm.name.trim() || !createForm.code.trim()) {
+      toast.error('Nome e código são obrigatórios.');
+      return;
+    }
     setSaving(true);
     try {
-      const created = await disciplinesApi.create({ title: 'Nova Turma', code: '', department: '' });
-      toast.success('Turma criada.');
+      const created = await disciplinesApi.create({
+        name: createForm.name.trim(),
+        code: createForm.code.trim(),
+        semester: createForm.semester.trim() || undefined,
+        description: createForm.description.trim() || undefined,
+      });
+      toast.success('Disciplina criada.');
+      setShowCreateModal(false);
+      setCreateForm({ name: '', code: '', semester: '', description: '' });
       const disc = created as Discipline;
       openEdit(disc);
       const controller = new AbortController();
       loadDisciplines(controller);
-    } catch { toast.error('Erro ao criar turma.'); }
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? 'Erro ao criar disciplina.';
+      toast.error(String(msg));
+    }
     finally { setSaving(false); }
   };
 
@@ -172,7 +189,7 @@ export default function ClassManagement() {
   };
 
   const filtered = disciplines.filter(
-    (d) => d.title.toLowerCase().includes(search.toLowerCase()) || (d.code ?? '').toLowerCase().includes(search.toLowerCase()),
+    (d) => (d.name ?? d.title ?? '').toLowerCase().includes(search.toLowerCase()) || (d.code ?? '').toLowerCase().includes(search.toLowerCase()),
   );
 
   const availableTeachers = allUsers.filter(
@@ -191,8 +208,8 @@ export default function ClassManagement() {
           <h1 className="text-2xl font-display font-bold text-foreground">Gestão de Turmas</h1>
           <p className="text-sm text-muted-foreground mt-1">{loading ? '...' : `${filtered.length} turma(s)`}</p>
         </div>
-        <Button onClick={handleCreate} disabled={saving}>
-          <span className="material-symbols-outlined text-[18px] mr-2">add</span> Nova Turma
+        <Button onClick={() => setShowCreateModal(true)} disabled={saving}>
+          <span className="material-symbols-outlined text-[18px] mr-2">add</span> Nova Disciplina
         </Button>
       </div>
 
@@ -227,7 +244,7 @@ export default function ClassManagement() {
                     <span className="material-symbols-outlined text-primary text-[20px]">{d.icon ?? 'school'}</span>
                   </div>
                   <div className="flex-1 min-w-0">
-                    <h3 className="font-display font-bold text-foreground truncate">{d.title}</h3>
+                    <h3 className="font-display font-bold text-foreground truncate">{d.name ?? d.title}</h3>
                     <p className="text-xs text-muted-foreground">{d.code ?? '—'}</p>
                   </div>
                 </div>
@@ -247,7 +264,7 @@ export default function ClassManagement() {
                 <span className="material-symbols-outlined text-primary">{d.icon ?? 'school'}</span>
               </div>
               <div className="flex-1 min-w-0">
-                <h3 className="font-display font-bold text-foreground truncate">{d.title}</h3>
+                <h3 className="font-display font-bold text-foreground truncate">{d.name ?? d.title}</h3>
                 <p className="text-xs text-muted-foreground">{d.code ?? '—'} · {d.department ?? '—'}</p>
               </div>
               <span className="text-xs text-muted-foreground">{d.courses_count ?? 0} cursos · {d.students ?? 0} alunos</span>
@@ -263,7 +280,7 @@ export default function ClassManagement() {
           <div className="fixed inset-0 bg-black/50" onClick={() => setEditState({ open: false, discipline: null, tab: 'info' })} />
           <div className="relative bg-card rounded-xl shadow-xl w-full max-w-3xl mx-4 max-h-[85vh] flex flex-col" role="dialog" aria-modal="true">
             <div className="p-6 border-b border-border flex items-center justify-between shrink-0">
-              <h3 className="text-lg font-display font-bold text-foreground">{editState.discipline.title}</h3>
+              <h3 className="text-lg font-display font-bold text-foreground">{editState.discipline.name ?? editState.discipline.title}</h3>
               <Button variant="ghost" size="icon" onClick={() => setEditState({ open: false, discipline: null, tab: 'info' })}>
                 <span className="material-symbols-outlined">close</span>
               </Button>
@@ -277,9 +294,10 @@ export default function ClassManagement() {
               {/* Tab: Info */}
               {editState.tab === 'info' && (
                 <div className="flex flex-col gap-4 max-w-md">
-                  <Input label="Nome" value={editForm.title} onChange={(e) => setEditForm((f) => ({ ...f, title: e.target.value }))} />
+                  <Input label="Nome" value={editForm.name} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} />
                   <Input label="Código" value={editForm.code} onChange={(e) => setEditForm((f) => ({ ...f, code: e.target.value }))} />
-                  <Input label="Departamento" value={editForm.department} onChange={(e) => setEditForm((f) => ({ ...f, department: e.target.value }))} />
+                  <Input label="Semestre" placeholder="2026.1" value={editForm.semester} onChange={(e) => setEditForm((f) => ({ ...f, semester: e.target.value }))} />
+                  <Input label="Descrição" value={editForm.description} onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))} />
                   <Button onClick={handleSaveInfo} disabled={saving}>{saving ? 'Salvando...' : 'Salvar'}</Button>
                 </div>
               )}
@@ -291,7 +309,9 @@ export default function ClassManagement() {
                     <p className="text-sm font-bold text-foreground">{courses.length} curso(s)</p>
                     <Button size="sm" onClick={async () => {
                       try {
-                        await coursesApi.create({ title: 'Novo Curso', discipline_id: editState.discipline!.id } as Record<string, unknown>);
+                        const title = window.prompt('Título do curso:', '');
+                        if (!title || !title.trim()) return;
+                        await coursesApi.create({ title: title.trim(), discipline_id: editState.discipline!.id, status: 'draft' } as Record<string, unknown>);
                         const c = await coursesApi.listByClass(editState.discipline!.id);
                         setCourses(Array.isArray(c) ? c : []);
                         toast.success('Curso criado.');
@@ -406,6 +426,50 @@ export default function ClassManagement() {
                 Confirmar
               </Button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create Discipline Modal */}
+      {showCreateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="fixed inset-0 bg-black/50" onClick={() => setShowCreateModal(false)} />
+          <div className="relative bg-card rounded-xl shadow-xl p-6 w-full max-w-md mx-4" role="dialog" aria-modal="true">
+            <h3 className="text-lg font-display font-bold text-foreground mb-4">Nova Disciplina</h3>
+            <form onSubmit={handleCreate} className="flex flex-col gap-4">
+              <Input
+                label="Nome *"
+                placeholder="Ex: Gestão de Agronegócios"
+                value={createForm.name}
+                onChange={(e) => setCreateForm((f) => ({ ...f, name: e.target.value }))}
+                required
+                autoFocus
+              />
+              <Input
+                label="Código *"
+                placeholder="Ex: GA101"
+                value={createForm.code}
+                onChange={(e) => setCreateForm((f) => ({ ...f, code: e.target.value }))}
+                required
+              />
+              <Input
+                label="Semestre"
+                placeholder="Ex: 2026.1"
+                value={createForm.semester}
+                onChange={(e) => setCreateForm((f) => ({ ...f, semester: e.target.value }))}
+              />
+              <Input
+                label="Descrição"
+                placeholder="Breve descrição"
+                value={createForm.description}
+                onChange={(e) => setCreateForm((f) => ({ ...f, description: e.target.value }))}
+              />
+              <p className="text-xs text-muted-foreground">Após criar, você poderá atribuir professores e alunos na tela de edição.</p>
+              <div className="flex justify-end gap-3 pt-2">
+                <Button type="button" variant="outline" onClick={() => setShowCreateModal(false)}>Cancelar</Button>
+                <Button type="submit" disabled={saving}>{saving ? 'Criando...' : 'Criar Disciplina'}</Button>
+              </div>
+            </form>
           </div>
         </div>
       )}
