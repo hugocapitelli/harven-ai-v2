@@ -375,7 +375,7 @@ async def get_logs(
     q = client.table("system_logs").select("*", count="exact")
     if log_type:
         q = q.eq("log_type", log_type)
-    total_res = q.order_by("created_at", desc=True).range((page - 1) * per_page, page * per_page - 1).execute()
+    total_res = q.order("created_at", desc=True).range((page - 1) * per_page, page * per_page - 1).execute()
     total = total_res.count or 0
     rows = total_res.data or []
 
@@ -418,7 +418,7 @@ async def search_logs(
     if status_filter:
         query = query.eq("status", status_filter)
 
-    total_res = query.order_by("created_at", desc=True).range((page - 1) * per_page, page * per_page - 1).execute()
+    total_res = query.order("created_at", desc=True).range((page - 1) * per_page, page * per_page - 1).execute()
     total = total_res.count or 0
     rows = total_res.data or []
 
