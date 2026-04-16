@@ -69,7 +69,7 @@ export default function ClassManagement() {
           if (controller.signal.aborted) return;
           setDisciplines((prev) => prev.map((x) =>
             x.id === d.id
-              ? { ...x, courses_count: Number(stats.courses_count ?? stats.total_courses ?? x.courses_count ?? 0), students: Number(stats.students_count ?? stats.total_students ?? x.students ?? 0) }
+              ? { ...x, courses_count: Number(stats.course_count ?? stats.courses_count ?? stats.total_courses ?? x.courses_count ?? 0), students: Number(stats.student_count ?? stats.students_count ?? stats.total_students ?? x.students ?? 0) }
               : x,
           ));
         } catch { /* ignore stats errors */ }
