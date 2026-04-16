@@ -13,11 +13,12 @@ import { Select } from '../../components/ui/Select';
 import { Skeleton, SkeletonCard } from '../../components/ui/Skeleton';
 
 interface DashStats {
-  total_users?: number;
-  total_disciplines?: number;
-  avg_performance?: number;
-  active_sessions?: number;
-  users_growth?: Array<{ date: string; count: number }>;
+  total_users: number;
+  total_disciplines: number;
+  total_courses: number;
+  avg_performance: number;
+  active_sessions: number;
+  users_by_role?: Record<string, number>;
 }
 
 interface LogEntry {
@@ -41,7 +42,13 @@ export default function AdminConsole() {
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  const [stats, setStats] = useState<DashStats>({});
+  const [stats, setStats] = useState<DashStats>({
+    total_users: 0,
+    total_disciplines: 0,
+    total_courses: 0,
+    avg_performance: 0,
+    active_sessions: 0,
+  });
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [showActionModal, setShowActionModal] = useState(false);
@@ -55,12 +62,24 @@ export default function AdminConsole() {
     const load = async () => {
       try {
         setLoading(true);
-        const [statsData, logsData] = await Promise.all([
-          adminApi.getStats().catch(() => ({})),
+        const [statsData, perfData, logsData] = await Promise.all([
+          adminApi.getStats().catch(() => null),
+          adminApi.getPerformance().catch(() => null),
           adminApi.getLogs({ limit: '10' } as Record<string, string>).catch(() => []),
         ]);
         if (controller.signal.aborted) return;
-        setStats(statsData ?? {});
+        // Backend returns: { users: {total, by_role}, courses, disciplines, ... }
+        const s = (statsData ?? {}) as Record<string, unknown>;
+        const p = (perfData ?? {}) as Record<string, unknown>;
+        const usersObj = (s.users ?? {}) as Record<string, unknown>;
+        setStats({
+          total_users: Number(usersObj.total ?? 0),
+          total_disciplines: Number(s.disciplines ?? 0),
+          total_courses: Number(s.courses ?? 0),
+          avg_performance: Number(p.avg_performance_score ?? 0),
+          active_sessions: Number(p.active_sessions ?? 0),
+          users_by_role: (usersObj.by_role ?? {}) as Record<string, number>,
+        });
         setLogs(unwrapList<LogEntry>(logsData));
       } catch {
         if (controller.signal.aborted) return;
@@ -101,10 +120,10 @@ export default function AdminConsole() {
   };
 
   const statCards = [
-    { icon: 'group', label: 'Usuários', value: stats.total_users ?? 0, color: 'text-blue-500' },
-    { icon: 'school', label: 'Disciplinas', value: stats.total_disciplines ?? 0, color: 'text-green-500' },
-    { icon: 'trending_up', label: 'Performance', value: `${stats.avg_performance ?? 0}%`, color: 'text-harven-gold' },
-    { icon: 'sensors', label: 'Sessões Ativas', value: stats.active_sessions ?? 0, color: 'text-purple-500' },
+    { icon: 'group', label: 'Usuários', value: stats.total_users, color: 'text-blue-500' },
+    { icon: 'school', label: 'Disciplinas', value: stats.total_disciplines, color: 'text-green-500' },
+    { icon: 'menu_book', label: 'Cursos', value: stats.total_courses, color: 'text-harven-gold' },
+    { icon: 'sensors', label: 'Sessões Ativas', value: stats.active_sessions, color: 'text-purple-500' },
   ];
 
   if (loading) {
@@ -148,24 +167,28 @@ export default function AdminConsole() {
         ))}
       </div>
 
-      {/* User Growth Chart Placeholder */}
-      {stats.users_growth && stats.users_growth.length > 0 && (
+      {/* User Distribution by Role */}
+      {stats.users_by_role && Object.keys(stats.users_by_role).length > 0 && (
         <Card>
           <CardHeader>
-            <h2 className="text-sm font-bold text-foreground">Crescimento de Usuários</h2>
+            <h2 className="text-sm font-bold text-foreground">Distribuição de Usuários</h2>
           </CardHeader>
           <CardContent>
-            <div className="h-48 flex items-end gap-1">
-              {stats.users_growth.map((point, i) => {
-                const max = Math.max(...stats.users_growth!.map((p) => p.count), 1);
-                const height = (point.count / max) * 100;
+            <div className="flex flex-col gap-3">
+              {Object.entries(stats.users_by_role).map(([role, count]) => {
+                const total = stats.total_users || 1;
+                const pct = (Number(count) / total) * 100;
+                const label = role === 'TEACHER' ? 'Professores' : role === 'STUDENT' ? 'Alunos' : role === 'ADMIN' ? 'Administradores' : role;
+                const color = role === 'ADMIN' ? 'bg-purple-500' : role === 'TEACHER' ? 'bg-harven-gold' : 'bg-blue-500';
                 return (
-                  <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                    <div
-                      className="w-full bg-primary/80 rounded-t-sm min-h-[4px] transition-all"
-                      style={{ height: `${height}%` }}
-                    />
-                    <span className="text-[9px] text-muted-foreground">{point.date.slice(5)}</span>
+                  <div key={role} className="flex flex-col gap-1">
+                    <div className="flex justify-between text-xs">
+                      <span className="font-medium text-foreground">{label}</span>
+                      <span className="text-muted-foreground">{count} ({pct.toFixed(0)}%)</span>
+                    </div>
+                    <div className="h-2 bg-muted rounded-full overflow-hidden">
+                      <div className={`h-full ${color} rounded-full transition-all`} style={{ width: `${pct}%` }} />
+                    </div>
                   </div>
                 );
               })}

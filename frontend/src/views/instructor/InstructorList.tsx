@@ -64,10 +64,7 @@ export default function InstructorList() {
             {loading ? '...' : `${filtered.length} disciplina${filtered.length !== 1 ? 's' : ''}`}
           </p>
         </div>
-        <Button onClick={() => navigate('/instructor/discipline/new')}>
-          <span className="material-symbols-outlined text-[18px] mr-2">add</span>
-          Nova Disciplina
-        </Button>
+        {/* Instrutores não criam disciplinas — somente admin via /admin/classes */}
       </div>
 
       {/* Toolbar */}
@@ -114,7 +111,7 @@ export default function InstructorList() {
       ) : viewMode === 'grid' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((d) => (
-            <Card key={d.id} hoverEffect onClick={() => navigate(`/instructor/discipline/${d.id}`)}>
+            <Card key={d.id} hoverEffect onClick={() => navigate(`/instructor/class/${d.id}`)}>
               {d.image && (
                 <div className="h-32 bg-muted overflow-hidden">
                   <img src={d.image} alt={d.title} className="w-full h-full object-cover" />
@@ -148,7 +145,7 @@ export default function InstructorList() {
             <Card
               key={d.id}
               hoverEffect
-              onClick={() => navigate(`/instructor/discipline/${d.id}`)}
+              onClick={() => navigate(`/instructor/class/${d.id}`)}
               className="flex items-center gap-4 p-4"
             >
               <div className="h-12 w-12 rounded-lg bg-muted flex items-center justify-center shrink-0 overflow-hidden">
