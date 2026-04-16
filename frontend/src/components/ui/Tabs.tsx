@@ -99,8 +99,8 @@ function Tabs({ items, value, activeTab, defaultValue, onChange, className, aria
             className={cn(
               'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-primary/50',
               isActive
-                ? 'bg-harven-card text-white shadow-sm'
-                : 'text-gray-400 hover:bg-harven-card/50 hover:text-gray-200'
+                ? 'bg-primary text-harven-dark shadow-sm'
+                : 'text-muted-foreground hover:bg-muted hover:text-foreground'
             )}
             onClick={() => handleSelect(id)}
             onKeyDown={(e) => handleKeyDown(e, index)}

@@ -358,29 +358,42 @@ export default function ClassManagement() {
               {/* Tab: Teachers */}
               {editState.tab === 'teachers' && (
                 <div className="flex flex-col gap-4">
-                  <Input icon="search" placeholder="Buscar professor..." value={userSearch} onChange={(e) => setUserSearch(e.target.value)} />
-                  {userSearch && availableTeachers.length > 0 && (
-                    <div className="border border-border rounded-lg max-h-40 overflow-y-auto">
-                      {availableTeachers.slice(0, 10).map((u) => (
-                        <button key={u.id} onClick={() => handleAddTeacher(u.id)} className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted transition-colors">
-                          <Avatar fallback={u.name} size="sm" src={u.avatar_url} />
-                          <span className="text-foreground">{u.name}</span>
-                          <span className="material-symbols-outlined text-primary ml-auto text-[18px]">add</span>
-                        </button>
-                      ))}
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Vincular professor</p>
+                    <Input icon="search" placeholder="Buscar professor..." value={userSearch} onChange={(e) => setUserSearch(e.target.value)} />
+                    <div className="border border-border rounded-lg max-h-48 overflow-y-auto mt-2">
+                      {availableTeachers.length === 0 ? (
+                        <p className="text-sm text-muted-foreground text-center py-3">
+                          {allUsers.filter((u) => u.role === 'INSTRUCTOR').length === 0
+                            ? 'Nenhum professor cadastrado. Crie em Usuarios.'
+                            : 'Todos os professores já estão vinculados.'}
+                        </p>
+                      ) : (
+                        availableTeachers.slice(0, 20).map((u) => (
+                          <button key={u.id} onClick={() => handleAddTeacher(u.id)} className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted transition-colors">
+                            <Avatar fallback={u.name} size="sm" src={u.avatar_url} />
+                            <span className="flex-1 text-left text-foreground">{u.name}</span>
+                            <span className="text-xs text-muted-foreground">{u.ra}</span>
+                            <span className="material-symbols-outlined text-primary text-[18px]">add</span>
+                          </button>
+                        ))
+                      )}
                     </div>
-                  )}
-                  <div className="flex flex-col gap-2">
-                    {teachers.map((t) => (
-                      <Card key={t.id} className="flex items-center gap-3 p-3">
-                        <Avatar fallback={t.name} size="sm" src={t.avatar_url} />
-                        <div className="flex-1"><p className="text-sm font-medium text-foreground">{t.name}</p><p className="text-xs text-muted-foreground">{t.email}</p></div>
-                        <Button variant="destructive" size="icon" onClick={() => setConfirmAction({ type: 'remove-teacher', id: t.id, label: t.name })}>
-                          <span className="material-symbols-outlined text-[16px]">close</span>
-                        </Button>
-                      </Card>
-                    ))}
-                    {teachers.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">Nenhum professor vinculado.</p>}
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Vinculados ({teachers.length})</p>
+                    <div className="flex flex-col gap-2">
+                      {teachers.map((t) => (
+                        <Card key={t.id} className="flex items-center gap-3 p-3">
+                          <Avatar fallback={t.name} size="sm" src={t.avatar_url} />
+                          <div className="flex-1"><p className="text-sm font-medium text-foreground">{t.name}</p><p className="text-xs text-muted-foreground">{t.email}</p></div>
+                          <Button variant="destructive" size="icon" onClick={() => setConfirmAction({ type: 'remove-teacher', id: t.id, label: t.name })}>
+                            <span className="material-symbols-outlined text-[16px]">close</span>
+                          </Button>
+                        </Card>
+                      ))}
+                      {teachers.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">Nenhum professor vinculado.</p>}
+                    </div>
                   </div>
                 </div>
               )}
@@ -388,35 +401,48 @@ export default function ClassManagement() {
               {/* Tab: Students */}
               {editState.tab === 'students' && (
                 <div className="flex flex-col gap-4">
-                  <div className="flex gap-2">
-                    <Input icon="search" placeholder="Buscar aluno..." value={userSearch} onChange={(e) => setUserSearch(e.target.value)} containerClassName="flex-1" />
-                    <input ref={csvRef} type="file" accept=".csv" className="hidden" onChange={handleCsvStudents} />
-                    <Button variant="outline" size="sm" onClick={() => csvRef.current?.click()}>
-                      <span className="material-symbols-outlined text-[16px] mr-1">upload_file</span> CSV
-                    </Button>
-                  </div>
-                  {userSearch && availableStudents.length > 0 && (
-                    <div className="border border-border rounded-lg max-h-40 overflow-y-auto">
-                      {availableStudents.slice(0, 10).map((u) => (
-                        <button key={u.id} onClick={() => handleAddStudent(u.id)} className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted transition-colors">
-                          <Avatar fallback={u.name} size="sm" src={u.avatar_url} />
-                          <span className="text-foreground">{u.name}</span>
-                          <span className="material-symbols-outlined text-primary ml-auto text-[18px]">add</span>
-                        </button>
-                      ))}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Vincular aluno</p>
+                      <input ref={csvRef} type="file" accept=".csv" className="hidden" onChange={handleCsvStudents} />
+                      <Button variant="outline" size="sm" onClick={() => csvRef.current?.click()}>
+                        <span className="material-symbols-outlined text-[16px] mr-1">upload_file</span> CSV
+                      </Button>
                     </div>
-                  )}
-                  <div className="flex flex-col gap-2">
-                    {students.map((s) => (
-                      <Card key={s.id} className="flex items-center gap-3 p-3">
-                        <Avatar fallback={s.name} size="sm" src={s.avatar_url} />
-                        <div className="flex-1"><p className="text-sm font-medium text-foreground">{s.name}</p><p className="text-xs text-muted-foreground">{s.email}</p></div>
-                        <Button variant="destructive" size="icon" onClick={() => setConfirmAction({ type: 'remove-student', id: s.id, label: s.name })}>
-                          <span className="material-symbols-outlined text-[16px]">close</span>
-                        </Button>
-                      </Card>
-                    ))}
-                    {students.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">Nenhum aluno vinculado.</p>}
+                    <Input icon="search" placeholder="Buscar aluno..." value={userSearch} onChange={(e) => setUserSearch(e.target.value)} />
+                    <div className="border border-border rounded-lg max-h-48 overflow-y-auto mt-2">
+                      {availableStudents.length === 0 ? (
+                        <p className="text-sm text-muted-foreground text-center py-3">
+                          {allUsers.filter((u) => u.role === 'STUDENT').length === 0
+                            ? 'Nenhum aluno cadastrado. Crie em Usuarios.'
+                            : 'Todos os alunos já estão vinculados.'}
+                        </p>
+                      ) : (
+                        availableStudents.slice(0, 20).map((u) => (
+                          <button key={u.id} onClick={() => handleAddStudent(u.id)} className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted transition-colors">
+                            <Avatar fallback={u.name} size="sm" src={u.avatar_url} />
+                            <span className="flex-1 text-left text-foreground">{u.name}</span>
+                            <span className="text-xs text-muted-foreground">{u.ra}</span>
+                            <span className="material-symbols-outlined text-primary text-[18px]">add</span>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Vinculados ({students.length})</p>
+                    <div className="flex flex-col gap-2">
+                      {students.map((s) => (
+                        <Card key={s.id} className="flex items-center gap-3 p-3">
+                          <Avatar fallback={s.name} size="sm" src={s.avatar_url} />
+                          <div className="flex-1"><p className="text-sm font-medium text-foreground">{s.name}</p><p className="text-xs text-muted-foreground">{s.email}</p></div>
+                          <Button variant="destructive" size="icon" onClick={() => setConfirmAction({ type: 'remove-student', id: s.id, label: s.name })}>
+                            <span className="material-symbols-outlined text-[16px]">close</span>
+                          </Button>
+                        </Card>
+                      ))}
+                      {students.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">Nenhum aluno vinculado.</p>}
+                    </div>
                   </div>
                 </div>
               )}
