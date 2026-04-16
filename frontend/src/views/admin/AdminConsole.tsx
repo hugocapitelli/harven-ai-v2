@@ -2,7 +2,8 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { adminApi } from '../../services/api';
+import { adminApi, notificationsApi } from '../../services/api';
+import { unwrapList } from '../../lib/utils';
 import { useAuth } from '../../contexts/AuthContext';
 import { Button } from '../../components/ui/Button';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
@@ -60,7 +61,7 @@ export default function AdminConsole() {
         ]);
         if (controller.signal.aborted) return;
         setStats(statsData ?? {});
-        setLogs(Array.isArray(logsData) ? logsData : []);
+        setLogs(unwrapList<LogEntry>(logsData));
       } catch {
         if (controller.signal.aborted) return;
       } finally {
@@ -75,10 +76,13 @@ export default function AdminConsole() {
     if (!actionMessage.trim()) { toast.error('Mensagem é obrigatória.'); return; }
     setSending(true);
     try {
-      await adminApi.createAction({
-        type: actionType,
+      // Broadcast via notifications API. Backend accepts { title, message, target, type }
+      const title = actionType === 'announcement' ? 'Comunicado' : 'Manutenção programada';
+      await notificationsApi.create({
+        title,
         message: actionMessage.trim(),
         target: actionTarget,
+        type: actionType,
         author: user?.name ?? 'Admin',
       });
       toast.success(actionType === 'announcement' ? 'Comunicado enviado.' : 'Manutenção agendada.');
@@ -87,7 +91,7 @@ export default function AdminConsole() {
     } catch (err: any) {
       const status = err?.response?.status;
       if (status === 404 || status === 405) {
-        toast.error('Ações globais ainda não estão disponíveis no backend.');
+        toast.error('Ações globais ainda não disponíveis no backend.');
       } else {
         toast.error(err?.response?.data?.detail || 'Erro ao enviar ação.');
       }
