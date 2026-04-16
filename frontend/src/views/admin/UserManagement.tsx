@@ -72,7 +72,14 @@ export default function UserManagement() {
   );
 
   const handleCreate = async () => {
-    if (!form.name.trim() || !form.email.trim()) { toast.error('Nome e email são obrigatórios.'); return; }
+    if (!form.name.trim() || !form.email.trim() || !form.ra.trim()) {
+      toast.error('Nome, RA e email são obrigatórios.');
+      return;
+    }
+    if (!form.password.trim() || form.password.length < 4) {
+      toast.error('Defina uma senha temporária (mínimo 4 caracteres).');
+      return;
+    }
     setSaving(true);
     try {
       await usersApi.create(form as Record<string, unknown>);
@@ -81,8 +88,9 @@ export default function UserManagement() {
       setForm(EMPTY_FORM);
       const data = await usersApi.list();
       setUsers(unwrapList(data));
-    } catch {
-      toast.error('Erro ao criar usuário.');
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || 'Erro ao criar usuário.';
+      toast.error(String(msg));
     } finally {
       setSaving(false);
     }
@@ -121,8 +129,9 @@ export default function UserManagement() {
       toast.success(`${batch.length} usuários importados.`);
       const data = await usersApi.list();
       setUsers(unwrapList(data));
-    } catch {
-      toast.error('Erro na importação.');
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || 'Erro na importação.';
+      toast.error(String(msg));
     } finally {
       setSaving(false);
       if (csvRef.current) csvRef.current.value = '';
