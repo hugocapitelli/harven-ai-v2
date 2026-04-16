@@ -798,10 +798,10 @@ async def lti_launch(
     # Find or create user
     user = None
     if launch_data.ra:
-        result = client.table("users").select("*").eq("ra", launch_data.ra).maybe_single().execute()
+        result = (client.table("users").select("*").eq("ra", launch_data.ra).maybe_single().execute() or type("_R", (), {"data": None})())
         user = result.data
     if not user and launch_data.email:
-        result = client.table("users").select("*").eq("email", launch_data.email).maybe_single().execute()
+        result = (client.table("users").select("*").eq("email", launch_data.email).maybe_single().execute() or type("_R", (), {"data": None})())
         user = result.data
 
     auto_create = os.getenv("LTI_AUTO_CREATE_USERS", "true").lower() == "true"

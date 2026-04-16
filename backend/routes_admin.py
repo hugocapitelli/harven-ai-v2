@@ -122,7 +122,7 @@ def _sanitize_search(q: str) -> str:
 
 def _get_or_create_settings(client: Client) -> dict:
     """Return the single settings row or create one if missing."""
-    res = client.table("system_settings").select("*").limit(1).maybe_single().execute()
+    res = (client.table("system_settings").select("*").limit(1).maybe_single().execute() or type("_R", (), {"data": None})())
     if res.data is not None:
         return res.data
     new_row = {"id": str(uuid4()), "platform_name": "Harven.AI"}
@@ -574,7 +574,7 @@ async def download_backup(
 ):
     from fastapi.responses import FileResponse
 
-    res = client.table("system_backups").select("*").eq("id", backup_id).maybe_single().execute()
+    res = (client.table("system_backups").select("*").eq("id", backup_id).maybe_single().execute() or type("_R", (), {"data": None})())
     row = res.data
     if not row:
         raise HTTPException(status_code=404, detail="Backup nao encontrado")
@@ -590,7 +590,7 @@ async def delete_backup(
     admin: dict = Depends(require_role("ADMIN")),
     client: Client = Depends(get_supabase),
 ):
-    res = client.table("system_backups").select("*").eq("id", backup_id).maybe_single().execute()
+    res = (client.table("system_backups").select("*").eq("id", backup_id).maybe_single().execute() or type("_R", (), {"data": None})())
     row = res.data
     if not row:
         raise HTTPException(status_code=404, detail="Backup nao encontrado")
@@ -658,6 +658,7 @@ async def clear_cache(
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+@router.get("/users/{user_id}/notifications/count", tags=["Notifications"], summary="Contagem de nao lidas (alias)")
 @router.get("/notifications/{user_id}/count", tags=["Notifications"], summary="Contagem de nao lidas")
 async def notification_count(
     user_id: str,
@@ -674,6 +675,7 @@ async def notification_count(
     return {"unread": res.count or 0}
 
 
+@router.get("/users/{user_id}/notifications", tags=["Notifications"], summary="Listar notificacoes (alias)")
 @router.get("/notifications/{user_id}", tags=["Notifications"], summary="Listar notificacoes")
 async def list_notifications(
     user_id: str,
@@ -746,7 +748,7 @@ async def mark_read(
     _user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
-    res = client.table("notifications").select("id").eq("id", notification_id).maybe_single().execute()
+    res = (client.table("notifications").select("id").eq("id", notification_id).maybe_single().execute() or type("_R", (), {"data": None})())
     if not res.data:
         raise HTTPException(status_code=404, detail="Notificacao nao encontrada")
     client.table("notifications").update({"is_read": True}).eq("id", notification_id).execute()
@@ -773,7 +775,7 @@ async def delete_notification(
     _user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
-    res = client.table("notifications").select("id").eq("id", notification_id).maybe_single().execute()
+    res = (client.table("notifications").select("id").eq("id", notification_id).maybe_single().execute() or type("_R", (), {"data": None})())
     if not res.data:
         raise HTTPException(status_code=404, detail="Notificacao nao encontrada")
     client.table("notifications").delete().eq("id", notification_id).execute()
@@ -868,7 +870,7 @@ async def class_stats(
     client: Client = Depends(get_supabase),
 ):
     """class_id maps to a Discipline id."""
-    disc_res = client.table("disciplines").select("id, name").eq("id", class_id).maybe_single().execute()
+    disc_res = (client.table("disciplines").select("id, name").eq("id", class_id).maybe_single().execute() or type("_R", (), {"data": None})())
     disc = disc_res.data
     if not disc:
         raise HTTPException(status_code=404, detail="Turma nao encontrada")
@@ -907,7 +909,7 @@ async def discipline_students_stats(
     _user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
-    disc_res = client.table("disciplines").select("id, name").eq("id", discipline_id).maybe_single().execute()
+    disc_res = (client.table("disciplines").select("id, name").eq("id", discipline_id).maybe_single().execute() or type("_R", (), {"data": None})())
     disc = disc_res.data
     if not disc:
         raise HTTPException(status_code=404, detail="Disciplina nao encontrada")
@@ -967,8 +969,8 @@ async def user_stats(
     _user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
-    res = client.table("user_stats").select("*").eq("user_id", user_id).maybe_single().execute()
-    row = res.data
+    res = (client.table("user_stats").select("*").eq("user_id", user_id).maybe_single().execute() or type("_R", (), {"data": None})())
+    row = res.data if res else None
     if not row:
         return {
             "user_id": user_id,
@@ -1047,7 +1049,7 @@ async def create_activity(
     row = res.data[0] if res.data else {}
 
     # Update user stats (upsert)
-    stats_res = client.table("user_stats").select("*").eq("user_id", user_id).maybe_single().execute()
+    stats_res = (client.table("user_stats").select("*").eq("user_id", user_id).maybe_single().execute() or type("_R", (), {"data": None})())
     if stats_res.data:
         current_points = stats_res.data.get("total_points", 0) or 0
         client.table("user_stats").update(
@@ -1263,7 +1265,7 @@ async def complete_content(
     client: Client = Depends(get_supabase),
 ):
     # Verify content exists
-    content_res = client.table("contents").select("id, title").eq("id", content_id).maybe_single().execute()
+    content_res = (client.table("contents").select("id, title").eq("id", content_id).maybe_single().execute() or type("_R", (), {"data": None})())
     content = content_res.data
     if not content:
         raise HTTPException(status_code=404, detail="Conteudo nao encontrado")
@@ -1346,12 +1348,12 @@ async def create_review(
     user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
-    session_res = client.table("chat_sessions").select("id, user_id").eq("id", session_id).maybe_single().execute()
+    session_res = (client.table("chat_sessions").select("id, user_id").eq("id", session_id).maybe_single().execute() or type("_R", (), {"data": None})())
     session = session_res.data
     if not session:
         raise HTTPException(status_code=404, detail="Sessao nao encontrada")
 
-    existing_res = client.table("session_reviews").select("id").eq("session_id", session_id).maybe_single().execute()
+    existing_res = (client.table("session_reviews").select("id").eq("session_id", session_id).maybe_single().execute() or type("_R", (), {"data": None})())
     if existing_res.data:
         raise HTTPException(status_code=409, detail="Review ja existe para esta sessao")
 
@@ -1396,12 +1398,12 @@ async def get_review(
     _user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
-    res = client.table("session_reviews").select("*").eq("session_id", session_id).maybe_single().execute()
+    res = (client.table("session_reviews").select("*").eq("session_id", session_id).maybe_single().execute() or type("_R", (), {"data": None})())
     row = res.data
     if not row:
         raise HTTPException(status_code=404, detail="Review nao encontrado")
 
-    reviewer_res = client.table("users").select("name").eq("id", row.get("reviewer_id", "")).maybe_single().execute()
+    reviewer_res = (client.table("users").select("name").eq("id", row.get("reviewer_id", "")).maybe_single().execute() or type("_R", (), {"data": None})())
     reviewer_name = reviewer_res.data.get("name") if reviewer_res.data else None
 
     return {
@@ -1425,7 +1427,7 @@ async def update_review(
     _user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
-    res = client.table("session_reviews").select("*").eq("session_id", session_id).maybe_single().execute()
+    res = (client.table("session_reviews").select("*").eq("session_id", session_id).maybe_single().execute() or type("_R", (), {"data": None})())
     row = res.data
     if not row:
         raise HTTPException(status_code=404, detail="Review nao encontrado")
@@ -1455,7 +1457,7 @@ async def reply_review(
     user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
-    res = client.table("session_reviews").select("*").eq("session_id", session_id).maybe_single().execute()
+    res = (client.table("session_reviews").select("*").eq("session_id", session_id).maybe_single().execute() or type("_R", (), {"data": None})())
     row = res.data
     if not row:
         raise HTTPException(status_code=404, detail="Review nao encontrado")
