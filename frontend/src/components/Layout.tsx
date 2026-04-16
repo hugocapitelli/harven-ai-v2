@@ -3,7 +3,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useSettings } from '../contexts/SettingsContext';
 import { notificationsApi } from '../services/api';
-import { cn } from '../lib/utils';
+import { cn, unwrapList } from '../lib/utils';
 import type { ReactNode } from 'react';
 
 // --- Sidebar ---
@@ -94,8 +94,9 @@ function Header({ onToggleSidebar }: { onToggleSidebar: () => void }) {
 
   useEffect(() => {
     if (!user) return;
-    notificationsApi.list(user.id).then((data: { read: boolean }[]) => {
-      setUnreadCount(Array.isArray(data) ? data.filter((n) => !n.read).length : 0);
+    notificationsApi.list(user.id).then((data) => {
+      const list = unwrapList<{ read: boolean }>(data);
+      setUnreadCount(list.filter((n) => !n.read).length);
     }).catch(() => {});
   }, [user]);
 

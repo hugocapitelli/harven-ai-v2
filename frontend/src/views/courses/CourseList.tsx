@@ -3,6 +3,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { coursesApi, usersApi } from '../../services/api';
+import { unwrapList } from '../../lib/utils';
 import { cn } from '../../lib/utils';
 import type { UserRole } from '../../types';
 
@@ -26,7 +27,7 @@ export default function CourseList({ userRole }: CourseListProps) {
       try {
         const data = await coursesApi.list(ctrl.signal);
         if (ctrl.signal.aborted) return;
-        setCourses(Array.isArray(data) ? data.filter((c: Record<string, unknown>) => c.title && String(c.title).trim()) : []);
+        setCourses(unwrapList<Record<string, unknown>>(data).filter((c) => c.title && String(c.title).trim()));
       } catch { if (!ctrl.signal.aborted) console.error('Erro ao buscar cursos'); }
       finally { if (!ctrl.signal.aborted) setLoading(false); }
     })();
@@ -39,8 +40,8 @@ export default function CourseList({ userRole }: CourseListProps) {
     (async () => {
       try {
         const res = await usersApi.list({ role: 'INSTRUCTOR', per_page: 100 });
-        const users = Array.isArray(res?.data) ? res.data : (Array.isArray(res) ? res : []);
-        setInstructors(users.map((u: Record<string, unknown>) => ({ id: String(u.id), name: String(u.name) })));
+        const users = unwrapList<Record<string, unknown>>(res);
+        setInstructors(users.map((u) => ({ id: String(u.id), name: String(u.name) })));
       } catch { toast.error('Erro ao carregar instrutores'); }
     })();
   }, [showCreateModal, userRole]);
@@ -67,7 +68,7 @@ export default function CourseList({ userRole }: CourseListProps) {
       if (newCourse.instructor_id) payload.instructor_id = newCourse.instructor_id;
       await coursesApi.create(payload);
       const data = await coursesApi.list();
-      setCourses(Array.isArray(data) ? data.filter((c: Record<string, unknown>) => c.title && String(c.title).trim()) : []);
+      setCourses(unwrapList<Record<string, unknown>>(data).filter((c) => c.title && String(c.title).trim()));
       setShowCreateModal(false);
       setNewCourse({ title: '', instructor_id: '', category: 'Geral' });
       toast.success('Curso criado com sucesso');

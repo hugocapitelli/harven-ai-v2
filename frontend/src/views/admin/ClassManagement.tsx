@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import { disciplinesApi, coursesApi, usersApi } from '../../services/api';
+import { unwrapList } from '../../lib/utils';
 import { Button } from '../../components/ui/Button';
 import { Card, CardContent } from '../../components/ui/Card';
 import { Input } from '../../components/ui/Input';
@@ -85,10 +86,13 @@ export default function ClassManagement() {
         disciplinesApi.getStudents(disc.id).catch(() => []),
         usersApi.list().catch(() => []),
       ]);
-      setCourses(Array.isArray(c) ? c : []);
-      setTeachers(Array.isArray(t) ? t : []);
-      setStudents(Array.isArray(s) ? s : []);
-      setAllUsers(Array.isArray(u) ? u : []);
+      setCourses(unwrapList(c));
+      // Teachers/students endpoints return array of link objects with nested teacher/student
+      const teacherList = unwrapList(t).map((link: any) => link.teacher ?? link).filter(Boolean);
+      const studentList = unwrapList(s).map((link: any) => link.student ?? link).filter(Boolean);
+      setTeachers(teacherList);
+      setStudents(studentList);
+      setAllUsers(unwrapList(u));
     } catch {}
   };
 

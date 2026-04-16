@@ -20,3 +20,16 @@ export function safeJsonParse<T>(key: string, fallback: T): T {
     return fallback;
   }
 }
+
+/**
+ * Unwrap a paginated API response. Backend returns either a raw array or
+ * { data: [...], total, page, per_page }. Returns an array in both cases.
+ */
+export function unwrapList<T = unknown>(res: unknown): T[] {
+  if (Array.isArray(res)) return res as T[];
+  if (res && typeof res === 'object' && 'data' in res) {
+    const d = (res as { data: unknown }).data;
+    if (Array.isArray(d)) return d as T[];
+  }
+  return [];
+}

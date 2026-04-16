@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 import { usersApi } from '../../services/api';
+import { unwrapList } from '../../lib/utils';
 import { Button } from '../../components/ui/Button';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { Input } from '../../components/ui/Input';
@@ -51,7 +52,7 @@ export default function UserManagement() {
         const params = roleFilter !== 'all' ? { role: roleFilter } : undefined;
         const data = await usersApi.list(params as Record<string, string>);
         if (controller.signal.aborted) return;
-        setUsers(Array.isArray(data) ? data : []);
+        setUsers(unwrapList(data));
       } catch {
         if (controller.signal.aborted) return;
         toast.error('Erro ao carregar usuários.');
@@ -79,7 +80,7 @@ export default function UserManagement() {
       setShowCreateModal(false);
       setForm(EMPTY_FORM);
       const data = await usersApi.list();
-      setUsers(Array.isArray(data) ? data : []);
+      setUsers(unwrapList(data));
     } catch {
       toast.error('Erro ao criar usuário.');
     } finally {
@@ -95,7 +96,7 @@ export default function UserManagement() {
       toast.success('Usuário atualizado.');
       setEditingUser(null);
       const data = await usersApi.list();
-      setUsers(Array.isArray(data) ? data : []);
+      setUsers(unwrapList(data));
     } catch {
       toast.error('Erro ao atualizar.');
     } finally {
@@ -119,7 +120,7 @@ export default function UserManagement() {
       await usersApi.createBatch(batch as Record<string, unknown>[]);
       toast.success(`${batch.length} usuários importados.`);
       const data = await usersApi.list();
-      setUsers(Array.isArray(data) ? data : []);
+      setUsers(unwrapList(data));
     } catch {
       toast.error('Erro na importação.');
     } finally {

@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { disciplinesApi } from '../../services/api';
+import { unwrapList } from '../../lib/utils';
 import { Button } from '../../components/ui/Button';
 import { Card, CardContent } from '../../components/ui/Card';
 import { Input } from '../../components/ui/Input';
@@ -36,7 +37,7 @@ export default function InstructorList() {
         setLoading(true);
         const data = await disciplinesApi.list();
         if (controller.signal.aborted) return;
-        setDisciplines(Array.isArray(data) ? data : []);
+        setDisciplines(unwrapList(data));
       } catch (err) {
         if (controller.signal.aborted) return;
         console.error('Failed to load disciplines:', err);

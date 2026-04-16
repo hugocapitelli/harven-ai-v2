@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { dashboardApi, disciplinesApi, coursesApi } from '../../services/api';
-import { cn } from '../../lib/utils';
+import { cn, unwrapList } from '../../lib/utils';
 
 interface StatItem { label: string; value: string | number; icon: string; color: string }
 
@@ -32,14 +32,14 @@ export default function StudentDashboard() {
         ]);
 
         const allCourses: Record<string, unknown>[] = [];
-        if (Array.isArray(disciplinesData)) {
-          for (const d of disciplinesData) {
-            try {
-              const c = await coursesApi.listByClass(d.id as string);
-              if (ctrl.signal.aborted) return;
-              if (Array.isArray(c)) allCourses.push(...c.map((course: Record<string, unknown>) => ({ ...course, disciplineName: d.title })));
-            } catch { /* skip */ }
-          }
+        const disciplines = unwrapList<Record<string, unknown>>(disciplinesData);
+        for (const d of disciplines) {
+          try {
+            const c = await coursesApi.listByClass(d.id as string);
+            if (ctrl.signal.aborted) return;
+            const courseList = unwrapList<Record<string, unknown>>(c);
+            allCourses.push(...courseList.map((course) => ({ ...course, disciplineName: d.name ?? d.title })));
+          } catch { /* skip */ }
         }
         setCourses(allCourses);
       } catch {
