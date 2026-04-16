@@ -394,6 +394,70 @@ class IntegrationService:
         await self._log_sync(result)
         return result
 
+    async def import_users_from_moodle(self, criteria: Optional[Dict] = None) -> SyncResult:
+        """Import users from Moodle into Harven users table via UserRepository."""
+        from auth import hash_password
+        from repositories import UserRepository
+
+        started = datetime.now(timezone.utc)
+        result = SyncResult(
+            system="moodle", operation="import_users", direction="import",
+            status="success", records_processed=0, started_at=started,
+        )
+
+        user_repo = UserRepository(self.client)
+
+        try:
+            moodle_users = await self.moodle.get_users(criteria)
+            # Moodle core_user_get_users can return either a list or {"users": [...]}
+            if isinstance(moodle_users, dict):
+                moodle_users = moodle_users.get("users", []) or []
+
+            for mu in moodle_users:
+                result.records_processed += 1
+                ra = mu.get("idnumber") or mu.get("username") or (str(mu.get("id")) if mu.get("id") else None)
+                if not ra:
+                    result.records_failed += 1
+                    continue
+
+                name = mu.get("fullname") or (
+                    f"{mu.get('firstname', '')} {mu.get('lastname', '')}".strip() or ra
+                )
+                email = mu.get("email")
+                moodle_user_id = str(mu.get("id")) if mu.get("id") is not None else None
+
+                try:
+                    existing = user_repo.get_by_ra(ra)
+                    if existing:
+                        update_data = {"name": name}
+                        if email:
+                            update_data["email"] = email
+                        if moodle_user_id:
+                            update_data["moodle_user_id"] = moodle_user_id
+                        user_repo.update(existing["id"], update_data)
+                        result.records_updated += 1
+                    else:
+                        user_repo.create({
+                            "ra": ra,
+                            "name": name,
+                            "email": email,
+                            "role": "STUDENT",
+                            "password_hash": hash_password(ra),
+                            "moodle_user_id": moodle_user_id,
+                        })
+                        result.records_created += 1
+                except Exception as e:
+                    result.records_failed += 1
+                    logger.warning(f"Failed to upsert moodle user {ra}: {e}")
+
+        except Exception as e:
+            result.status = "failed"
+            result.error_message = str(e)
+
+        result.completed_at = datetime.now(timezone.utc)
+        await self._log_sync(result)
+        return result
+
     async def get_moodle_ratings(self, filters: Optional[Dict] = None) -> List[Dict]:
         query = self.client.table("moodle_ratings").select("*")
         if filters:

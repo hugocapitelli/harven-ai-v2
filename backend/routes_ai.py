@@ -295,18 +295,72 @@ async def tts_voices():
     }
 
 
+VALID_TTS_VOICES = {"alloy", "echo", "fable", "onyx", "nova", "shimmer"}
+
+
+class TTSGenerateRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=4096)
+    voice: str = Field("alloy", max_length=20)
+
+
 @router.post("/api/ai/tts/generate", tags=["AI - TTS"])
 async def tts_generate(
-    text: str = "",
-    voice: str = "alloy",
+    body: TTSGenerateRequest,
     current_user: dict = Depends(get_current_user),
+    storage: StorageService = Depends(get_storage_service),
 ):
-    return {"status": "mock", "message": "TTS nao configurado — retornando stub", "audio_url": None}
+    svc = get_ai_service()
+    if svc.mock_mode or svc.client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="TTS indisponivel: OPENAI_API_KEY nao configurada ou em mock mode.",
+        )
+
+    voice = body.voice if body.voice in VALID_TTS_VOICES else "alloy"
+
+    try:
+        response = svc.client.audio.speech.create(
+            model="tts-1",
+            voice=voice,
+            input=body.text,
+        )
+        audio_bytes = response.content
+    except Exception as e:
+        logger.error(f"TTS generate failed: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Falha na chamada OpenAI TTS: {sanitize_ai_error(e)}")
+
+    subdir = "tts"
+    dest_dir = storage.base_dir / subdir
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid4().hex}.mp3"
+    dest_path = dest_dir / filename
+
+    try:
+        with open(dest_path, "wb") as f:
+            f.write(audio_bytes)
+    except Exception as e:
+        logger.error(f"TTS file write failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Falha ao salvar audio gerado.")
+
+    audio_url = f"/uploads/{subdir}/{filename}"
+    return {
+        "status": "ok",
+        "audio_url": audio_url,
+        "voice": voice,
+        "model": "tts-1",
+        "size_bytes": len(audio_bytes),
+    }
 
 
 @router.get("/api/ai/tts/status", tags=["AI - TTS"])
 async def tts_status():
-    return {"enabled": False, "provider": None}
+    svc = get_ai_service()
+    enabled = svc.client is not None and not svc.mock_mode
+    return {
+        "enabled": enabled,
+        "provider": "openai" if enabled else None,
+        "model": "tts-1" if enabled else None,
+    }
 
 
 @router.post("/api/ai/transcribe", tags=["AI - TTS"])
@@ -314,7 +368,41 @@ async def ai_transcribe(
     file: UploadFile = File(...),
     current_user: dict = Depends(get_current_user),
 ):
-    return {"status": "mock", "text": "", "message": "Transcricao nao configurada"}
+    svc = get_ai_service()
+    if svc.mock_mode or svc.client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Transcricao indisponivel: OPENAI_API_KEY nao configurada ou em mock mode.",
+        )
+
+    try:
+        content = await file.read()
+    except Exception as e:
+        logger.error(f"Transcribe file read failed: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail="Falha ao ler arquivo enviado.")
+
+    if not content:
+        raise HTTPException(status_code=400, detail="Arquivo vazio.")
+
+    # Whisper expects a file-like object; passing a (name, bytes, mime) tuple is supported.
+    upload_name = file.filename or "audio.webm"
+    mime_type = file.content_type or "application/octet-stream"
+
+    try:
+        result = svc.client.audio.transcriptions.create(
+            model="whisper-1",
+            file=(upload_name, content, mime_type),
+        )
+        text = getattr(result, "text", "") or ""
+    except Exception as e:
+        logger.error(f"Whisper transcribe failed: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Falha na chamada Whisper: {sanitize_ai_error(e)}")
+
+    return {
+        "status": "ok",
+        "text": text,
+        "model": "whisper-1",
+    }
 
 
 # ===================================================================
@@ -559,6 +647,21 @@ async def integration_mappings(
     return await svc.get_mappings(entity_type)
 
 
+# ---- Integration mock guard ----
+
+def _require_live_integration(use_mock: bool, system: str, env_vars: str) -> None:
+    """Raise 503 if integration client is in mock mode.
+
+    Protects write operations (sync, import, export) from polluting production DB
+    with hardcoded mock data like 'Maria Silva' / 'Joao Santos'.
+    """
+    if use_mock:
+        raise HTTPException(
+            status_code=503,
+            detail=f"{system} nao configurado. Configure {env_vars} para habilitar esta operacao.",
+        )
+
+
 # ---- JACAD ----
 
 @router.post("/integrations/jacad/sync", tags=["Integrations - JACAD"])
@@ -566,6 +669,7 @@ async def jacad_sync(
     svc: IntegrationService = Depends(get_integration_service),
     current_user: dict = Depends(require_role("ADMIN")),
 ):
+    _require_live_integration(svc.jacad.use_mock, "JACAD", "JACAD_BASE_URL e JACAD_API_KEY")
     users_result = await svc.sync_users_from_jacad()
     disc_result = await svc.sync_disciplines_from_jacad()
     return {"users": users_result.to_dict(), "disciplines": disc_result.to_dict()}
@@ -576,6 +680,7 @@ async def jacad_import_students(
     svc: IntegrationService = Depends(get_integration_service),
     current_user: dict = Depends(require_role("ADMIN")),
 ):
+    _require_live_integration(svc.jacad.use_mock, "JACAD", "JACAD_BASE_URL e JACAD_API_KEY")
     result = await svc.sync_users_from_jacad()
     return result.to_dict()
 
@@ -585,6 +690,7 @@ async def jacad_import_disciplines(
     svc: IntegrationService = Depends(get_integration_service),
     current_user: dict = Depends(require_role("ADMIN")),
 ):
+    _require_live_integration(svc.jacad.use_mock, "JACAD", "JACAD_BASE_URL e JACAD_API_KEY")
     result = await svc.sync_disciplines_from_jacad()
     return result.to_dict()
 
@@ -608,6 +714,7 @@ async def moodle_sync(
     svc: IntegrationService = Depends(get_integration_service),
     current_user: dict = Depends(require_role("ADMIN")),
 ):
+    _require_live_integration(svc.moodle.use_mock, "Moodle", "MOODLE_URL e MOODLE_TOKEN")
     export_result = await svc.export_sessions_to_moodle()
     import_result = await svc.import_ratings_from_moodle()
     return {"export": export_result.to_dict(), "import": import_result.to_dict()}
@@ -618,7 +725,9 @@ async def moodle_import_users(
     svc: IntegrationService = Depends(get_integration_service),
     current_user: dict = Depends(require_role("ADMIN")),
 ):
-    return {"status": "not_implemented", "message": "Import de usuarios via Moodle nao implementado"}
+    _require_live_integration(svc.moodle.use_mock, "Moodle", "MOODLE_URL e MOODLE_TOKEN")
+    result = await svc.import_users_from_moodle()
+    return result.to_dict()
 
 
 @router.post("/integrations/moodle/export-sessions", tags=["Integrations - Moodle"])
@@ -627,6 +736,7 @@ async def moodle_export_sessions(
     svc: IntegrationService = Depends(get_integration_service),
     current_user: dict = Depends(require_role("ADMIN", "TEACHER")),
 ):
+    _require_live_integration(svc.moodle.use_mock, "Moodle", "MOODLE_URL e MOODLE_TOKEN")
     result = await svc.export_sessions_to_moodle(filters)
     return result.to_dict()
 
@@ -682,7 +792,8 @@ async def lti_launch(
     try:
         launch_data = await validate_lti_launch(params, url, lti_key, lti_secret)
     except LTIValidationError as e:
-        raise HTTPException(status_code=401, detail=str(e))
+        logger.error(f"LTI validation error: {e}", exc_info=True)
+        raise HTTPException(status_code=401, detail="Authentication failed")
 
     # Find or create user
     user = None
@@ -761,7 +872,8 @@ async def upload_file(
         url = await storage.save_file(file, subdir="general")
         return {"url": url, "filename": file.filename}
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error(f"Upload validation error: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid request")
     except Exception as e:
         logger.error(f"Upload error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Erro ao fazer upload")
@@ -780,7 +892,8 @@ async def upload_video(
         url = await storage.save_file(file, subdir="videos")
         return {"url": url, "filename": file.filename}
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error(f"Video upload validation error: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid request")
     except Exception as e:
         logger.error(f"Video upload error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Erro ao fazer upload do video")
@@ -799,7 +912,8 @@ async def upload_audio(
         url = await storage.save_file(file, subdir="audio")
         return {"url": url, "filename": file.filename}
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error(f"Audio upload validation error: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail="Invalid request")
     except Exception as e:
         logger.error(f"Audio upload error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Erro ao fazer upload do audio")
