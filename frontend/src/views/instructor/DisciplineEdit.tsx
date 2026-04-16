@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { disciplinesApi, coursesApi } from '../../services/api';
+import { unwrapList } from '../../lib/utils';
 import { Button } from '../../components/ui/Button';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Input } from '../../components/ui/Input';
@@ -45,7 +46,7 @@ export default function DisciplineEdit() {
       ]);
       if (controller.signal.aborted) return;
       setDiscipline(disc);
-      setCourses(Array.isArray(courseList) ? courseList : []);
+      setCourses(unwrapList(courseList));
       if (disc.image) setImagePreview(disc.image);
     } catch {
       if (controller.signal.aborted) return;

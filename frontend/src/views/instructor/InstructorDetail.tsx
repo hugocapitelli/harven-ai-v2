@@ -4,6 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useAuth } from '../../contexts/AuthContext';
 import { disciplinesApi, coursesApi, sessionReviewsApi } from '../../services/api';
+import { unwrapList } from '../../lib/utils';
 import { Button } from '../../components/ui/Button';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Input } from '../../components/ui/Input';
@@ -85,8 +86,8 @@ export default function InstructorDetail() {
       ]);
       if (controller.signal.aborted) return;
       setDiscipline(disc);
-      setCourses(Array.isArray(courseList) ? courseList : []);
-      setStudents(Array.isArray(studentStats) ? studentStats : []);
+      setCourses(unwrapList(courseList));
+      setStudents(unwrapList(studentStats));
       setStats(discStats ?? {});
     } catch (err) {
       if (controller.signal.aborted) return;
@@ -107,7 +108,7 @@ export default function InstructorDetail() {
     if (activeTab !== 'conversas' || !id) return;
     const controller = new AbortController();
     sessionReviewsApi.listByDiscipline(id).then((data) => {
-      if (!controller.signal.aborted) setSessions(Array.isArray(data) ? data : []);
+      if (!controller.signal.aborted) setSessions(unwrapList(data));
     }).catch(() => {});
     return () => controller.abort();
   }, [activeTab, id]);

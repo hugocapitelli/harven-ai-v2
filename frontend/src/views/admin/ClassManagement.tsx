@@ -187,7 +187,7 @@ export default function ClassManagement() {
       await disciplinesApi.addStudentsBatch(editState.discipline.id, ras.map((ra) => ({ ra })) as Record<string, unknown>[]);
       toast.success(`${ras.length} alunos importados.`);
       const s = await disciplinesApi.getStudents(editState.discipline.id);
-      setStudents(Array.isArray(s) ? s : []);
+      setStudents(unwrapList(s));
     } catch { toast.error('Erro na importação.'); }
     finally { setSaving(false); if (csvRef.current) csvRef.current.value = ''; }
   };
@@ -336,7 +336,7 @@ export default function ClassManagement() {
                         if (!title || !title.trim()) return;
                         await coursesApi.create({ title: title.trim(), discipline_id: editState.discipline!.id, status: 'draft' } as Record<string, unknown>);
                         const c = await coursesApi.listByClass(editState.discipline!.id);
-                        setCourses(Array.isArray(c) ? c : []);
+                        setCourses(unwrapList(c));
                         toast.success('Curso criado.');
                       } catch { toast.error('Erro.'); }
                     }}>
