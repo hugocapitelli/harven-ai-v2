@@ -84,8 +84,13 @@ export default function AdminConsole() {
       toast.success(actionType === 'announcement' ? 'Comunicado enviado.' : 'Manutenção agendada.');
       setShowActionModal(false);
       setActionMessage('');
-    } catch {
-      toast.error('Erro ao enviar ação.');
+    } catch (err: any) {
+      const status = err?.response?.status;
+      if (status === 404 || status === 405) {
+        toast.error('Ações globais ainda não estão disponíveis no backend.');
+      } else {
+        toast.error(err?.response?.data?.detail || 'Erro ao enviar ação.');
+      }
     } finally {
       setSending(false);
     }
