@@ -27,6 +27,13 @@ const EDIT_TABS = [
   { id: 'students', label: 'Alunos', icon: 'group' },
 ];
 
+// Generate semester options: current year ± 2 years × (1, 2)
+const SEMESTER_OPTIONS = (() => {
+  const currentYear = new Date().getFullYear();
+  const years = [currentYear - 1, currentYear, currentYear + 1, currentYear + 2];
+  return years.flatMap((y) => [`${y}.1`, `${y}.2`]);
+})();
+
 export default function ClassManagement() {
   const [disciplines, setDisciplines] = useState<Discipline[]>([]);
   const [loading, setLoading] = useState(true);
@@ -50,9 +57,11 @@ export default function ClassManagement() {
   const loadDisciplines = useCallback(async (controller: AbortController) => {
     try {
       setLoading(true);
-      const data = await disciplinesApi.list();
+      const res = await disciplinesApi.list();
       if (controller.signal.aborted) return;
-      setDisciplines(Array.isArray(data) ? data : []);
+      // Backend returns paginated response: { data: [...], total, page, per_page }
+      const list = Array.isArray(res) ? res : (Array.isArray(res?.data) ? res.data : []);
+      setDisciplines(list);
     } catch {
       if (controller.signal.aborted) return;
     } finally {
@@ -296,7 +305,17 @@ export default function ClassManagement() {
                 <div className="flex flex-col gap-4 max-w-md">
                   <Input label="Nome" value={editForm.name} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} />
                   <Input label="Código" value={editForm.code} onChange={(e) => setEditForm((f) => ({ ...f, code: e.target.value }))} />
-                  <Input label="Semestre" placeholder="2026.1" value={editForm.semester} onChange={(e) => setEditForm((f) => ({ ...f, semester: e.target.value }))} />
+                  <div className="w-full">
+                    <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-gray-400">Semestre</label>
+                    <select
+                      value={editForm.semester}
+                      onChange={(e) => setEditForm((f) => ({ ...f, semester: e.target.value }))}
+                      className="w-full rounded-lg border border-harven-border bg-harven-bg px-4 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    >
+                      <option value="">Selecione...</option>
+                      {SEMESTER_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </div>
                   <Input label="Descrição" value={editForm.description} onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))} />
                   <Button onClick={handleSaveInfo} disabled={saving}>{saving ? 'Salvando...' : 'Salvar'}</Button>
                 </div>
@@ -452,12 +471,17 @@ export default function ClassManagement() {
                 onChange={(e) => setCreateForm((f) => ({ ...f, code: e.target.value }))}
                 required
               />
-              <Input
-                label="Semestre"
-                placeholder="Ex: 2026.1"
-                value={createForm.semester}
-                onChange={(e) => setCreateForm((f) => ({ ...f, semester: e.target.value }))}
-              />
+              <div className="w-full">
+                <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-gray-400">Semestre</label>
+                <select
+                  value={createForm.semester}
+                  onChange={(e) => setCreateForm((f) => ({ ...f, semester: e.target.value }))}
+                  className="w-full rounded-lg border border-harven-border bg-harven-bg px-4 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                >
+                  <option value="">Selecione...</option>
+                  {SEMESTER_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
               <Input
                 label="Descrição"
                 placeholder="Breve descrição"
