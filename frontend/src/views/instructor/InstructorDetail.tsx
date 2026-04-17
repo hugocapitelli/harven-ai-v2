@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { useAuth } from '../../contexts/AuthContext';
-import { disciplinesApi, coursesApi, sessionReviewsApi } from '../../services/api';
+import { disciplinesApi, coursesApi } from '../../services/api';
 import { unwrapList } from '../../lib/utils';
 import { Button } from '../../components/ui/Button';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
@@ -87,7 +87,8 @@ export default function InstructorDetail() {
       if (controller.signal.aborted) return;
       setDiscipline(disc);
       setCourses(unwrapList(courseList));
-      setStudents(unwrapList(studentStats));
+      const sStats = (studentStats && typeof studentStats === 'object' && 'students' in studentStats) ? (studentStats as any).students : unwrapList(studentStats);
+      setStudents(Array.isArray(sStats) ? sStats : []);
       setStats(discStats ?? {});
     } catch (err) {
       if (controller.signal.aborted) return;
@@ -107,7 +108,7 @@ export default function InstructorDetail() {
   useEffect(() => {
     if (activeTab !== 'conversas' || !id) return;
     const controller = new AbortController();
-    sessionReviewsApi.listByDiscipline(id).then((data) => {
+    disciplinesApi.getSessions(id).then((data) => {
       if (!controller.signal.aborted) setSessions(unwrapList(data));
     }).catch(() => {});
     return () => controller.abort();
@@ -117,7 +118,7 @@ export default function InstructorDetail() {
     if (!id || !newCourseTitle.trim()) return;
     setSaving(true);
     try {
-      await coursesApi.create({ title: newCourseTitle.trim(), discipline_id: id } as Record<string, unknown>);
+      await coursesApi.createInClass(id, { title: newCourseTitle.trim(), status: 'draft' });
       toast.success('Curso adicionado.');
       setShowAddCourse(false);
       setNewCourseTitle('');
