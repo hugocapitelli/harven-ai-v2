@@ -63,7 +63,7 @@ export default function DisciplineEdit() {
   }, [loadData]);
 
   const handleSaveDiscipline = async () => {
-    if (!discipline.title?.trim()) { toast.error('Título é obrigatório.'); return; }
+    if (!discipline.name?.trim()) { toast.error('Título é obrigatório.'); return; }
     setSaving(true);
     try {
       if (isNew) {
@@ -144,7 +144,7 @@ export default function DisciplineEdit() {
             <span className="material-symbols-outlined">arrow_back</span>
           </Button>
           <div>
-            <h1 className="text-xl font-display font-bold text-foreground">{isNew ? 'Nova Disciplina' : discipline.title}</h1>
+            <h1 className="text-xl font-display font-bold text-foreground">{isNew ? 'Nova Disciplina' : discipline.name}</h1>
             {discipline.code && <p className="text-xs text-muted-foreground">{discipline.code}</p>}
           </div>
         </div>
@@ -226,8 +226,8 @@ export default function DisciplineEdit() {
             <div className="flex flex-col gap-6 max-w-xl">
               <Input
                 label="Título"
-                value={discipline.title ?? ''}
-                onChange={(e) => setDiscipline((d) => ({ ...d, title: e.target.value }))}
+                value={discipline.name ?? ''}
+                onChange={(e) => setDiscipline((d) => ({ ...d, name: e.target.value }))}
               />
               <div className="grid grid-cols-2 gap-4">
                 <Input

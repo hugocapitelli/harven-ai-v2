@@ -172,7 +172,7 @@ export default function InstructorDetail() {
           <Button variant="ghost" size="sm" className="mb-4 text-accent-foreground/70" onClick={() => navigate('/instructor')}>
             <span className="material-symbols-outlined text-[16px] mr-1">arrow_back</span> Voltar
           </Button>
-          <h1 className="text-3xl font-display font-bold">{discipline.title}</h1>
+          <h1 className="text-3xl font-display font-bold">{discipline.name}</h1>
           {discipline.code && <p className="text-sm opacity-70 mt-1">{discipline.code} · {discipline.department ?? ''}</p>}
           <div className="flex gap-4 mt-6">
             {[

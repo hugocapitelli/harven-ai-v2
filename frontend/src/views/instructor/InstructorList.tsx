@@ -50,7 +50,7 @@ export default function InstructorList() {
   }, [user]);
 
   const filtered = disciplines.filter((d) =>
-    (d.title ?? '').toLowerCase().includes(search.toLowerCase()) ||
+    (d.name ?? '').toLowerCase().includes(search.toLowerCase()) ||
     (d.code ?? '').toLowerCase().includes(search.toLowerCase()),
   );
 
@@ -114,13 +114,13 @@ export default function InstructorList() {
             <Card key={d.id} hoverEffect onClick={() => navigate(`/instructor/class/${d.id}`)}>
               {d.image && (
                 <div className="h-32 bg-muted overflow-hidden">
-                  <img src={d.image} alt={d.title} className="w-full h-full object-cover" />
+                  <img src={d.image} alt={d.name} className="w-full h-full object-cover" />
                 </div>
               )}
               <CardContent className="flex flex-col gap-3">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <h3 className="font-display font-bold text-foreground truncate">{d.title}</h3>
+                    <h3 className="font-display font-bold text-foreground truncate">{d.name}</h3>
                     {d.code && <p className="text-xs text-muted-foreground mt-0.5">{d.code}</p>}
                   </div>
                   <Badge variant={statusVariant(d.status)}>{d.status ?? 'Ativo'}</Badge>
@@ -156,7 +156,7 @@ export default function InstructorList() {
                 )}
               </div>
               <div className="flex-1 min-w-0">
-                <h3 className="font-display font-bold text-foreground truncate">{d.title}</h3>
+                <h3 className="font-display font-bold text-foreground truncate">{d.name}</h3>
                 <p className="text-xs text-muted-foreground">{d.code ?? '—'} · {d.department ?? '—'}</p>
               </div>
               <div className="flex items-center gap-4 text-xs text-muted-foreground shrink-0">

@@ -117,7 +117,7 @@ function AppRoutes() {
           <Route path="/course/:courseId/chapter/:chapterId/content/:contentId/revision" element={<ContentRevision />} />
           {/* Instructor */}
           <Route path="/instructor" element={<InstructorList />} />
-          <Route path="/instructor/class/:classId" element={<InstructorDetail />} />
+          <Route path="/instructor/class/:id" element={<InstructorDetail />} />
           <Route path="/instructor/discipline/:disciplineId/edit" element={<DisciplineEdit />} />
           <Route path="/session/:sessionId/review" element={<SessionReview />} />
           {/* Admin */}

@@ -30,7 +30,8 @@ export interface Course {
 
 export interface Discipline {
   id: string;
-  title: string;
+  name: string;
+  title?: string;
   code?: string;
   department?: string;
   image?: string;
