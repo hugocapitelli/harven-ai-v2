@@ -1093,12 +1093,16 @@ async def upload_chapter_file(
     else:
         ctype = "document"
 
-    return {
-        "url": url,
-        "filename": file.filename,
-        "type": ctype,
-        "size": file.size,
-    }
+    content_repo = ContentRepository(client)
+    content = content_repo.create({
+        "chapter_id": chapter_id,
+        "title": file.filename or "Uploaded content",
+        "content_type": ctype,
+        "file_url": url,
+        "body": "",
+    })
+
+    return content
 
 
 # ============================================
