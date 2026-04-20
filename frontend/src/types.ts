@@ -1,6 +1,6 @@
 // Harven AI v2 — Platform Type Definitions
 
-export type UserRole = 'STUDENT' | 'INSTRUCTOR' | 'ADMIN';
+export type UserRole = 'STUDENT' | 'INSTRUCTOR' | 'TEACHER' | 'ADMIN';
 
 export interface User {
   id: string;

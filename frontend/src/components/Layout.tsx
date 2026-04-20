@@ -7,17 +7,20 @@ import { cn, unwrapList } from '../lib/utils';
 import type { ReactNode } from 'react';
 
 // --- Sidebar ---
-const navItems = {
+const instructorNav = [
+  { to: '/instructor', icon: 'school', label: 'Minhas Disciplinas' },
+  { to: '/courses', icon: 'menu_book', label: 'Cursos' },
+];
+
+const navItems: Record<string, { to: string; icon: string; label: string; requireGamification?: boolean }[]> = {
   STUDENT: [
     { to: '/dashboard', icon: 'home', label: 'Dashboard' },
     { to: '/courses', icon: 'school', label: 'Meus Estudos' },
     { to: '/history', icon: 'history', label: 'Historico' },
     { to: '/achievements', icon: 'emoji_events', label: 'Conquistas', requireGamification: true },
   ],
-  INSTRUCTOR: [
-    { to: '/instructor', icon: 'school', label: 'Minhas Disciplinas' },
-    { to: '/courses', icon: 'menu_book', label: 'Cursos' },
-  ],
+  INSTRUCTOR: instructorNav,
+  TEACHER: instructorNav,
   ADMIN: [
     { to: '/admin', icon: 'dashboard', label: 'Console' },
     { to: '/admin/classes', icon: 'groups', label: 'Turmas' },

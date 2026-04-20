@@ -35,8 +35,8 @@ interface Certificate {
   url?: string;
 }
 
-const ROLE_LABELS = { STUDENT: 'Aluno', INSTRUCTOR: 'Professor', ADMIN: 'Administrador' };
-const ROLE_VARIANT = { STUDENT: 'default' as const, INSTRUCTOR: 'success' as const, ADMIN: 'danger' as const };
+const ROLE_LABELS: Record<string, string> = { STUDENT: 'Aluno', INSTRUCTOR: 'Professor', TEACHER: 'Professor', ADMIN: 'Administrador' };
+const ROLE_VARIANT: Record<string, 'default' | 'success' | 'danger'> = { STUDENT: 'default', INSTRUCTOR: 'success', TEACHER: 'success', ADMIN: 'danger' };
 
 const RARITY_COLORS: Record<string, string> = {
   comum: 'border-gray-300 bg-gray-50',

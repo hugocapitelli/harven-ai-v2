@@ -76,7 +76,9 @@ export function handleLtiCallback(searchParams: URLSearchParams): { token: strin
 export function getDefaultRoute(role: UserRole): string {
   switch (role) {
     case 'ADMIN': return '/admin';
-    case 'INSTRUCTOR': return '/instructor';
+    case 'INSTRUCTOR':
+    case 'TEACHER':
+      return '/instructor';
     default: return '/dashboard';
   }
 }
