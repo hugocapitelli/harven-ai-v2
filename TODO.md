@@ -1,22 +1,22 @@
 # Harven AI V2 — Pendências
 
-## Backend (precisa corrigir para startar)
-- [ ] `repositories/admin_repo.py` linha 3: trocar `from models.admin import` → `from models.settings import`
-- [ ] Grep por `models.admin` em todos os .py e corrigir para `models.settings`
-- [ ] Testar: `JWT_SECRET_KEY=test OPENAI_API_KEY=test python3 -c "from main import app"`
-- [ ] Corrigir TODOS os import errors até startar limpo
+## Backend
+- [x] Import errors corrigidos — `from main import app` passa limpo
+- [x] Todos os models/ corretos (settings.py, não admin.py)
 
-## Frontend (precisa corrigir para buildar)
-- [ ] TypeScript errors em views/courses/ (ContentRevision, CourseDetails, CourseEdit, CourseList)
-- [ ] Errors: unknown→ReactNode, wrong arg count em API calls
-- [ ] Testar: `npm run build` deve passar limpo
+## Frontend
+- [x] TypeScript errors corrigidos — `npx tsc --noEmit` zero erros
+- [x] Build passa limpo — `npm run build` OK (658ms)
 
 ## Infra
-- [ ] Docker Compose: ports issue (Generic encontrou)
-- [ ] Frontend Dockerfile: melhorar envsubst pattern
+- [x] Dockerfile.frontend: multi-stage build limpo, usa nginx.conf externo
+- [x] nginx.conf: SPA routing, security headers, caching correto
+- [x] docker-compose.yml: OK (backend:8000, frontend:3000→80)
+- [x] Dockerfile backend: OK (Python 3.11, uvicorn, healthcheck)
 
 ## Deploy
-- [ ] Criar novo Supabase project (Hugo precisa fazer)
-- [ ] Criar repo GitHub
-- [ ] Commit + push
-- [ ] Configurar EasyPanel
+- [ ] Configurar Supabase project (Hugo precisa criar ou confirmar existente)
+- [ ] Configurar .env no EasyPanel com credenciais reais
+- [ ] Deploy no EasyPanel (docker compose up)
+- [ ] Verificar domínios: harven.eximiaventures.com.br + api.harven.eximiaventures.com.br
+- [ ] Smoke test: login + chat Socrático + admin panel

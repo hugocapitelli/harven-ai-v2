@@ -1,3 +1,4 @@
+# Stage 1: Build
 FROM node:20-alpine AS builder
 WORKDIR /app
 ARG VITE_API_URL=https://api.harven.eximiaventures.com.br
@@ -7,23 +8,10 @@ RUN npm ci --ignore-scripts
 COPY frontend/ .
 RUN npm run build
 
+# Stage 2: Serve
 FROM nginx:1.26-alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
-
-# Simple nginx config for SPA (no API proxy needed — frontend calls API directly)
-RUN echo 'server { \
-    listen 80; \
-    server_name _; \
-    root /usr/share/nginx/html; \
-    index index.html; \
-    gzip on; \
-    gzip_types text/plain text/css application/json application/javascript text/xml application/xml text/javascript image/svg+xml; \
-    location = /index.html { add_header Cache-Control "no-cache, no-store, must-revalidate"; add_header Pragma "no-cache"; expires 0; } \
-    location / { try_files $uri $uri/ /index.html; add_header Cache-Control "no-cache, no-store, must-revalidate"; add_header Pragma "no-cache"; expires 0; } \
-    location /assets/ { expires 1y; add_header Cache-Control "public, immutable"; } \
-    location /health { access_log off; return 200 "ok"; add_header Content-Type text/plain; } \
-}' > /etc/nginx/conf.d/default.conf
-
+COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1/health > /dev/null 2>&1 || exit 1
 CMD ["nginx", "-g", "daemon off;"]
