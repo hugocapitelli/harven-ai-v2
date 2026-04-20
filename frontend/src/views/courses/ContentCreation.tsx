@@ -171,7 +171,7 @@ export default function ContentCreation() {
 
       setTimeout(() => {
         navigate(
-          `/courses/${courseId}/chapters/${chapterId}/content/${uploadedContentId}/revision`,
+          `/course/${courseId}/chapter/${chapterId}/content/${uploadedContentId}/revision`,
         );
       }, 1000);
     } catch (err) {
@@ -219,7 +219,7 @@ export default function ContentCreation() {
       }
 
       navigate(
-        `/courses/${courseId}/chapters/${chapterId}/content/${contentId}/revision`,
+        `/course/${courseId}/chapter/${chapterId}/content/${contentId}/revision`,
       );
     } catch (err) {
       console.error('Save failed', err);

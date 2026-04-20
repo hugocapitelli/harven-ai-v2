@@ -96,7 +96,7 @@ export default function ChapterDetail() {
     return (
       <div className="mx-auto max-w-6xl px-6 py-8">
         <p className="text-muted-foreground">Capítulo não encontrado.</p>
-        <Link to={`/courses/${courseId}`} className="mt-4 inline-block text-sm text-primary underline">
+        <Link to={`/course/${courseId}`} className="mt-4 inline-block text-sm text-primary underline">
           Voltar ao curso
         </Link>
       </div>
@@ -109,7 +109,7 @@ export default function ChapterDetail() {
     <div className="mx-auto max-w-6xl px-6 py-8">
       {/* Breadcrumb */}
       <nav className="mb-6 flex items-center gap-2 text-sm text-muted-foreground">
-        <Link to={`/courses/${courseId}`} className="hover:text-foreground transition-colors">
+        <Link to={`/course/${courseId}`} className="hover:text-foreground transition-colors">
           Curso
         </Link>
         <span className="material-symbols-outlined text-base">chevron_right</span>
@@ -184,7 +184,7 @@ export default function ChapterDetail() {
                       <button
                         key={content.id}
                         onClick={() =>
-                          navigate(`/courses/${courseId}/chapters/${chapterId}/content/${content.id}`)
+                          navigate(`/course/${courseId}/chapter/${chapterId}/content/${content.id}`)
                         }
                         className="group relative flex w-full items-center gap-4 rounded-xl border border-border bg-card p-4 text-left transition-all hover:border-primary/40 hover:shadow-sm"
                       >
@@ -256,7 +256,7 @@ export default function ChapterDetail() {
                 <button
                   onClick={() => {
                     const next = contents.find((c) => !c.completed) ?? contents[0];
-                    navigate(`/courses/${courseId}/chapters/${chapterId}/content/${next.id}`);
+                    navigate(`/course/${courseId}/chapter/${chapterId}/content/${next.id}`);
                   }}
                   className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-harven-primary px-4 py-2.5 text-sm font-semibold text-harven-dark transition-colors hover:bg-primary-dark"
                 >
