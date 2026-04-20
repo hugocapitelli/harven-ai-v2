@@ -1098,8 +1098,7 @@ async def upload_chapter_file(
         "chapter_id": chapter_id,
         "title": file.filename or "Uploaded content",
         "content_type": ctype,
-        "file_url": url,
-        "body": "",
+        "media_url": url,
     })
 
     return content
