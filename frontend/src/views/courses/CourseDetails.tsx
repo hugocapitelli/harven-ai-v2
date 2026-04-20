@@ -88,19 +88,19 @@ export default function CourseDetails({ userRole }: CourseDetailsProps) {
   );
 
   return (
-    <div className="flex flex-col min-h-full bg-background animate-in fade-in duration-500">
+    <div className="bg-background animate-in fade-in duration-500">
       {/* Banner */}
-      <div className="relative h-64 bg-harven-dark overflow-hidden">
-        {(course.image || course.image_url) && <img src={String(course.image || course.image_url)} className="w-full h-full object-cover opacity-30" alt="" />}
-        <div className="absolute inset-0 bg-gradient-to-t from-harven-dark via-harven-dark/60 to-transparent p-8 flex flex-col justify-end">
-          <button onClick={() => navigate(-1)} className="absolute top-4 left-4 flex items-center gap-2 text-white/70 hover:text-white bg-black/20 hover:bg-black/40 px-3 py-1.5 rounded-lg backdrop-blur-sm">
-            <span className="material-symbols-outlined text-[20px]">arrow_back</span><span className="text-sm font-medium">Voltar</span>
-          </button>
-          <div className="max-w-6xl mx-auto w-full">
-            <h1 className="text-3xl md:text-4xl font-display font-bold text-white">{String(course.title)}</h1>
-            <p className="text-white/70 text-sm mt-2">Instrutor • {String(course.status || 'Ativo')}</p>
+      <div className="relative bg-harven-dark overflow-hidden">
+        {(course.image || course.image_url) && <img src={String(course.image || course.image_url)} className="absolute inset-0 w-full h-full object-cover opacity-30" alt="" />}
+        <div className="relative z-10 px-8 pt-6 pb-10 max-w-6xl mx-auto w-full">
+          <div className="flex items-center justify-between mb-8">
+            <button onClick={() => navigate(-1)} className="flex items-center gap-2 text-white/70 hover:text-white bg-black/20 hover:bg-black/40 px-3 py-1.5 rounded-lg backdrop-blur-sm">
+              <span className="material-symbols-outlined text-[20px]">arrow_back</span><span className="text-sm font-medium">Voltar</span>
+            </button>
+            {isInstructor && <button onClick={() => navigate(`/courses/${courseId}/edit`)} className="text-white/50 hover:text-primary transition-colors"><span className="material-symbols-outlined">settings</span></button>}
           </div>
-          {isInstructor && <button onClick={() => navigate(`/courses/${courseId}/edit`)} className="absolute top-4 right-4 text-white/50 hover:text-primary transition-colors"><span className="material-symbols-outlined">settings</span></button>}
+          <h1 className="text-3xl md:text-4xl font-display font-bold text-white">{String(course.title)}</h1>
+          <p className="text-white/70 text-sm mt-2">Instrutor &bull; {String(course.status || 'Ativo')}</p>
         </div>
       </div>
 
