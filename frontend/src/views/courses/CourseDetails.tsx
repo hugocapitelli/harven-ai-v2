@@ -88,23 +88,29 @@ export default function CourseDetails({ userRole }: CourseDetailsProps) {
   );
 
   return (
-    <div className="bg-background animate-in fade-in duration-500">
-      {/* Banner */}
-      <div className="relative bg-harven-dark overflow-hidden">
-        {(course.image || course.image_url) && <img src={String(course.image || course.image_url)} className="absolute inset-0 w-full h-full object-cover opacity-30" alt="" />}
-        <div className="relative z-10 px-8 pt-6 pb-10 max-w-6xl mx-auto w-full">
-          <div className="flex items-center justify-between mb-8">
-            <button onClick={() => navigate(-1)} className="flex items-center gap-2 text-white/70 hover:text-white bg-black/20 hover:bg-black/40 px-3 py-1.5 rounded-lg backdrop-blur-sm">
-              <span className="material-symbols-outlined text-[20px]">arrow_back</span><span className="text-sm font-medium">Voltar</span>
+    <div className="max-w-7xl mx-auto p-8 flex flex-col gap-8 animate-in fade-in duration-500">
+      {/* Header Banner */}
+      <div className="relative rounded-xl overflow-hidden bg-accent text-accent-foreground p-8">
+        {(course.image || course.image_url) && (
+          <img src={String(course.image || course.image_url)} alt="" className="absolute inset-0 w-full h-full object-cover opacity-20" />
+        )}
+        <div className="relative z-10">
+          <div className="flex items-center justify-between mb-4">
+            <button onClick={() => navigate(-1)} className="flex items-center gap-1 text-accent-foreground/70 hover:text-accent-foreground text-sm">
+              <span className="material-symbols-outlined text-[16px]">arrow_back</span> Voltar
             </button>
-            {isInstructor && <button onClick={() => navigate(`/courses/${courseId}/edit`)} className="text-white/50 hover:text-primary transition-colors"><span className="material-symbols-outlined">settings</span></button>}
+            {isInstructor && (
+              <button onClick={() => navigate(`/courses/${courseId}/edit`)} className="text-accent-foreground/50 hover:text-primary transition-colors">
+                <span className="material-symbols-outlined">settings</span>
+              </button>
+            )}
           </div>
-          <h1 className="text-3xl md:text-4xl font-display font-bold text-white">{String(course.title)}</h1>
-          <p className="text-white/70 text-sm mt-2">Instrutor &bull; {String(course.status || 'Ativo')}</p>
+          <h1 className="text-3xl font-display font-bold">{String(course.title)}</h1>
+          <p className="text-sm opacity-70 mt-1">Instrutor &bull; {String(course.status || 'Ativo')}</p>
         </div>
       </div>
 
-      <div className="max-w-6xl mx-auto w-full px-4 md:px-8 py-8 space-y-8">
+      <div className="flex flex-col gap-8">
         {/* Tabs */}
         <div className="bg-white rounded-xl border border-harven-border p-1.5 shadow-sm flex overflow-x-auto no-scrollbar">
           {tabs.map(tab => (
