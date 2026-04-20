@@ -286,7 +286,7 @@ class AIService:
 
         user_msg = (
             f"Conteudo do capitulo: {chapter_title}\n\n"
-            f"{chapter_content[:8000]}\n\n"
+            f"{chapter_content[:15000]}\n\n"
             f"Objetivo de aprendizagem: {learning_objective or 'nao especificado'}\n"
             f"Dificuldade: {difficulty}\n"
             f"Gere ate {max_questions} perguntas socraticas em JSON."

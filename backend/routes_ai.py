@@ -174,6 +174,40 @@ async def ai_creator_generate(
         raise HTTPException(status_code=500, detail="Erro interno do servidor")
 
 
+@router.post("/api/ai/creator/suggest-chapters", tags=["AI"])
+async def ai_suggest_chapters(
+    req: QuestionGenerationRequest,
+    current_user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
+):
+    """Analyze uploaded content and suggest chapter splits based on headings."""
+    content_text = req.chapter_content or ""
+    if not content_text.strip() and req.content_id:
+        from repositories import ContentRepository
+        content_repo = ContentRepository(client)
+        content_record = content_repo.get_by_id(req.content_id)
+        if content_record:
+            content_text = content_record.get("body") or ""
+
+    if not content_text.strip():
+        return {"chapters": [], "message": "Sem conteudo para analisar"}
+
+    from services.text_extractor import split_markdown_into_chapters
+    chapters = split_markdown_into_chapters(content_text)
+    return {
+        "chapters": [
+            {
+                "title": c["title"],
+                "preview": c["body"][:200] + "..." if len(c["body"]) > 200 else c["body"],
+                "word_count": len(c["body"].split()),
+            }
+            for c in chapters
+        ],
+        "total_chapters": len(chapters),
+        "total_words": len(content_text.split()),
+    }
+
+
 @router.post("/api/ai/socrates/dialogue", tags=["AI"])
 async def ai_socrates_dialogue(
     req: SocraticDialogueRequest,

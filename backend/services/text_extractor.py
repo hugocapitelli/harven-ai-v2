@@ -1,22 +1,22 @@
-"""Text extraction from uploaded documents (PDF, DOCX, TXT, MD, HTML)."""
+"""Text extraction from uploaded documents — Markdown output via pymupdf4llm."""
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict
 
 logger = logging.getLogger("harven")
 
 
 def extract_text(file_path: str, mime_type: str = "") -> Optional[str]:
-    """Extract plain text from a document file. Returns None on failure."""
+    """Extract text as Markdown from a document file."""
     try:
         ext = Path(file_path).suffix.lower()
-
         if ext == ".pdf" or "pdf" in mime_type:
-            return _extract_pdf(file_path)
+            return _extract_pdf_markdown(file_path)
         elif ext in (".docx",) or "wordprocessingml" in mime_type:
-            return _extract_docx(file_path)
+            return _extract_docx_markdown(file_path)
         elif ext in (".txt", ".md", ".html", ".htm", ".csv"):
             return _extract_plain(file_path)
         else:
@@ -28,7 +28,7 @@ def extract_text(file_path: str, mime_type: str = "") -> Optional[str]:
 
 
 def extract_text_from_bytes(data: bytes, filename: str, mime_type: str = "") -> Optional[str]:
-    """Extract text from in-memory bytes by writing to a temp file."""
+    """Extract text from in-memory bytes."""
     ext = Path(filename).suffix.lower() or ".bin"
     with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
         tmp.write(data)
@@ -39,26 +39,78 @@ def extract_text_from_bytes(data: bytes, filename: str, mime_type: str = "") -> 
         os.unlink(tmp_path)
 
 
-def _extract_pdf(path: str) -> Optional[str]:
-    import pdfplumber
+def extract_chapters_from_bytes(data: bytes, filename: str, mime_type: str = "") -> List[Dict[str, str]]:
+    """Extract text and split into chapters based on headings."""
+    ext = Path(filename).suffix.lower() or ".bin"
+    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+        tmp.write(data)
+        tmp_path = tmp.name
+    try:
+        md = extract_text(tmp_path, mime_type)
+        if not md:
+            return []
+        return split_markdown_into_chapters(md)
+    finally:
+        os.unlink(tmp_path)
 
-    pages = []
-    with pdfplumber.open(path) as pdf:
-        for page in pdf.pages:
-            text = page.extract_text()
-            if text:
-                pages.append(text.strip())
-    result = "\n\n".join(pages)
-    return result if result.strip() else None
+
+def split_markdown_into_chapters(md: str) -> List[Dict[str, str]]:
+    """Split markdown by top-level headings (# or ##) into chapters."""
+    lines = md.split("\n")
+    chapters: List[Dict[str, str]] = []
+    current_title = ""
+    current_lines: list[str] = []
+
+    for line in lines:
+        if re.match(r"^#{1,2}\s+", line):
+            if current_lines:
+                body = "\n".join(current_lines).strip()
+                if body:
+                    chapters.append({"title": current_title or "Introdução", "body": body})
+            current_title = re.sub(r"^#{1,2}\s+", "", line).strip()
+            current_lines = []
+        else:
+            current_lines.append(line)
+
+    if current_lines:
+        body = "\n".join(current_lines).strip()
+        if body:
+            chapters.append({"title": current_title or "Conteúdo", "body": body})
+
+    if not chapters and md.strip():
+        chapters.append({"title": "Conteúdo completo", "body": md.strip()})
+
+    return chapters
 
 
-def _extract_docx(path: str) -> Optional[str]:
+def _extract_pdf_markdown(path: str) -> Optional[str]:
+    import pymupdf4llm
+
+    md = pymupdf4llm.to_markdown(path)
+    return md.strip() if md and md.strip() else None
+
+
+def _extract_docx_markdown(path: str) -> Optional[str]:
     from docx import Document
 
     doc = Document(path)
-    paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-    result = "\n\n".join(paragraphs)
-    return result if result.strip() else None
+    lines = []
+    for p in doc.paragraphs:
+        text = p.text.strip()
+        if not text:
+            continue
+        style = (p.style.name or "").lower()
+        if "heading 1" in style:
+            lines.append(f"# {text}")
+        elif "heading 2" in style:
+            lines.append(f"## {text}")
+        elif "heading 3" in style:
+            lines.append(f"### {text}")
+        else:
+            lines.append(text)
+        lines.append("")
+    result = "\n".join(lines)
+    return result.strip() if result.strip() else None
 
 
 def _extract_plain(path: str) -> Optional[str]:

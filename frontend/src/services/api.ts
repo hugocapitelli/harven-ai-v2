@@ -166,6 +166,7 @@ export const uploadApi = {
 export const aiApi = {
   getStatus:         ()                                                   => api.get('/api/ai/status').then(d),
   generateQuestions: (data: Record<string, unknown>)                      => api.post('/api/ai/creator/generate', data).then(d),
+  suggestChapters:   (data: Record<string, unknown>)                      => api.post('/api/ai/creator/suggest-chapters', data).then(d),
   socraticDialogue:  (data: Record<string, unknown>)                      => api.post('/api/ai/socrates/dialogue', data).then(d),
   detectAI:          (data: Record<string, unknown>)                      => api.post('/api/ai/analyst/detect', data).then(d),
   editResponse:      (data: Record<string, unknown>)                      => api.post('/api/ai/editor/edit', data).then(d),
