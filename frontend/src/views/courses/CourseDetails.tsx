@@ -74,7 +74,7 @@ export default function CourseDetails({ userRole }: CourseDetailsProps) {
   ];
 
   if (loading) return (
-    <div className="flex flex-col flex-1 h-full bg-background">
+    <div className="flex flex-col min-h-full bg-background">
       <div className="h-64 bg-gray-200 animate-pulse" />
       <div className="max-w-6xl mx-auto w-full px-8 py-8 space-y-6">
         <div className="h-12 bg-gray-200 animate-pulse rounded-xl" />
@@ -88,7 +88,7 @@ export default function CourseDetails({ userRole }: CourseDetailsProps) {
   );
 
   return (
-    <div className="flex flex-col flex-1 h-full bg-background animate-in fade-in duration-500">
+    <div className="flex flex-col min-h-full bg-background animate-in fade-in duration-500">
       {/* Banner */}
       <div className="relative h-64 bg-harven-dark overflow-hidden">
         {(course.image || course.image_url) && <img src={String(course.image || course.image_url)} className="w-full h-full object-cover opacity-30" alt="" />}
