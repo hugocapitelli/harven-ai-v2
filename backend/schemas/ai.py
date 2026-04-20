@@ -3,10 +3,12 @@ from typing import Optional
 
 
 class QuestionGenerationRequest(BaseModel):
-    content_id: str
-    count: int = Field(5, ge=1, le=20)
-    difficulty: Optional[str] = Field(None, pattern="^(easy|medium|hard|mixed)$")
-    language: str = "pt-BR"
+    content_id: Optional[str] = None
+    chapter_content: str = ""
+    chapter_title: str = ""
+    learning_objective: str = ""
+    difficulty: str = "intermediario"
+    max_questions: int = Field(3, ge=1, le=20)
 
 
 class SocraticDialogueRequest(BaseModel):
