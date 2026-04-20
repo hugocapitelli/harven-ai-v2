@@ -59,10 +59,12 @@ export default function ContentCreation() {
 
   // Step 1 — Upload
   const [contentType, setContentType] = useState<ContentType>('TEXT');
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadingIdx, setUploadingIdx] = useState(-1);
   const [uploading, setUploading] = useState(false);
   const [uploadedContentId, setUploadedContentId] = useState<string | null>(null);
+  const [, setUploadedIds] = useState<string[]>([]);
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -84,34 +86,64 @@ export default function ContentCreation() {
   }, []);
 
   // ---- Step 1 handlers ----
+  const addFiles = (incoming: FileList | File[]) => {
+    const valid = Array.from(incoming).filter((f) => f.size <= FILE_MAX[contentType]);
+    if (valid.length) setFiles((prev) => [...prev, ...valid]);
+  };
+
+  const removeFile = (idx: number) => setFiles((prev) => prev.filter((_, i) => i !== idx));
+
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
       setDragActive(false);
-      const f = e.dataTransfer.files[0];
-      if (f && f.size <= FILE_MAX[contentType]) setFile(f);
+      addFiles(e.dataTransfer.files);
     },
     [contentType],
   );
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (f && f.size <= FILE_MAX[contentType]) setFile(f);
+    if (e.target.files?.length) addFiles(e.target.files);
+    e.target.value = '';
+  };
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const fileIcon = (name: string) => {
+    const ext = name.split('.').pop()?.toLowerCase() ?? '';
+    if (['pdf'].includes(ext)) return 'picture_as_pdf';
+    if (['doc', 'docx'].includes(ext)) return 'description';
+    if (['mp4', 'mov', 'webm'].includes(ext)) return 'movie';
+    if (['mp3', 'wav', 'ogg'].includes(ext)) return 'audio_file';
+    if (['png', 'jpg', 'jpeg', 'gif'].includes(ext)) return 'image';
+    return 'insert_drive_file';
   };
 
   const handleUpload = async () => {
-    if (!file || !chapterId) return;
+    if (!files.length || !chapterId) return;
     setUploading(true);
-    setUploadProgress(0);
+    const ids: string[] = [];
     try {
-      const result = await contentsApi.uploadFile(chapterId, file, setUploadProgress);
-      const cId = result?.id ?? result?.content_id ?? result?.data?.id;
-      setUploadedContentId(cId);
+      for (let i = 0; i < files.length; i++) {
+        setUploadingIdx(i);
+        setUploadProgress(0);
+        const f = files[i]!;
+        const result = await contentsApi.uploadFile(chapterId, f, setUploadProgress);
+        const cId = result?.id ?? result?.content_id ?? result?.data?.id;
+        if (cId) ids.push(cId);
+      }
+      setUploadedIds(ids);
+      setUploadedContentId(ids[0] ?? null);
       setStep(2);
     } catch (err) {
       console.error('Upload failed', err);
     } finally {
       setUploading(false);
+      setUploadingIdx(-1);
     }
   };
 
@@ -255,7 +287,7 @@ export default function ContentCreation() {
                     key={key}
                     onClick={() => {
                       setContentType(key);
-                      setFile(null);
+                      setFiles([]);
                     }}
                     className={cn(
                       'flex items-center gap-2 rounded-xl border-2 px-4 py-2.5 text-sm font-medium transition-all',
@@ -270,62 +302,71 @@ export default function ContentCreation() {
             </div>
           </div>
 
+          {/* Selected files */}
+          {files.length > 0 && (
+            <div className="space-y-2">
+              {files.map((f, i) => (
+                <div key={`${f.name}-${i}`} className={cn(
+                  'flex items-center gap-3 rounded-xl border bg-card p-3 transition-all',
+                  uploading && uploadingIdx === i ? 'border-harven-primary' : 'border-border',
+                )}>
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-muted">
+                    <span className="material-symbols-outlined text-xl text-muted-foreground">{fileIcon(f.name)}</span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{f.name}</p>
+                    <p className="text-xs text-muted-foreground">{formatSize(f.size)}</p>
+                    {uploading && uploadingIdx === i && (
+                      <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-muted">
+                        <div className="h-full rounded-full bg-harven-primary transition-all duration-300" style={{ width: `${uploadProgress}%` }} />
+                      </div>
+                    )}
+                  </div>
+                  {uploading && uploadingIdx === i ? (
+                    <span className="text-xs font-medium text-harven-primary">{uploadProgress}%</span>
+                  ) : uploading && i < uploadingIdx ? (
+                    <span className="material-symbols-outlined text-lg text-green-500">check_circle</span>
+                  ) : !uploading ? (
+                    <button onClick={() => removeFile(i)} className="text-muted-foreground hover:text-destructive transition-colors">
+                      <span className="material-symbols-outlined text-lg">close</span>
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Drop zone */}
           <div
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragActive(true);
-            }}
+            onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
             onDragLeave={() => setDragActive(false)}
             onDrop={handleDrop}
             onClick={() => fileInputRef.current?.click()}
             className={cn(
-              'flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed py-16 transition-colors',
+              'flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed transition-colors',
+              files.length > 0 ? 'py-8' : 'py-16',
               dragActive ? 'border-harven-primary bg-harven-primary/5' : 'border-border hover:border-muted-foreground/40',
             )}
           >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept={FILE_ACCEPT[contentType]}
-              onChange={handleFileSelect}
-              className="hidden"
-            />
-            <span className="material-symbols-outlined text-5xl text-muted-foreground/40">
-              cloud_upload
+            <input ref={fileInputRef} type="file" accept={FILE_ACCEPT[contentType]} onChange={handleFileSelect} className="hidden" multiple />
+            <span className="material-symbols-outlined text-4xl text-muted-foreground/40">
+              {files.length > 0 ? 'add_circle_outline' : 'cloud_upload'}
             </span>
-            <p className="mt-3 text-sm font-medium text-foreground">
-              {file ? file.name : 'Arraste o arquivo ou clique para selecionar'}
+            <p className="mt-2 text-sm font-medium text-foreground">
+              {files.length > 0 ? 'Adicionar mais arquivos' : 'Arraste arquivos ou clique para selecionar'}
             </p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Máximo {Math.round(FILE_MAX[contentType] / (1024 * 1024))}MB &middot;{' '}
-              {FILE_ACCEPT[contentType]}
+              Máximo {Math.round(FILE_MAX[contentType] / (1024 * 1024))}MB &middot; {FILE_ACCEPT[contentType]}
             </p>
           </div>
 
-          {/* Upload progress */}
-          {uploading && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>Enviando...</span>
-                <span>{uploadProgress}%</span>
-              </div>
-              <div className="h-2 overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-full rounded-full bg-harven-primary transition-all duration-300"
-                  style={{ width: `${uploadProgress}%` }}
-                />
-              </div>
-            </div>
-          )}
-
           {/* Next */}
           <button
-            disabled={!file || uploading}
+            disabled={!files.length || uploading}
             onClick={handleUpload}
             className="flex w-full items-center justify-center gap-2 rounded-xl bg-harven-primary px-6 py-3 text-sm font-semibold text-harven-dark transition-colors hover:bg-primary-dark disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {uploading ? 'Enviando...' : 'Enviar e Continuar'}
+            {uploading ? `Enviando ${uploadingIdx + 1} de ${files.length}...` : `Enviar ${files.length > 1 ? `${files.length} arquivos` : ''} e Continuar`}
             <span className="material-symbols-outlined text-lg">arrow_forward</span>
           </button>
         </div>
@@ -374,8 +415,9 @@ export default function ContentCreation() {
           <button
             onClick={() => {
               setStep(1);
-              setFile(null);
+              setFiles([]);
               setUploadedContentId(null);
+              setUploadedIds([]);
             }}
             className="text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
