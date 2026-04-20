@@ -141,9 +141,24 @@ async def ai_creator_generate(
     client: Client = Depends(get_supabase),
 ):
     try:
+        chapter_content = req.chapter_content or ""
+        chapter_title = req.chapter_title or ""
+
+        # If no content provided but content_id exists, load from DB
+        if not chapter_content.strip() and req.content_id:
+            from repositories import ContentRepository
+            content_repo = ContentRepository(client)
+            content_record = content_repo.get_by_id(req.content_id)
+            if content_record:
+                chapter_content = content_record.get("body") or ""
+                chapter_title = chapter_title or content_record.get("title") or ""
+
+        if not chapter_content.strip():
+            raise HTTPException(status_code=400, detail="Sem conteudo para processar. Envie um documento com texto extraivel.")
+
         return await get_ai_service().generate_questions(
-            chapter_content=req.chapter_content,
-            chapter_title=req.chapter_title or "",
+            chapter_content=chapter_content,
+            chapter_title=chapter_title,
             learning_objective=req.learning_objective or "",
             difficulty=req.difficulty or "intermediario",
             max_questions=req.max_questions or 3,
@@ -152,6 +167,8 @@ async def ai_creator_generate(
         )
     except AIServiceError as e:
         raise HTTPException(status_code=503, detail=sanitize_ai_error(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Creator error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Erro interno do servidor")

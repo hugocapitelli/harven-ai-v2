@@ -1079,6 +1079,10 @@ async def upload_chapter_file(
     if not chapter_repo.get_by_id(chapter_id):
         raise HTTPException(status_code=404, detail="Capitulo nao encontrado")
 
+    # Read file bytes for text extraction before saving
+    file_bytes = await file.read()
+    await file.seek(0)
+
     url = await storage.save_file(file, subdir="contents")
 
     mime = file.content_type or ""
@@ -1093,13 +1097,23 @@ async def upload_chapter_file(
     else:
         ctype = "document"
 
+    # Extract text from document
+    extracted_text = None
+    if ctype in ("pdf", "document"):
+        from services.text_extractor import extract_text_from_bytes
+        extracted_text = extract_text_from_bytes(file_bytes, file.filename or "file", mime)
+
     content_repo = ContentRepository(client)
-    content = content_repo.create({
+    content_data = {
         "chapter_id": chapter_id,
         "title": file.filename or "Uploaded content",
         "content_type": ctype,
         "media_url": url,
-    })
+    }
+    if extracted_text:
+        content_data["body"] = extracted_text
+
+    content = content_repo.create(content_data)
 
     return content
 
