@@ -224,7 +224,7 @@ export default function InstructorDetail() {
             </Card>
           ) : (
             filteredCourses.map((c) => (
-              <Card key={c.id} hoverEffect onClick={() => navigate(`/instructor/course/${c.id}`)}>
+              <Card key={c.id} hoverEffect onClick={() => navigate(`/course/${c.id}`)}>
                 {c.image_url && (
                   <div className="h-32 bg-muted overflow-hidden">
                     <img src={c.image_url} alt="" className="w-full h-full object-cover" />
