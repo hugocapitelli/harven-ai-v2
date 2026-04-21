@@ -83,11 +83,25 @@ def split_markdown_into_chapters(md: str) -> List[Dict[str, str]]:
     return chapters
 
 
+def _clean_markdown(md: str) -> str:
+    """Clean up pymupdf4llm output for better readability."""
+    # Remove image placeholders
+    md = re.sub(r"^\*\*==>.*?<==\*\*\s*$", "", md, flags=re.MULTILINE)
+    md = re.sub(r"^==>.*?<==\s*$", "", md, flags=re.MULTILINE)
+    # Remove excessive blank lines (3+ → 2)
+    md = re.sub(r"\n{3,}", "\n\n", md)
+    # Fix table alignment — ensure proper pipe spacing
+    md = re.sub(r"\|\|", "| |", md)
+    return md.strip()
+
+
 def _extract_pdf_markdown(path: str) -> Optional[str]:
     import pymupdf4llm
 
     md = pymupdf4llm.to_markdown(path)
-    return md.strip() if md and md.strip() else None
+    if not md or not md.strip():
+        return None
+    return _clean_markdown(md)
 
 
 def _extract_docx_markdown(path: str) -> Optional[str]:
