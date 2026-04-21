@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
+import ReactMarkdown from 'react-markdown';
 import { contentsApi, questionsApi, aiApi } from '../../services/api';
 import { cn } from '../../lib/utils';
 import type { Content, Question } from '../../types';
@@ -116,7 +117,9 @@ export default function ContentRevision() {
             {(content?.body || content?.extracted_text) && (
               <div className="bg-white rounded-xl border border-harven-border p-6">
                 <h4 className="text-xs font-bold uppercase text-gray-400 mb-3">Texto Extraido</h4>
-                <div className="prose prose-sm max-w-none text-sm text-gray-600 whitespace-pre-wrap">{content.body || content.extracted_text}</div>
+                <div className="prose prose-sm max-w-none text-sm text-gray-700">
+                  <ReactMarkdown>{content.body || content.extracted_text || ''}</ReactMarkdown>
+                </div>
               </div>
             )}
           </div>

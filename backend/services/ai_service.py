@@ -295,9 +295,24 @@ class AIService:
         try:
             result = self._call_openai(CREATOR_PROMPT, user_msg, json_mode=True)
             self.track_token_usage(user_id, result["tokens"]["total"], db)
-            parsed = json.loads(result["content"])
+
+            raw_content = result["content"]
+            logger.info(f"AI response length: {len(raw_content)} chars")
+
+            try:
+                parsed = json.loads(raw_content)
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse AI JSON: {raw_content[:500]}")
+                parsed = {"questions": []}
+
+            questions = parsed.get("questions", parsed.get("perguntas", []))
+            if not isinstance(questions, list):
+                questions = []
+
+            logger.info(f"Generated {len(questions)} questions")
+
             return {
-                "questions": parsed.get("questions", []),
+                "questions": questions,
                 "metadata": {
                     "processing_time_ms": result["elapsed_ms"],
                     "model_used": result["model"],
@@ -308,6 +323,9 @@ class AIService:
             if "MOCK_MODE" in str(e):
                 return self._mock_questions(max_questions, chapter_title)
             raise
+        except Exception as e:
+            logger.error(f"Question generation failed: {e}", exc_info=True)
+            raise AIServiceError(f"Falha na geracao de perguntas: {e}")
 
     def _mock_questions(self, n: int, title: str) -> Dict[str, Any]:
         questions = [
