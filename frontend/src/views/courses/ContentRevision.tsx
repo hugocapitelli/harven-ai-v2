@@ -67,7 +67,12 @@ export default function ContentRevision() {
     if (!contentId) return;
     setReprocessing(true);
     try {
-      const result = await aiApi.generateQuestions(contentId);
+      const result = await aiApi.generateQuestions({
+        content_id: contentId,
+        chapter_content: content?.body || content?.extracted_text || '',
+        chapter_title: content?.title || '',
+        max_questions: 5,
+      });
       if (result?.questions) setQuestions(result.questions);
       toast.success('Questoes regeneradas pela IA');
     } catch { toast.error('Erro no reprocessamento'); }
