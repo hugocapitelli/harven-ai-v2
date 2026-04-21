@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
-import { contentsApi, aiApi } from '@/services/api';
+import { contentsApi, aiApi, questionsApi } from '@/services/api';
 
 type ContentType = 'TEXT' | 'VIDEO' | 'AUDIO';
 type Method = 'ai' | 'manual';
@@ -161,12 +161,29 @@ export default function ContentCreation() {
     setAiStage('connecting');
 
     try {
-      await new Promise((r) => setTimeout(r, 1200));
+      await new Promise((r) => setTimeout(r, 800));
       setAiStage('analyzing');
-      await new Promise((r) => setTimeout(r, 1500));
+      await new Promise((r) => setTimeout(r, 800));
       setAiStage('generating');
 
-      await aiApi.generateQuestions({ content_id: uploadedContentId, chapter_content: '', chapter_title: title || '', max_questions: 5 });
+      const result = await aiApi.generateQuestions({
+        content_id: uploadedContentId,
+        chapter_content: '',
+        chapter_title: title || '',
+        max_questions: 5,
+      });
+
+      // Save generated questions to DB
+      if (result?.questions?.length) {
+        const mapped = result.questions.map((q: Record<string, unknown>) => ({
+          question_text: q.text || q.question || '',
+          expected_answer: (q.followup_prompts as string[])?.[0] || '',
+          difficulty: q.difficulty || 'medium',
+          skill: q.skill || 'analyze',
+        }));
+        await questionsApi.create(uploadedContentId, mapped);
+      }
+
       setAiStage('done');
 
       setTimeout(() => {
