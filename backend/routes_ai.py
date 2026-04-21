@@ -64,11 +64,12 @@ def get_integration_service(client: Client = Depends(get_supabase)) -> Integrati
 
 
 class QuestionGenerationRequest(BaseModel):
-    chapter_content: str = Field(..., min_length=10, max_length=50000)
-    chapter_title: Optional[str] = Field(None, max_length=300)
-    learning_objective: Optional[str] = Field(None, max_length=1000)
+    content_id: Optional[str] = None
+    chapter_content: str = Field("", max_length=50000)
+    chapter_title: Optional[str] = Field("", max_length=300)
+    learning_objective: Optional[str] = Field("", max_length=1000)
     difficulty: Optional[str] = Field("intermediario", max_length=30)
-    max_questions: Optional[int] = Field(3, ge=1, le=10)
+    max_questions: Optional[int] = Field(5, ge=1, le=20)
 
 
 class SocraticDialogueRequest(BaseModel):
