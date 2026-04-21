@@ -166,7 +166,7 @@ export default function ContentCreation() {
       await new Promise((r) => setTimeout(r, 1500));
       setAiStage('generating');
 
-      await aiApi.generateQuestions({ content_id: uploadedContentId, chapter_content: body || 'Conteúdo do arquivo enviado', chapter_title: title || 'Conteúdo', max_questions: 3 });
+      await aiApi.generateQuestions({ content_id: uploadedContentId, chapter_content: '', chapter_title: title || '', max_questions: 5 });
       setAiStage('done');
 
       setTimeout(() => {
