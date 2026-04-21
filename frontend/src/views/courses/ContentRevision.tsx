@@ -73,7 +73,16 @@ export default function ContentRevision() {
         chapter_title: content?.title || '',
         max_questions: 5,
       });
-      if (result?.questions) setQuestions(result.questions);
+      if (result?.questions) {
+        const mapped = result.questions.map((q: Record<string, unknown>, i: number) => ({
+          id: q.id || `ai-${i}`,
+          question: q.question || q.text || '',
+          expected_answer: q.expected_answer || q.followup_prompts?.[0] || '',
+          difficulty: q.difficulty || 'medium',
+          skill: q.skill || '',
+        }));
+        setQuestions(mapped);
+      }
       toast.success('Questoes regeneradas pela IA');
     } catch { toast.error('Erro no reprocessamento'); }
     finally { setReprocessing(false); }
