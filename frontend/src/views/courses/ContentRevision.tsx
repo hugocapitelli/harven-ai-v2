@@ -38,7 +38,13 @@ export default function ContentRevision() {
       try {
         const [c, q] = await Promise.all([contentsApi.get(contentId), questionsApi.list(contentId)]);
         if (ctrl.signal.aborted) return;
-        setContent(c); setQuestions(Array.isArray(q) ? q : []);
+        setContent(c);
+        const rawQ = Array.isArray(q) ? q : [];
+        setQuestions(rawQ.map((item: Record<string, unknown>) => ({
+          ...item,
+          question: item.question || item.question_text || '',
+          expected_answer: item.expected_answer || '',
+        })));
       } catch { /* handled */ }
       finally { if (!ctrl.signal.aborted) setLoading(false); }
     })();
