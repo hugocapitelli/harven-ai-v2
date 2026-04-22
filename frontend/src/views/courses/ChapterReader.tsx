@@ -340,7 +340,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
           {
             id: '2',
             role: 'assistant',
-            content: aiResponse?.response ?? aiResponse?.message ?? 'Vamos explorar juntos. O que voce pensa?',
+            content: typeof aiResponse === 'string' ? aiResponse : (aiResponse?.response ?? aiResponse?.content ?? aiResponse?.message ?? 'Vamos explorar juntos. O que voce pensa?'),
             created_at: new Date().toISOString(),
             is_ai: true,
           },
@@ -377,7 +377,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
       const aiMsg: ChatMessage = {
         id: String(Date.now() + 1),
         role: 'assistant',
-        content: aiResponse?.response ?? aiResponse?.message ?? 'Interessante ponto de vista...',
+        content: typeof aiResponse === 'string' ? aiResponse : (aiResponse?.response ?? aiResponse?.content ?? aiResponse?.message ?? 'Interessante ponto de vista...'),
         created_at: new Date().toISOString(),
         is_ai: true,
       };
