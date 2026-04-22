@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
+import ReactMarkdown from 'react-markdown';
 import DOMPurify from 'dompurify';
 import {
   contentsApi,
@@ -668,22 +669,29 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                   />
                 )}
 
-                {/* Text — read view */}
-                {content.type === 'TEXT' && !editing && activeView === 'text' && sanitizedHtml && (
+                {/* Text/PDF — read view (Markdown) */}
+                {!editing && activeView === 'text' && (content?.body || content?.extracted_text) && (
+                  <article className="bg-white rounded-xl border border-harven-border p-8 prose prose-sm prose-headings:text-harven-dark prose-headings:font-display prose-strong:text-gray-800 prose-table:text-xs max-w-none leading-relaxed">
+                    <ReactMarkdown>{content.body || content.extracted_text || ''}</ReactMarkdown>
+                  </article>
+                )}
+
+                {/* Text — HTML fallback (legacy content) */}
+                {content.type === 'TEXT' && !editing && activeView === 'text' && sanitizedHtml && !(content?.body || content?.extracted_text) && (
                   <article
                     className="bg-white rounded-xl border border-harven-border p-8 prose prose-sm max-w-none"
                     dangerouslySetInnerHTML={{ __html: htmlWithAnchors }}
                   />
                 )}
 
-                {/* Text — empty */}
-                {content.type === 'TEXT' && !editing && activeView === 'text' && !sanitizedHtml && (
+                {/* Empty state */}
+                {!editing && activeView === 'text' && !sanitizedHtml && !(content?.body || content?.extracted_text) && (
                   <div className="bg-white rounded-xl border border-harven-border p-16 text-center">
                     <span className="material-symbols-outlined text-5xl text-gray-300">
                       description
                     </span>
                     <p className="mt-3 text-sm text-muted-foreground">
-                      Nenhum conteudo de texto disponivel.
+                      Nenhum conteúdo de texto disponível.
                     </p>
                   </div>
                 )}
