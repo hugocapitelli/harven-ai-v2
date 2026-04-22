@@ -29,12 +29,17 @@ export default function Login() {
   return (
     <div className="h-screen flex">
       {/* Left branding */}
-      <div className="hidden md:flex w-1/2 bg-harven-dark relative items-center justify-center overflow-hidden">
+      <div className="hidden md:flex w-1/2 bg-harven-dark relative flex-col overflow-hidden">
         <img src="/harven-login-bg.jpg" alt="" className="absolute inset-0 w-full h-full object-cover opacity-30" />
         <div className="absolute inset-0 bg-gradient-to-t from-harven-dark/90 via-harven-dark/40 to-harven-dark/70" />
-        <div className="relative z-10 flex flex-col items-center gap-6 px-12 text-center">
-          <img src="/harven-logo.svg" alt="Harven" className="h-20 object-contain" />
-          <p className="text-gray-300 text-sm max-w-sm">Plataforma de aprendizado com inteligência artificial</p>
+        {/* Logo top-left */}
+        <div className="relative z-10 p-8">
+          <img src="/harven-logo.svg" alt="Harven" className="h-10 object-contain" />
+        </div>
+        {/* Center text */}
+        <div className="relative z-10 flex-1 flex flex-col items-center justify-center px-12 text-center">
+          <h2 className="text-4xl font-display font-bold text-white">Tutor Harven IA</h2>
+          <p className="text-gray-300 text-sm max-w-sm mt-4">Plataforma de aprendizado com inteligência artificial</p>
         </div>
       </div>
 

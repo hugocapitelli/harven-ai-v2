@@ -9,6 +9,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Sentry — error monitoring
+import sentry_sdk
+SENTRY_DSN = os.getenv("SENTRY_DSN")
+if SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        traces_sample_rate=0.2,
+        environment=os.getenv("ENVIRONMENT", "production"),
+    )
+
 from fastapi import (
     FastAPI,
     HTTPException,

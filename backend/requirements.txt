@@ -14,3 +14,4 @@ python-dateutil==2.9.0
 pydantic-settings==2.7.0
 python-multipart==0.0.19
 python-dotenv==1.0.1
+sentry-sdk[fastapi]>=2.0.0

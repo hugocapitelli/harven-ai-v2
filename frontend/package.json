@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@sentry/react": "^10.49.0",
     "axios": "^1.7.9",
     "dompurify": "^3.2.4",
     "react": "^19.0.0",
