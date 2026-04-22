@@ -33,7 +33,17 @@ export default function CourseDetails({ userRole }: CourseDetailsProps) {
         ]);
         if (ctrl.signal.aborted) return;
         setCourse(courseData);
-        setModules(Array.isArray(chaptersData) ? chaptersData : []);
+        const chapters = Array.isArray(chaptersData) ? chaptersData : [];
+        // Load contents for each chapter
+        const withContents = await Promise.all(
+          chapters.map(async (ch) => {
+            try {
+              const contents = await contentsApi.list(ch.id);
+              return { ...ch, contents: Array.isArray(contents) ? contents : [] };
+            } catch { return { ...ch, contents: [] }; }
+          })
+        );
+        setModules(withContents);
       } catch { if (!ctrl.signal.aborted) setCourse(null); }
       finally { if (!ctrl.signal.aborted) setLoading(false); }
     })();
@@ -43,7 +53,17 @@ export default function CourseDetails({ userRole }: CourseDetailsProps) {
   const reload = async () => {
     if (!courseId) return;
     const [c, ch] = await Promise.all([coursesApi.get(courseId), chaptersApi.list(courseId)]);
-    setCourse(c); setModules(Array.isArray(ch) ? ch : []);
+    setCourse(c);
+    const chapters = Array.isArray(ch) ? ch : [];
+    const withContents = await Promise.all(
+      chapters.map(async (chap) => {
+        try {
+          const contents = await contentsApi.list(chap.id);
+          return { ...chap, contents: Array.isArray(contents) ? contents : [] };
+        } catch { return { ...chap, contents: [] }; }
+      })
+    );
+    setModules(withContents);
   };
 
   const addModule = async () => {
