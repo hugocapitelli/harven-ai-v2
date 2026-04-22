@@ -515,7 +515,7 @@ async def list_disciplines(
 
     filters = None
     user_role = current_user.get("role", "")
-    if user_role == "TEACHER":
+    if user_role in ("TEACHER", "INSTRUCTOR"):
         ids = disc_repo.get_teacher_discipline_ids(current_user["id"])
         if not ids:
             return {"data": [], "total": 0, "page": page, "per_page": per_page}
