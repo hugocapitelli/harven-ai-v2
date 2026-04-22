@@ -477,7 +477,7 @@ async def create_or_get_chat_session(
             "content_id", data.content_id
         ).maybe_single().execute()
 
-        existing = result.data
+        existing = result.data if result else None
 
         if existing:
             if existing.get("status") in ("abandoned", "completed"):
