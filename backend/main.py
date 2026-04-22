@@ -11,13 +11,12 @@ load_dotenv()
 
 # Sentry — error monitoring
 import sentry_sdk
-SENTRY_DSN = os.getenv("SENTRY_DSN")
-if SENTRY_DSN:
-    sentry_sdk.init(
-        dsn=SENTRY_DSN,
-        traces_sample_rate=0.2,
-        environment=os.getenv("ENVIRONMENT", "production"),
-    )
+sentry_sdk.init(
+    dsn="https://95e066dfc17a6ccb971886374baf81be@o4511017059287040.ingest.us.sentry.io/4511263208177664",
+    send_default_pii=True,
+    traces_sample_rate=0.2,
+    environment=os.getenv("ENVIRONMENT", "production"),
+)
 
 from fastapi import (
     FastAPI,

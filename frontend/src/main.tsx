@@ -5,18 +5,15 @@ import App from './App';
 import './index.css';
 
 // Sentry — error monitoring
-const SENTRY_DSN = import.meta.env.VITE_SENTRY_DSN;
-if (SENTRY_DSN) {
-  Sentry.init({
-    dsn: SENTRY_DSN,
-    environment: import.meta.env.MODE,
-    integrations: [
-      Sentry.browserTracingIntegration(),
-    ],
-    tracesSampleRate: 0.2,
-    replaysOnErrorSampleRate: 1.0,
-  });
-}
+Sentry.init({
+  dsn: "https://43b4e5c0444ebe873c268cb2856a45f7@o4511017059287040.ingest.us.sentry.io/4511263201689600",
+  environment: import.meta.env.MODE,
+  sendDefaultPii: true,
+  integrations: [
+    Sentry.browserTracingIntegration(),
+  ],
+  tracesSampleRate: 0.2,
+});
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
