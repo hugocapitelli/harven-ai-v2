@@ -318,7 +318,6 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
 
   const startChat = async (questionText: string) => {
     if (!contentId || !chapterId || !courseId) return;
-    // Reset chat state for new question
     setChatMessages([]);
     setSelectedQuestion(questionText);
     setChatOpen(true);
@@ -332,8 +331,9 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
       const sid = session?.id ?? session?.session_id;
       setSessionId(sid);
 
+      // AI starts the dialogue — student doesn't send the question as a message
       const aiResponse = await aiApi.socraticDialogue({
-        student_message: questionText,
+        student_message: `Quero explorar a seguinte questão: ${questionText}`,
         chapter_content: content?.body || content?.extracted_text || '',
         initial_question: { text: questionText },
         session_id: sid,
@@ -342,20 +342,24 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
       setChatMessages([
         {
           id: '1',
-          role: 'user',
-          content: questionText,
-          created_at: new Date().toISOString(),
-        },
-        {
-          id: '2',
           role: 'assistant',
           content: extractAiText(aiResponse),
           created_at: new Date().toISOString(),
           is_ai: true,
         },
       ]);
-    } catch {
-      toast.error('Erro ao iniciar diálogo');
+    } catch (err) {
+      console.error('Chat start error:', err);
+      // Fallback: show a starter message so the chat isn't empty
+      setChatMessages([
+        {
+          id: '1',
+          role: 'assistant',
+          content: `Vamos explorar juntos: "${questionText}"\n\nO que você pensa sobre isso? Qual seria sua primeira análise?`,
+          created_at: new Date().toISOString(),
+          is_ai: true,
+        },
+      ]);
     } finally {
       setChatLoading(false);
     }
