@@ -34,12 +34,12 @@ export default function Login() {
         <div className="absolute inset-0 bg-gradient-to-t from-harven-dark/90 via-harven-dark/40 to-harven-dark/70" />
         {/* Logo top-left */}
         <div className="relative z-10 p-8">
-          <img src="/harven-logo.svg" alt="Harven" className="h-10 object-contain" />
+          <img src="/harven-logo-white.svg" alt="Harven" className="h-12 object-contain" />
         </div>
         {/* Center text */}
-        <div className="relative z-10 flex-1 flex flex-col items-center justify-center px-12 text-center">
-          <h2 className="text-4xl font-display font-bold text-white">Tutor Harven IA</h2>
-          <p className="text-gray-300 text-sm max-w-sm mt-4">Plataforma de aprendizado com inteligência artificial</p>
+        <div className="relative z-10 flex-1 flex flex-col items-start justify-end px-12 pb-16">
+          <h2 className="text-4xl font-display font-bold"><span className="text-primary">Tutor Harven</span> <span className="text-white">IA</span></h2>
+          <p className="text-gray-400 text-sm max-w-sm mt-3">Plataforma de aprendizado com inteligência artificial</p>
         </div>
       </div>
 
