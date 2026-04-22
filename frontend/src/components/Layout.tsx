@@ -58,11 +58,7 @@ function Sidebar({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) 
         )}
       >
         <div className="h-16 flex items-center px-6 border-b border-white/10">
-          {settings.logo_url ? (
-            <img src={settings.logo_url} alt={settings.platform_name} className="h-8 object-contain" />
-          ) : (
-            <span className="font-display font-bold text-lg text-primary">{settings.platform_name ?? 'Harven'}</span>
-          )}
+          <img src={settings.logo_url || '/harven-logo.svg'} alt={settings.platform_name || 'Harven'} className="h-8 object-contain" />
         </div>
         <nav className="flex-1 py-4 px-3 space-y-1 overflow-y-auto">
           {items.map((item) => {

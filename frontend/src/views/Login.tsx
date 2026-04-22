@@ -1,11 +1,8 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth, getDefaultRoute } from '../contexts/AuthContext';
-import { useSettings } from '../contexts/SettingsContext';
-
 export default function Login() {
   const { login } = useAuth();
-  const { settings } = useSettings();
   const navigate = useNavigate();
   const [ra, setRa] = useState('');
   const [password, setPassword] = useState('');
@@ -33,15 +30,11 @@ export default function Login() {
     <div className="h-screen flex">
       {/* Left branding */}
       <div className="hidden md:flex w-1/2 bg-harven-dark relative items-center justify-center overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-br from-harven-dark via-harven-sidebar to-harven-dark" />
-        {settings.login_bg_url && <img src={settings.login_bg_url} alt="" className="absolute inset-0 w-full h-full object-cover opacity-20" />}
+        <img src="/harven-login-bg.jpg" alt="" className="absolute inset-0 w-full h-full object-cover opacity-30" />
+        <div className="absolute inset-0 bg-gradient-to-t from-harven-dark/90 via-harven-dark/40 to-harven-dark/70" />
         <div className="relative z-10 flex flex-col items-center gap-6 px-12 text-center">
-          {settings.login_logo_url ? (
-            <img src={settings.login_logo_url} alt={settings.platform_name} className="h-16 object-contain" />
-          ) : (
-            <span className="text-4xl font-display font-bold text-primary">{settings.platform_name ?? 'Harven'}</span>
-          )}
-          <p className="text-gray-400 text-sm max-w-sm">Plataforma de aprendizado com inteligencia artificial</p>
+          <img src="/harven-logo.svg" alt="Harven" className="h-20 object-contain" />
+          <p className="text-gray-300 text-sm max-w-sm">Plataforma de aprendizado com inteligência artificial</p>
         </div>
       </div>
 
@@ -49,11 +42,7 @@ export default function Login() {
       <div className="flex-1 flex items-center justify-center p-8 bg-white">
         <div className="w-full max-w-sm">
           <div className="md:hidden mb-8 text-center">
-            {settings.login_logo_url ? (
-              <img src={settings.login_logo_url} alt={settings.platform_name} className="h-10 mx-auto" />
-            ) : (
-              <span className="text-2xl font-display font-bold text-harven-dark">{settings.platform_name ?? 'Harven'}</span>
-            )}
+            <img src="/harven-logo.svg" alt="Harven" className="h-10 mx-auto" />
           </div>
           <h1 className="text-2xl font-display font-bold text-harven-dark mb-1">Entrar</h1>
           <p className="text-sm text-muted-foreground mb-8">Acesse com seu RA e senha</p>
