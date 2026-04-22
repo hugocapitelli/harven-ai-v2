@@ -309,6 +309,11 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
     if (typeof r === 'string') return r;
     if (r && typeof r === 'object') {
       const o = r as Record<string, unknown>;
+      // Handle nested: {response: {content: "..."}}
+      if (o.response && typeof o.response === 'object') {
+        const inner = o.response as Record<string, unknown>;
+        if (typeof inner.content === 'string') return inner.content;
+      }
       if (typeof o.response === 'string') return o.response;
       if (typeof o.content === 'string') return o.content;
       if (typeof o.message === 'string') return o.message;
