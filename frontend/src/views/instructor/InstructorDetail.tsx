@@ -358,7 +358,7 @@ export default function InstructorDetail() {
                   </p>
                 </div>
                 {s.review && <StarRating value={s.review.rating} />}
-                <Button variant="outline" size="sm" onClick={() => navigate(`/instructor/session/${s.id}`)}>
+                <Button variant="outline" size="sm" onClick={() => navigate(`/session/${s.id}/review`)}>
                   <span className="material-symbols-outlined text-[16px] mr-1">rate_review</span>
                   {s.review ? 'Ver' : 'Avaliar'}
                 </Button>

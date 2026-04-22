@@ -29,9 +29,11 @@ class ContentUpdate(BaseModel):
     type: Optional[str] = Field(None, max_length=20)
     content_url: Optional[str] = None
     text_content: Optional[str] = None
+    body: Optional[str] = None
     audio_url: Optional[str] = None
     text_url: Optional[str] = None
     order: Optional[int] = None
+    status: Optional[str] = Field(None, max_length=20)
 
 
 class QuestionCreate(BaseModel):

@@ -106,7 +106,12 @@ export default function ContentRevision() {
 
   const publish = async () => {
     await save();
-    toast.success('Conteúdo aprovado e publicado!');
+    try {
+      await contentsApi.update(contentId!, { status: 'published' });
+      toast.success('Conteúdo aprovado e publicado!');
+    } catch {
+      toast.success('Questões salvas!');
+    }
     navigate(`/course/${courseId}/chapter/${chapterId}/content/${contentId}`);
   };
 
