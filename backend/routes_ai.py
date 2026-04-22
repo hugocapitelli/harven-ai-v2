@@ -105,7 +105,7 @@ class OrganizeSessionRequest(BaseModel):
 
 
 class ChatSessionCreate(BaseModel):
-    user_id: str
+    user_id: Optional[str] = None
     content_id: str
     chapter_id: Optional[str] = None
     course_id: Optional[str] = None
@@ -469,8 +469,10 @@ async def create_or_get_chat_session(
     current_user: dict = Depends(get_current_user),
 ):
     try:
+        uid = data.user_id or current_user["id"]
+
         result = client.table("chat_sessions").select("*").eq(
-            "user_id", data.user_id
+            "user_id", uid
         ).eq(
             "content_id", data.content_id
         ).maybe_single().execute()
@@ -486,7 +488,7 @@ async def create_or_get_chat_session(
             return existing
 
         new_session = {
-            "user_id": data.user_id,
+            "user_id": uid,
             "content_id": data.content_id,
             "status": "active",
             "total_messages": 0,
