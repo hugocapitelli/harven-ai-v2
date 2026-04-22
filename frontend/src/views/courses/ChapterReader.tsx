@@ -305,8 +305,21 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
   const interactionsUsed = chatMessages.filter((m) => m.role === 'user').length;
   const remainingInteractions = MAX_INTERACTIONS - interactionsUsed;
 
+  const extractAiText = (r: unknown): string => {
+    if (typeof r === 'string') return r;
+    if (r && typeof r === 'object') {
+      const o = r as Record<string, unknown>;
+      if (typeof o.response === 'string') return o.response;
+      if (typeof o.content === 'string') return o.content;
+      if (typeof o.message === 'string') return o.message;
+    }
+    return 'Vamos explorar juntos. O que você pensa?';
+  };
+
   const startChat = async (questionText: string) => {
     if (!contentId || !chapterId || !courseId) return;
+    // Reset chat state for new question
+    setChatMessages([]);
     setSelectedQuestion(questionText);
     setChatOpen(true);
     setChatLoading(true);
@@ -319,35 +332,30 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
       const sid = session?.id ?? session?.session_id;
       setSessionId(sid);
 
-      const msgs = await chatSessionsApi.getMessages(sid);
-      if (Array.isArray(msgs) && msgs.length > 0) {
-        setChatMessages(msgs);
-      } else {
-        const aiResponse = await aiApi.socraticDialogue({
-          student_message: questionText,
-          chapter_content: content?.body || content?.extracted_text || '',
-          initial_question: { text: questionText },
-          session_id: sid,
-          interactions_remaining: 20,
-        });
-        setChatMessages([
-          {
-            id: '1',
-            role: 'user',
-            content: questionText,
-            created_at: new Date().toISOString(),
-          },
-          {
-            id: '2',
-            role: 'assistant',
-            content: typeof aiResponse === 'string' ? aiResponse : (aiResponse?.response ?? aiResponse?.content ?? aiResponse?.message ?? 'Vamos explorar juntos. O que voce pensa?'),
-            created_at: new Date().toISOString(),
-            is_ai: true,
-          },
-        ]);
-      }
+      const aiResponse = await aiApi.socraticDialogue({
+        student_message: questionText,
+        chapter_content: content?.body || content?.extracted_text || '',
+        initial_question: { text: questionText },
+        session_id: sid,
+        interactions_remaining: 20,
+      });
+      setChatMessages([
+        {
+          id: '1',
+          role: 'user',
+          content: questionText,
+          created_at: new Date().toISOString(),
+        },
+        {
+          id: '2',
+          role: 'assistant',
+          content: extractAiText(aiResponse),
+          created_at: new Date().toISOString(),
+          is_ai: true,
+        },
+      ]);
     } catch {
-      toast.error('Erro ao iniciar dialogo');
+      toast.error('Erro ao iniciar diálogo');
     } finally {
       setChatLoading(false);
     }
@@ -377,7 +385,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
       const aiMsg: ChatMessage = {
         id: String(Date.now() + 1),
         role: 'assistant',
-        content: typeof aiResponse === 'string' ? aiResponse : (aiResponse?.response ?? aiResponse?.content ?? aiResponse?.message ?? 'Interessante ponto de vista...'),
+        content: extractAiText(aiResponse),
         created_at: new Date().toISOString(),
         is_ai: true,
       };
@@ -744,12 +752,15 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                         return (
                           <button
                             key={q.id}
-                            onClick={() => startChat(q.question)}
+                            onClick={() => !selectedQuestion && startChat(q.question)}
+                            disabled={Boolean(selectedQuestion && selectedQuestion !== q.question)}
                             className={cn(
                               'w-full text-left px-5 py-4 rounded-xl border-2 transition-all group',
                               isSelected
                                 ? 'border-primary bg-primary/5 shadow-sm'
-                                : 'border-harven-border hover:border-primary/40 hover:shadow-sm bg-white',
+                                : selectedQuestion
+                                  ? 'border-harven-border bg-gray-50 opacity-40 cursor-not-allowed'
+                                  : 'border-harven-border hover:border-primary/40 hover:shadow-sm bg-white',
                             )}
                           >
                             <div className="flex items-start gap-4">
