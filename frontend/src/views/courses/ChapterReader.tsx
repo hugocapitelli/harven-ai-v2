@@ -323,7 +323,13 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
       if (Array.isArray(msgs) && msgs.length > 0) {
         setChatMessages(msgs);
       } else {
-        const aiResponse = await aiApi.socraticDialogue(sid, questionText);
+        const aiResponse = await aiApi.socraticDialogue({
+          student_message: questionText,
+          chapter_content: content?.body || content?.extracted_text || '',
+          initial_question: { text: questionText },
+          session_id: sid,
+          interactions_remaining: 20,
+        });
         setChatMessages([
           {
             id: '1',
@@ -361,7 +367,13 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
     setChatLoading(true);
     try {
       await chatSessionsApi.addMessage(sessionId, { role: 'user', content: text });
-      const aiResponse = await aiApi.socraticDialogue(sessionId, text);
+      const aiResponse = await aiApi.socraticDialogue({
+        student_message: text,
+        chapter_content: content?.body || content?.extracted_text || '',
+        initial_question: { text: selectedQuestion || '' },
+        session_id: sessionId,
+        conversation_history: chatMessages.map(m => ({ role: m.role, content: m.content })),
+      });
       const aiMsg: ChatMessage = {
         id: String(Date.now() + 1),
         role: 'assistant',
