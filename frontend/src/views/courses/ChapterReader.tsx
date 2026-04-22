@@ -212,7 +212,12 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
         setContent(contentData);
         setEditTitle(contentData?.title ?? '');
         setEditBody(contentData?.body ?? contentData?.extracted_text ?? '');
-        setQuestions(Array.isArray(questionsData) ? questionsData : []);
+        const rawQ = Array.isArray(questionsData) ? questionsData : [];
+        setQuestions(rawQ.map((item: Record<string, unknown>) => ({
+          ...item,
+          question: item.question || item.question_text || '',
+          expected_answer: item.expected_answer || '',
+        })));
       } catch {
         if (!ctrl.signal.aborted) {
           toast.error('Erro ao carregar conteudo');
@@ -694,48 +699,65 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
 
                 {/* Socratic Questions */}
                 {questions.length > 0 && !editing && (
-                  <div className="space-y-4">
-                    <h3 className="text-lg font-display font-bold flex items-center gap-2">
-                      <span className="material-symbols-outlined text-harven-gold">psychology</span>
-                      Questoes Socraticas
-                    </h3>
-                    <p className="text-sm text-muted-foreground -mt-2">
-                      Clique em uma pergunta para dialogar com o tutor.
-                    </p>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                      {questions.slice(0, 5).map((q) => {
+                  <div className="space-y-5">
+                    <div>
+                      <h3 className="text-lg font-display font-bold flex items-center gap-2">
+                        <span className="material-symbols-outlined text-harven-gold">psychology</span>
+                        Questões Socráticas
+                      </h3>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Selecione uma pergunta para iniciar o diálogo com o tutor IA.
+                      </p>
+                    </div>
+                    <div className="space-y-3">
+                      {questions.slice(0, 5).map((q, idx) => {
                         const diff = q.difficulty ?? 'medium';
-                        const diffColor =
+                        const diffLabel = diff === 'easy' ? 'Fácil' : diff === 'hard' ? 'Difícil' : 'Médio';
+                        const diffStyle =
                           diff === 'easy'
-                            ? 'bg-green-100 text-green-700'
+                            ? 'bg-green-100 text-green-700 border-green-200'
                             : diff === 'hard'
-                              ? 'bg-red-100 text-red-700'
-                              : 'bg-yellow-100 text-yellow-700';
+                              ? 'bg-red-100 text-red-700 border-red-200'
+                              : 'bg-amber-100 text-amber-700 border-amber-200';
+                        const diffIcon = diff === 'easy' ? 'sentiment_satisfied' : diff === 'hard' ? 'local_fire_department' : 'psychology';
+                        const isSelected = selectedQuestion === q.question;
                         return (
                           <button
                             key={q.id}
                             onClick={() => startChat(q.question)}
                             className={cn(
-                              'text-left p-4 rounded-xl border transition-all',
-                              selectedQuestion === q.question
-                                ? 'border-primary bg-primary/5'
-                                : 'border-harven-border hover:border-primary/50 bg-white',
+                              'w-full text-left px-5 py-4 rounded-xl border-2 transition-all group',
+                              isSelected
+                                ? 'border-primary bg-primary/5 shadow-sm'
+                                : 'border-harven-border hover:border-primary/40 hover:shadow-sm bg-white',
                             )}
                           >
-                            <div className="flex items-center justify-between mb-2">
-                              <span className="material-symbols-outlined text-harven-gold text-[20px]">
-                                help
-                              </span>
-                              <span
-                                className={cn(
-                                  'text-[10px] font-bold px-2 py-0.5 rounded uppercase',
-                                  diffColor,
+                            <div className="flex items-start gap-4">
+                              <div className={cn(
+                                'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold mt-0.5',
+                                isSelected ? 'bg-primary text-harven-dark' : 'bg-harven-bg text-muted-foreground group-hover:bg-primary/20'
+                              )}>
+                                {idx + 1}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-foreground leading-relaxed">{q.question}</p>
+                                {q.expected_answer && (
+                                  <p className="text-xs text-muted-foreground mt-2 line-clamp-1 italic">💡 {q.expected_answer}</p>
                                 )}
-                              >
-                                {diff}
-                              </span>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span className={cn('flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-full border', diffStyle)}>
+                                  <span className="material-symbols-outlined text-[12px]">{diffIcon}</span>
+                                  {diffLabel}
+                                </span>
+                                <span className={cn(
+                                  'material-symbols-outlined text-[18px] transition-colors',
+                                  isSelected ? 'text-primary' : 'text-gray-300 group-hover:text-primary/60'
+                                )}>
+                                  arrow_forward
+                                </span>
+                              </div>
                             </div>
-                            <p className="text-sm font-medium line-clamp-3">{q.question}</p>
                           </button>
                         );
                       })}
