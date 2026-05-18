@@ -112,7 +112,7 @@ function AppRoutes() {
           <Route path="/course/:courseId" element={<CourseDetails userRole={user!.role} />} />
           <Route path="/courses/:courseId/edit" element={<CourseEdit userRole={user!.role} />} />
           <Route path="/course/:courseId/chapter/:chapterId" element={<ChapterDetail />} />
-          <Route path="/course/:courseId/chapter/:chapterId/content/:contentId" element={<ChapterReader />} />
+          <Route path="/course/:courseId/chapter/:chapterId/content/:contentId" element={<ChapterReader userRole={user!.role} />} />
           <Route path="/course/:courseId/chapter/:chapterId/new-content" element={<ContentCreation />} />
           <Route path="/course/:courseId/chapter/:chapterId/content/:contentId/revision" element={<ContentRevision />} />
           {/* Instructor */}
