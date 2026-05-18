@@ -40,12 +40,6 @@ export default function Login() {
 
         {/* Hero content */}
         <div className="relative z-10 flex-1 flex flex-col items-start justify-end px-14 pb-14">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center">
-              <span className="material-symbols-outlined text-primary text-[24px]">smart_toy</span>
-            </div>
-            <span className="text-primary/60 text-sm font-medium tracking-wide uppercase">Plataforma de IA Educacional</span>
-          </div>
           <h2 className="text-5xl font-display font-bold leading-tight">
             <span className="text-primary">Tutor Harven</span>{' '}
             <span className="text-white">IA</span>
@@ -58,7 +52,7 @@ export default function Login() {
           <div className="flex flex-wrap gap-3 mt-8">
             {[
               { icon: 'forum', text: 'Método Socrático' },
-              { icon: 'verified', text: 'Detecção de IA' },
+              { icon: 'school', text: 'Ensino Ativo' },
               { icon: 'emoji_events', text: 'Gamificação' },
             ].map((f) => (
               <div key={f.text} className="flex items-center gap-2 bg-white/5 backdrop-blur-sm border border-white/10 rounded-full px-4 py-2">
