@@ -239,35 +239,85 @@ export default function InstructorDetail() {
 
       {/* Tab: Disciplinas (courses) */}
       {activeTab === 'disciplinas' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {filteredCourses.length === 0 ? (
-            <Card className="col-span-full p-8 text-center">
-              <span className="material-symbols-outlined text-4xl text-muted-foreground mb-2 block">menu_book</span>
-              <p className="text-muted-foreground">Nenhum curso encontrado.</p>
+            <Card className="col-span-full py-16 px-8 text-center">
+              <span className="material-symbols-outlined text-5xl text-muted-foreground/40 mb-3 block">menu_book</span>
+              <p className="text-lg text-muted-foreground font-medium">Nenhum curso encontrado.</p>
+              <p className="text-sm text-muted-foreground/70 mt-1">Clique em "+ Curso" para criar o primeiro.</p>
             </Card>
           ) : (
-            filteredCourses.map((c) => (
-              <Card key={c.id} hoverEffect onClick={() => navigate(`/course/${c.id}`)}>
-                {c.image_url && (
-                  <div className="h-32 bg-muted overflow-hidden">
-                    <img src={c.image_url} alt="" className="w-full h-full object-cover" />
-                  </div>
-                )}
-                <CardContent>
-                  <h3 className="font-display font-bold text-foreground">{c.title}</h3>
-                  {c.description && (
-                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{c.description}</p>
+            filteredCourses.map((c, idx) => {
+              const gradients = ['from-emerald-600 to-teal-700','from-indigo-600 to-violet-700','from-amber-600 to-orange-700','from-rose-600 to-pink-700','from-cyan-600 to-blue-700'];
+              const icons = ['auto_stories','psychology','science','architecture','biotech'];
+              return (
+                <Card key={c.id} className="overflow-hidden group">
+                  {/* Card header */}
+                  {c.image_url ? (
+                    <div className="h-36 overflow-hidden cursor-pointer" onClick={() => navigate(`/course/${c.id}`)}>
+                      <img src={c.image_url} alt="" className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
+                    </div>
+                  ) : (
+                    <div
+                      className={`h-36 bg-gradient-to-br ${gradients[idx % gradients.length]} flex items-center justify-center cursor-pointer relative overflow-hidden`}
+                      onClick={() => navigate(`/course/${c.id}`)}
+                    >
+                      <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMiIgZmlsbD0icmdiYSgyNTUsMjU1LDI1NSwwLjEpIi8+PC9zdmc+')] opacity-60" />
+                      <span className="material-symbols-outlined text-white/25 text-[64px] group-hover:scale-110 transition-transform duration-300">{icons[idx % icons.length]}</span>
+                    </div>
                   )}
-                  <div className="flex items-center gap-3 mt-3 text-xs text-muted-foreground">
-                    <span className="inline-flex items-center gap-1">
-                      <span className="material-symbols-outlined text-[14px]">library_books</span>
-                      {c.chapters_count ?? 0} capítulos
-                    </span>
-                    <Badge variant={c.status === 'Ativo' ? 'success' : 'outline'}>{c.status ?? 'Ativo'}</Badge>
-                  </div>
-                </CardContent>
-              </Card>
-            ))
+
+                  {/* Card body */}
+                  <CardContent className="p-5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1 cursor-pointer" onClick={() => navigate(`/course/${c.id}`)}>
+                        <h3 className="text-base font-display font-bold text-foreground leading-tight line-clamp-2 group-hover:text-primary transition-colors">{c.title}</h3>
+                        {c.description && (
+                          <p className="text-sm text-muted-foreground mt-1.5 line-clamp-2">{c.description}</p>
+                        )}
+                      </div>
+                      <Badge variant={c.status === 'active' || c.status === 'Ativo' ? 'success' : 'outline'} className="shrink-0 mt-0.5">
+                        {c.status === 'active' ? 'Ativo' : c.status === 'draft' ? 'Rascunho' : c.status ?? 'Ativo'}
+                      </Badge>
+                    </div>
+
+                    <div className="flex items-center justify-between mt-4 pt-3 border-t border-border">
+                      <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
+                        <span className="material-symbols-outlined text-[16px] text-primary">library_books</span>
+                        <span className="font-medium text-foreground">{c.chapters_count ?? 0}</span> capítulos
+                      </span>
+
+                      {/* Actions */}
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); navigate(`/course/${c.id}/edit`); }}
+                          className="p-1.5 rounded-md text-muted-foreground hover:text-primary hover:bg-muted transition-colors"
+                          title="Editar curso"
+                        >
+                          <span className="material-symbols-outlined text-[18px]">edit</span>
+                        </button>
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            if (!confirm(`Remover "${c.title}"? Esta ação não pode ser desfeita.`)) return;
+                            try {
+                              await coursesApi.delete(c.id);
+                              toast.success('Curso removido.');
+                              const controller = new AbortController();
+                              load(controller);
+                            } catch { toast.error('Erro ao remover curso.'); }
+                          }}
+                          className="p-1.5 rounded-md text-muted-foreground hover:text-red-500 hover:bg-red-50 transition-colors"
+                          title="Remover curso"
+                        >
+                          <span className="material-symbols-outlined text-[18px]">delete</span>
+                        </button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })
           )}
         </div>
       )}
