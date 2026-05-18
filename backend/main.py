@@ -158,6 +158,7 @@ class ContentUpdate(BaseModel):
     body: Optional[str] = None
     media_url: Optional[str] = None
     order: Optional[int] = None
+    completed: Optional[bool] = None
 
 
 # -- Question --

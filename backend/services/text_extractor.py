@@ -111,25 +111,52 @@ def split_markdown_into_chapters(md: str) -> List[Dict[str, str]]:
 
 def _clean_markdown(md: str) -> str:
     """Clean up pymupdf4llm output for better readability."""
-    # Remove image placeholders
+    # ---- Strip HTML artifacts ----
+    # Remove literal <br>, <br/>, <br /> tags (very common in PDF extraction)
+    md = re.sub(r"<br\s*/?\s*>", "\n", md, flags=re.IGNORECASE)
+    # Remove other stray HTML tags
+    md = re.sub(r"</?(?:p|div|span|font|b|i|u|em|strong|sup|sub|ol|ul|li|td|tr|th|table|img|a)[^>]*>", "", md, flags=re.IGNORECASE)
+    # Decode common HTML entities
+    md = md.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+    md = md.replace("&nbsp;", " ").replace("&quot;", '"').replace("&#39;", "'")
+
+    # ---- Remove PDF artifacts ----
+    # Image placeholders
     md = re.sub(r"^\*\*==>.*?<==\*\*\s*$", "", md, flags=re.MULTILINE)
     md = re.sub(r"^==>.*?<==\s*$", "", md, flags=re.MULTILINE)
-    # Remove standalone numbers on their own line (slide numbers)
-    md = re.sub(r"^\d+\s*$", "", md, flags=re.MULTILINE)
-    # Remove common PDF artifacts (repeated headers like "Sumário", page markers)
+    # Standalone numbers on their own line (slide/page numbers)
+    md = re.sub(r"^\d{1,3}\s*$", "", md, flags=re.MULTILINE)
+    # Common PDF headers/footers
     md = re.sub(r"^(Sumário|SUMÁRIO|sumário|Índice|ÍNDICE)\s*$", "", md, flags=re.MULTILINE)
     md = re.sub(r"^Página\s+\d+\s*(de\s+\d+)?\s*$", "", md, flags=re.MULTILINE | re.IGNORECASE)
-    # Join broken sentences: line ending without punctuation followed by lowercase line
+    # Lines that are just dashes, equals, or underscores (horizontal rules from tables)
+    md = re.sub(r"^[-=_]{4,}\s*$", "---", md, flags=re.MULTILINE)
+
+    # ---- Fix broken tables ----
+    # Remove malformed markdown tables (rows with pipes but no content)
+    md = re.sub(r"^\|[\s|—–-]*\|\s*$", "", md, flags=re.MULTILINE)
+    # Fix double pipes
+    md = re.sub(r"\|\|+", "| |", md)
+    # Remove lines that are just "| |---|---|---| " style separators with no header before
+    md = re.sub(r"^\|\s*[-—–:|\s]+\|\s*$", "", md, flags=re.MULTILINE)
+
+    # ---- Reconstruct text flow ----
+    # Join broken sentences: line ending without sentence-end punctuation followed by lowercase
     md = re.sub(r"([a-záàâãéèêíïóôõúüç,;])\s*\n([a-záàâãéèêíïóôõúüç])", r"\1 \2", md)
-    # Clean up bullet points that lost formatting
+    # Join lines where previous line ends with a hyphen (word-wrap break)
+    md = re.sub(r"(\w)-\s*\n(\w)", r"\1\2", md)
+
+    # ---- Normalize formatting ----
+    # Bullet points
     md = re.sub(r"^[•●◦▪▸►]\s*", "- ", md, flags=re.MULTILINE)
     md = re.sub(r"^[–—]\s+", "- ", md, flags=re.MULTILINE)
     # Remove excessive blank lines (3+ → 2)
     md = re.sub(r"\n{3,}", "\n\n", md)
     # Remove excessive whitespace within lines
     md = re.sub(r"[ \t]{3,}", " ", md)
-    # Fix table alignment — ensure proper pipe spacing
-    md = re.sub(r"\|\|", "| |", md)
+    # Remove trailing whitespace per line
+    md = re.sub(r" +$", "", md, flags=re.MULTILINE)
+
     return md.strip()
 
 
