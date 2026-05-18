@@ -604,6 +604,8 @@ async def delete_discipline(
     disc_repo = DisciplineRepository(client)
     if not disc_repo.get_by_id(discipline_id):
         raise HTTPException(status_code=404, detail="Disciplina nao encontrada")
+    # Delete courses linked to this discipline
+    client.table("courses").delete().eq("discipline_id", discipline_id).execute()
     if not disc_repo.delete(discipline_id):
         raise HTTPException(status_code=404, detail="Disciplina nao encontrada")
     return {"message": "Disciplina removida"}

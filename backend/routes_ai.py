@@ -351,8 +351,9 @@ VALID_TTS_VOICES = {"alloy", "echo", "fable", "onyx", "nova", "shimmer"}
 
 
 class TTSGenerateRequest(BaseModel):
-    text: str = Field(..., min_length=1, max_length=4096)
+    text: Optional[str] = Field(None, max_length=50000)
     voice: str = Field("alloy", max_length=20)
+    content_id: Optional[str] = None
 
 
 @router.post("/api/ai/tts/generate", tags=["AI - TTS"])
@@ -360,6 +361,7 @@ async def tts_generate(
     body: TTSGenerateRequest,
     current_user: dict = Depends(get_current_user),
     storage: StorageService = Depends(get_storage_service),
+    client: Client = Depends(get_supabase),
 ):
     svc = get_ai_service()
     if svc.mock_mode or svc.client is None:
@@ -368,13 +370,27 @@ async def tts_generate(
             detail="TTS indisponivel: OPENAI_API_KEY nao configurada ou em mock mode.",
         )
 
+    # Resolve text: from body.text or from content_id
+    text = body.text or ""
+    if not text.strip() and body.content_id:
+        from repositories import ContentRepository
+        content_repo = ContentRepository(client)
+        content_record = content_repo.get_by_id(body.content_id)
+        if content_record:
+            text = content_record.get("body") or ""
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="Texto vazio. Envie 'text' ou 'content_id' valido.")
+
     voice = body.voice if body.voice in VALID_TTS_VOICES else "alloy"
+
+    # OpenAI TTS has a 4096-char limit per request; truncate if needed
+    tts_text = text[:4096]
 
     try:
         response = svc.client.audio.speech.create(
             model="tts-1",
             voice=voice,
-            input=body.text,
+            input=tts_text,
         )
         audio_bytes = response.content
     except Exception as e:
@@ -400,6 +416,114 @@ async def tts_generate(
         "audio_url": audio_url,
         "voice": voice,
         "model": "tts-1",
+        "size_bytes": len(audio_bytes),
+    }
+
+
+class AudioGenerateRequest(BaseModel):
+    content_id: str = Field(..., min_length=1)
+    audio_type: str = Field("summary", pattern="^(podcast|summary|explanation)$")
+    voice: str = Field("nova", max_length=20)
+
+
+@router.post("/api/ai/audio/generate-from-content", tags=["AI - TTS"])
+async def audio_generate_from_content(
+    body: AudioGenerateRequest,
+    current_user: dict = Depends(get_current_user),
+    storage: StorageService = Depends(get_storage_service),
+    client: Client = Depends(get_supabase),
+):
+    """Generate audio from content body. Modes: podcast (full text), summary, explanation."""
+    svc = get_ai_service()
+    if svc.mock_mode or svc.client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Audio indisponivel: OPENAI_API_KEY nao configurada ou em mock mode.",
+        )
+
+    # Load content from DB
+    from repositories import ContentRepository
+    content_repo = ContentRepository(client)
+    content_record = content_repo.get_by_id(body.content_id)
+    if not content_record:
+        raise HTTPException(status_code=404, detail="Conteudo nao encontrado")
+
+    content_text = content_record.get("body") or ""
+    if not content_text.strip():
+        raise HTTPException(status_code=400, detail="Conteudo sem texto. Envie um documento com texto extraivel.")
+
+    voice = body.voice if body.voice in VALID_TTS_VOICES else "nova"
+
+    # Prepare text based on audio_type
+    tts_input = content_text
+    if body.audio_type == "summary":
+        try:
+            result = svc.client.chat.completions.create(
+                model=svc.model,
+                messages=[
+                    {"role": "system", "content": "Voce e um assistente educacional. Resuma o conteudo abaixo de forma clara e concisa, em portugues, mantendo os conceitos-chave. Maximo 3 paragrafos."},
+                    {"role": "user", "content": content_text[:12000]},
+                ],
+                max_tokens=1000,
+            )
+            tts_input = result.choices[0].message.content or content_text
+        except Exception as e:
+            logger.error(f"Audio summary generation failed: {e}", exc_info=True)
+            raise HTTPException(status_code=502, detail="Falha ao gerar resumo do conteudo para audio.")
+    elif body.audio_type == "explanation":
+        try:
+            result = svc.client.chat.completions.create(
+                model=svc.model,
+                messages=[
+                    {"role": "system", "content": "Voce e um professor didatico. Transforme o conteudo abaixo em uma explicacao clara e acessivel, como se estivesse explicando para um aluno. Use linguagem natural e exemplos quando possivel. Em portugues. Maximo 4 paragrafos."},
+                    {"role": "user", "content": content_text[:12000]},
+                ],
+                max_tokens=1500,
+            )
+            tts_input = result.choices[0].message.content or content_text
+        except Exception as e:
+            logger.error(f"Audio explanation generation failed: {e}", exc_info=True)
+            raise HTTPException(status_code=502, detail="Falha ao gerar explicacao didatica para audio.")
+    # podcast mode: use full text directly
+
+    # Truncate to TTS limit
+    tts_input = tts_input[:4096]
+
+    try:
+        response = svc.client.audio.speech.create(
+            model="tts-1",
+            voice=voice,
+            input=tts_input,
+        )
+        audio_bytes = response.content
+    except Exception as e:
+        logger.error(f"Audio TTS failed: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Falha na geracao de audio: {sanitize_ai_error(e)}")
+
+    subdir = "tts"
+    dest_dir = storage.base_dir / subdir
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid4().hex}.mp3"
+    dest_path = dest_dir / filename
+
+    try:
+        with open(dest_path, "wb") as f:
+            f.write(audio_bytes)
+    except Exception as e:
+        logger.error(f"Audio file write failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Falha ao salvar audio gerado.")
+
+    audio_url = f"/uploads/{subdir}/{filename}"
+    # Rough estimate: TTS-1 generates ~150 words/minute
+    word_count = len(tts_input.split())
+    duration_minutes = max(1, round(word_count / 150))
+    duration_estimate = f"~{duration_minutes} min"
+
+    return {
+        "audio_url": audio_url,
+        "duration_estimate": duration_estimate,
+        "audio_type": body.audio_type,
+        "voice": voice,
         "size_bytes": len(audio_bytes),
     }
 
@@ -927,7 +1051,7 @@ async def upload_file(
         return {"url": url, "filename": file.filename}
     except ValueError as e:
         logger.error(f"Upload validation error: {e}", exc_info=True)
-        raise HTTPException(status_code=400, detail="Invalid request")
+        raise HTTPException(status_code=400, detail="Tipo de arquivo nao permitido. Formatos aceitos: pdf, doc, docx, txt, pptx, mp4, jpg, png, etc.")
     except Exception as e:
         logger.error(f"Upload error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Erro ao fazer upload")
@@ -947,7 +1071,7 @@ async def upload_video(
         return {"url": url, "filename": file.filename}
     except ValueError as e:
         logger.error(f"Video upload validation error: {e}", exc_info=True)
-        raise HTTPException(status_code=400, detail="Invalid request")
+        raise HTTPException(status_code=400, detail="Tipo de arquivo nao permitido. Formatos aceitos: mp4, mov, avi, webm.")
     except Exception as e:
         logger.error(f"Video upload error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Erro ao fazer upload do video")
@@ -967,7 +1091,7 @@ async def upload_audio(
         return {"url": url, "filename": file.filename}
     except ValueError as e:
         logger.error(f"Audio upload validation error: {e}", exc_info=True)
-        raise HTTPException(status_code=400, detail="Invalid request")
+        raise HTTPException(status_code=400, detail="Tipo de arquivo nao permitido. Formatos aceitos: mp3, wav, ogg, m4a.")
     except Exception as e:
         logger.error(f"Audio upload error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Erro ao fazer upload do audio")

@@ -20,7 +20,7 @@ interface StudentStat {
   name: string;
   email: string;
   avatar_url?: string;
-  progress: number;
+  progress?: number;
   grade?: number;
   sessions_count?: number;
 }
@@ -34,6 +34,9 @@ interface SessionEntry {
   created_at: string;
   review?: { rating: number; status: string } | null;
 }
+
+// Grade key: "studentId::courseId"
+type GradeMap = Record<string, number | undefined>;
 
 const TABS = [
   { id: 'disciplinas', label: 'Disciplinas', icon: 'menu_book' },
@@ -73,6 +76,26 @@ export default function InstructorDetail() {
   const [showAddCourse, setShowAddCourse] = useState(false);
   const [newCourseTitle, setNewCourseTitle] = useState('');
   const [saving, setSaving] = useState(false);
+  const [grades, setGrades] = useState<GradeMap>({});
+  const [dirtyGrades, setDirtyGrades] = useState<Set<string>>(new Set());
+
+  const gradeKey = (studentId: string, courseId: string) => `${studentId}::${courseId}`;
+
+  const getGrade = (studentId: string, courseId: string): number | undefined =>
+    grades[gradeKey(studentId, courseId)];
+
+  const handleGradeChange = (studentId: string, courseId: string, value: number) => {
+    const key = gradeKey(studentId, courseId);
+    const clamped = Number.isNaN(value) ? undefined : Math.min(10, Math.max(0, value));
+    setGrades((prev) => ({ ...prev, [key]: clamped }));
+    setDirtyGrades((prev) => new Set(prev).add(key));
+  };
+
+  const computeAverage = (studentId: string): string => {
+    const vals = courses.slice(0, 8).map((c) => getGrade(studentId, c.id)).filter((v): v is number => v != null);
+    if (vals.length === 0) return '—';
+    return (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(1);
+  };
 
   const load = useCallback(async (controller: AbortController) => {
     if (!id) return;
@@ -176,9 +199,9 @@ export default function InstructorDetail() {
           {discipline.code && <p className="text-sm opacity-70 mt-1">{discipline.code} · {discipline.department ?? ''}</p>}
           <div className="flex gap-4 mt-6">
             {[
-              { icon: 'menu_book', label: 'Cursos', value: stats.courses_count ?? courses.length },
-              { icon: 'group', label: 'Alunos', value: stats.students_count ?? students.length },
-              { icon: 'forum', label: 'Conversas', value: stats.sessions_count ?? sessions.length },
+              { icon: 'menu_book', label: 'Cursos', value: stats.course_count ?? stats.courses_count ?? courses.length },
+              { icon: 'group', label: 'Alunos', value: stats.student_count ?? stats.students_count ?? students.length },
+              { icon: 'forum', label: 'Conversas', value: stats.session_count ?? stats.sessions_count ?? sessions.length },
               { icon: 'trending_up', label: 'Progresso Médio', value: `${stats.avg_progress ?? 0}%` },
             ].map((s) => (
               <Card key={s.label} className="bg-white/10 border-white/20 backdrop-blur-sm px-4 py-3">
@@ -279,8 +302,8 @@ export default function InstructorDetail() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2 w-32">
-                          <Progress value={s.progress} className="flex-1" />
-                          <span className="text-xs text-muted-foreground">{s.progress}%</span>
+                          <Progress value={s.progress ?? 0} className="flex-1" />
+                          <span className="text-xs text-muted-foreground">{s.progress ?? 0}%</span>
                         </div>
                       </td>
                       <td className="px-4 py-3 font-bold text-foreground">{s.grade != null ? s.grade.toFixed(1) : '—'}</td>
@@ -312,23 +335,40 @@ export default function InstructorDetail() {
               </thead>
               <tbody>
                 {filteredStudents.length === 0 ? (
-                  <tr><td colSpan={courses.length + 2} className="px-4 py-8 text-center text-muted-foreground">Nenhum dado disponível.</td></tr>
+                  <tr><td colSpan={courses.slice(0, 8).length + 2} className="px-4 py-8 text-center text-muted-foreground">Nenhum dado disponível.</td></tr>
                 ) : (
                   filteredStudents.map((s) => (
                     <tr key={s.id} className="border-b border-border last:border-0 hover:bg-muted/50">
                       <td className="px-4 py-3 font-medium text-foreground">{s.name}</td>
                       {courses.slice(0, 8).map((c) => (
                         <td key={c.id} className="px-3 py-3 text-center">
-                          <StarRating value={Math.round(Math.random() * 5)} />
+                          <input
+                            type="number"
+                            min="0"
+                            max="10"
+                            step="0.5"
+                            value={getGrade(s.id, c.id) ?? ''}
+                            onChange={(e) => handleGradeChange(s.id, c.id, parseFloat(e.target.value))}
+                            className="w-16 text-center border border-harven-border rounded px-2 py-1 text-sm bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                            placeholder="—"
+                          />
                         </td>
                       ))}
-                      <td className="px-4 py-3 text-center font-bold text-foreground">{s.grade != null ? s.grade.toFixed(1) : '—'}</td>
+                      <td className="px-4 py-3 text-center font-bold text-foreground">{computeAverage(s.id)}</td>
                     </tr>
                   ))
                 )}
               </tbody>
             </table>
           </div>
+          {dirtyGrades.size > 0 && (
+            <div className="flex items-center justify-end gap-3 px-4 py-3 border-t border-border">
+              <span className="text-xs text-muted-foreground">{dirtyGrades.size} nota{dirtyGrades.size !== 1 ? 's' : ''} alterada{dirtyGrades.size !== 1 ? 's' : ''}</span>
+              <Button size="sm" onClick={() => { setDirtyGrades(new Set()); toast.success('Notas salvas localmente.'); }}>
+                <span className="material-symbols-outlined text-[16px] mr-1">save</span> Salvar Notas
+              </Button>
+            </div>
+          )}
         </Card>
       )}
 

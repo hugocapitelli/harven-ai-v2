@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { disciplinesApi } from '../../services/api';
+import { disciplinesApi, dashboardApi } from '../../services/api';
 import { unwrapList } from '../../lib/utils';
 import { Button } from '../../components/ui/Button';
 import { Card, CardContent } from '../../components/ui/Card';
@@ -37,7 +37,25 @@ export default function InstructorList() {
         setLoading(true);
         const data = await disciplinesApi.list();
         if (controller.signal.aborted) return;
-        setDisciplines(unwrapList(data));
+        const list: Discipline[] = unwrapList(data);
+
+        // Enrich each discipline with real counts from /classes/{id}/stats
+        const enriched = await Promise.all(
+          list.map(async (disc) => {
+            try {
+              const st: any = await dashboardApi.getClassStats(disc.id);
+              return {
+                ...disc,
+                courses_count: st?.course_count ?? disc.courses_count,
+                students: st?.student_count ?? disc.students,
+              };
+            } catch {
+              return disc; // graceful fallback — keep original data
+            }
+          }),
+        );
+        if (controller.signal.aborted) return;
+        setDisciplines(enriched);
       } catch (err) {
         if (controller.signal.aborted) return;
         console.error('Failed to load disciplines:', err);

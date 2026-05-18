@@ -81,7 +81,7 @@ class ActivityCreate(BaseModel):
     activity_type: str = Field(..., max_length=50)
     description: Optional[str] = None
     points: int = 0
-    metadata_: Optional[dict] = Field(None, alias="metadata")
+    metadata: Optional[dict] = None
 
 
 class SessionReviewCreate(BaseModel):
@@ -1016,7 +1016,7 @@ async def user_activities(
                 "activity_type": r.get("activity_type"),
                 "description": r.get("description"),
                 "points": r.get("points"),
-                "metadata": r.get("metadata_") or r.get("metadata"),
+                "metadata": r.get("metadata"),
                 "created_at": r.get("created_at"),
             }
             for r in rows
@@ -1043,7 +1043,7 @@ async def create_activity(
             "activity_type": body.activity_type,
             "description": body.description,
             "points": body.points,
-            "metadata_": body.metadata_,
+            "metadata": body.metadata,
         }
     ).execute()
     row = res.data[0] if res.data else {}
@@ -1669,4 +1669,234 @@ async def discipline_sessions(
         "page": page,
         "per_page": per_page,
         "has_more": total > page * per_page,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GRADEBOOK
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class GradeOverride(BaseModel):
+    course_id: str
+    grade: float = Field(..., ge=0, le=10)
+
+
+@router.get(
+    "/disciplines/{discipline_id}/gradebook",
+    tags=["Gradebook"],
+    summary="Notas dos alunos da disciplina",
+)
+async def discipline_gradebook(
+    discipline_id: str,
+    _user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
+    client: Client = Depends(get_supabase),
+):
+    # Verify discipline
+    disc_res = (
+        client.table("disciplines")
+        .select("id, name")
+        .eq("id", discipline_id)
+        .maybe_single()
+        .execute()
+        or type("_R", (), {"data": None})()
+    )
+    if not disc_res.data:
+        raise HTTPException(status_code=404, detail="Disciplina nao encontrada")
+
+    # Get students in discipline
+    ds_res = (
+        client.table("discipline_students")
+        .select("student_id")
+        .eq("discipline_id", discipline_id)
+        .execute()
+    )
+    student_ids = [s["student_id"] for s in (ds_res.data or [])]
+    if not student_ids:
+        return {"discipline_id": discipline_id, "students": []}
+
+    # Get user info
+    users_res = client.table("users").select("id, name, ra").in_("id", student_ids).execute()
+    users_map = {u["id"]: u for u in (users_res.data or [])}
+
+    # Get courses in discipline
+    courses_res = client.table("courses").select("id, title").eq("discipline_id", discipline_id).execute()
+    courses = courses_res.data or []
+    course_ids = [c["id"] for c in courses]
+
+    # Get content IDs -> chapter IDs -> course mapping for session reviews
+    # We need to link sessions to courses via content_id -> chapter -> course
+    chapter_course_map: dict[str, str] = {}
+    if course_ids:
+        chapters_res = client.table("chapters").select("id, course_id").in_("course_id", course_ids).execute()
+        for ch in (chapters_res.data or []):
+            chapter_course_map[ch["id"]] = ch["course_id"]
+
+    content_chapter_map: dict[str, str] = {}
+    if chapter_course_map:
+        chapter_ids = list(chapter_course_map.keys())
+        contents_res = client.table("contents").select("id, chapter_id").in_("chapter_id", chapter_ids).execute()
+        for ct in (contents_res.data or []):
+            content_chapter_map[ct["id"]] = ct.get("chapter_id", "")
+
+    # Get all sessions for these students
+    sessions_res = (
+        client.table("chat_sessions")
+        .select("id, user_id, content_id")
+        .in_("user_id", student_ids)
+        .execute()
+    )
+    sessions = sessions_res.data or []
+    session_ids = [s["id"] for s in sessions]
+
+    # Get all reviews for these sessions
+    reviews_map: dict[str, list] = {}
+    if session_ids:
+        reviews_res = (
+            client.table("session_reviews")
+            .select("session_id, rating")
+            .in_("session_id", session_ids)
+            .not_.is_("rating", "null")
+            .execute()
+        )
+        for r in (reviews_res.data or []):
+            reviews_map.setdefault(r["session_id"], []).append(r["rating"])
+
+    # Get grade overrides
+    overrides_map: dict[str, dict[str, float]] = {}
+    try:
+        overrides_res = (
+            client.table("grade_overrides")
+            .select("student_id, course_id, grade")
+            .eq("discipline_id", discipline_id)
+            .execute()
+        )
+        for ov in (overrides_res.data or []):
+            overrides_map.setdefault(ov["student_id"], {})[ov["course_id"]] = ov["grade"]
+    except Exception:
+        # Table may not exist yet — graceful fallback
+        pass
+
+    # Build per-student, per-course ratings
+    # Map: student_id -> course_id -> [ratings]
+    student_course_ratings: dict[str, dict[str, list]] = {sid: {} for sid in student_ids}
+    for sess in sessions:
+        uid = sess.get("user_id")
+        content_id = sess.get("content_id", "")
+        chapter_id = content_chapter_map.get(content_id, "")
+        course_id = chapter_course_map.get(chapter_id, "")
+        if uid and course_id and course_id in course_ids:
+            sess_ratings = reviews_map.get(sess["id"], [])
+            student_course_ratings[uid].setdefault(course_id, []).extend(sess_ratings)
+
+    # Assemble output
+    students_out = []
+    for sid in student_ids:
+        u = users_map.get(sid, {})
+        student_overrides = overrides_map.get(sid, {})
+        course_grades = []
+        all_avgs = []
+        for c in courses:
+            cid = c["id"]
+            override = student_overrides.get(cid)
+            ratings = student_course_ratings.get(sid, {}).get(cid, [])
+            avg_rating = round(sum(ratings) / len(ratings), 2) if ratings else None
+            final_grade = override if override is not None else avg_rating
+            course_grades.append({
+                "course_id": cid,
+                "title": c.get("title"),
+                "avg_rating": avg_rating,
+                "override_grade": override,
+                "final_grade": final_grade,
+            })
+            if final_grade is not None:
+                all_avgs.append(final_grade)
+
+        overall_avg = round(sum(all_avgs) / len(all_avgs), 2) if all_avgs else None
+        students_out.append({
+            "id": sid,
+            "name": u.get("name"),
+            "ra": u.get("ra"),
+            "courses": course_grades,
+            "overall_avg": overall_avg,
+        })
+
+    return {"discipline_id": discipline_id, "students": students_out}
+
+
+@router.put(
+    "/disciplines/{discipline_id}/students/{student_id}/grade",
+    tags=["Gradebook"],
+    summary="Definir nota manual para aluno em curso",
+)
+async def set_student_grade(
+    discipline_id: str,
+    student_id: str,
+    body: GradeOverride,
+    _user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
+    client: Client = Depends(get_supabase),
+):
+    # Verify discipline exists
+    disc_res = (
+        client.table("disciplines")
+        .select("id")
+        .eq("id", discipline_id)
+        .maybe_single()
+        .execute()
+        or type("_R", (), {"data": None})()
+    )
+    if not disc_res.data:
+        raise HTTPException(status_code=404, detail="Disciplina nao encontrada")
+
+    # Verify student is enrolled
+    enroll_res = (
+        client.table("discipline_students")
+        .select("id")
+        .eq("discipline_id", discipline_id)
+        .eq("student_id", student_id)
+        .maybe_single()
+        .execute()
+        or type("_R", (), {"data": None})()
+    )
+    if not enroll_res.data:
+        raise HTTPException(status_code=404, detail="Aluno nao esta matriculado nesta disciplina")
+
+    # Upsert grade override
+    try:
+        existing = (
+            client.table("grade_overrides")
+            .select("id")
+            .eq("discipline_id", discipline_id)
+            .eq("student_id", student_id)
+            .eq("course_id", body.course_id)
+            .maybe_single()
+            .execute()
+            or type("_R", (), {"data": None})()
+        )
+        if existing.data:
+            client.table("grade_overrides").update(
+                {"grade": body.grade}
+            ).eq("id", existing.data["id"]).execute()
+        else:
+            client.table("grade_overrides").insert({
+                "id": str(uuid4()),
+                "discipline_id": discipline_id,
+                "student_id": student_id,
+                "course_id": body.course_id,
+                "grade": body.grade,
+            }).execute()
+    except Exception as e:
+        # If table doesn't exist, create it on the fly won't work with Supabase
+        # Return a helpful error
+        logger.error(f"Grade override error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Erro ao salvar nota. Verifique se a tabela grade_overrides existe no banco.",
+        )
+
+    return {
+        "discipline_id": discipline_id,
+        "student_id": student_id,
+        "course_id": body.course_id,
+        "grade": body.grade,
     }

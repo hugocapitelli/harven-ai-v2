@@ -54,20 +54,46 @@ def extract_chapters_from_bytes(data: bytes, filename: str, mime_type: str = "")
         os.unlink(tmp_path)
 
 
+def _is_heading_line(line: str) -> Optional[str]:
+    """Detect various heading patterns. Returns the cleaned title or None."""
+    stripped = line.strip()
+    if not stripped:
+        return None
+    # Markdown headings: # or ##
+    m = re.match(r"^#{1,2}\s+(.+)", stripped)
+    if m:
+        return m.group(1).strip()
+    # Numbered sections: "1. Topic", "2. Topic", "1 - Topic"
+    m = re.match(r"^\d+[\.\)\-]\s+(.{3,})$", stripped)
+    if m:
+        return m.group(1).strip()
+    # Bold lines used as headers: **Topic Name**
+    m = re.match(r"^\*\*(.{3,})\*\*\s*$", stripped)
+    if m:
+        return m.group(1).strip()
+    # Slide-style titles: ALL CAPS, short (3-80 chars), standalone
+    if stripped.isupper() and 3 <= len(stripped) <= 80 and not stripped.startswith("|"):
+        # Exclude table rows and common artifacts
+        if not re.match(r"^[-=|+\s]+$", stripped):
+            return stripped.title()
+    return None
+
+
 def split_markdown_into_chapters(md: str) -> List[Dict[str, str]]:
-    """Split markdown by top-level headings (# or ##) into chapters."""
+    """Split markdown by headings, numbered sections, bold titles, or ALL-CAPS slide titles."""
     lines = md.split("\n")
     chapters: List[Dict[str, str]] = []
     current_title = ""
     current_lines: list[str] = []
 
     for line in lines:
-        if re.match(r"^#{1,2}\s+", line):
+        heading = _is_heading_line(line)
+        if heading:
             if current_lines:
                 body = "\n".join(current_lines).strip()
                 if body:
-                    chapters.append({"title": current_title or "Introdução", "body": body})
-            current_title = re.sub(r"^#{1,2}\s+", "", line).strip()
+                    chapters.append({"title": current_title or "Introducao", "body": body})
+            current_title = heading
             current_lines = []
         else:
             current_lines.append(line)
@@ -75,10 +101,10 @@ def split_markdown_into_chapters(md: str) -> List[Dict[str, str]]:
     if current_lines:
         body = "\n".join(current_lines).strip()
         if body:
-            chapters.append({"title": current_title or "Conteúdo", "body": body})
+            chapters.append({"title": current_title or "Conteudo", "body": body})
 
     if not chapters and md.strip():
-        chapters.append({"title": "Conteúdo completo", "body": md.strip()})
+        chapters.append({"title": "Conteudo completo", "body": md.strip()})
 
     return chapters
 
@@ -88,8 +114,20 @@ def _clean_markdown(md: str) -> str:
     # Remove image placeholders
     md = re.sub(r"^\*\*==>.*?<==\*\*\s*$", "", md, flags=re.MULTILINE)
     md = re.sub(r"^==>.*?<==\s*$", "", md, flags=re.MULTILINE)
+    # Remove standalone numbers on their own line (slide numbers)
+    md = re.sub(r"^\d+\s*$", "", md, flags=re.MULTILINE)
+    # Remove common PDF artifacts (repeated headers like "Sumário", page markers)
+    md = re.sub(r"^(Sumário|SUMÁRIO|sumário|Índice|ÍNDICE)\s*$", "", md, flags=re.MULTILINE)
+    md = re.sub(r"^Página\s+\d+\s*(de\s+\d+)?\s*$", "", md, flags=re.MULTILINE | re.IGNORECASE)
+    # Join broken sentences: line ending without punctuation followed by lowercase line
+    md = re.sub(r"([a-záàâãéèêíïóôõúüç,;])\s*\n([a-záàâãéèêíïóôõúüç])", r"\1 \2", md)
+    # Clean up bullet points that lost formatting
+    md = re.sub(r"^[•●◦▪▸►]\s*", "- ", md, flags=re.MULTILINE)
+    md = re.sub(r"^[–—]\s+", "- ", md, flags=re.MULTILINE)
     # Remove excessive blank lines (3+ → 2)
     md = re.sub(r"\n{3,}", "\n\n", md)
+    # Remove excessive whitespace within lines
+    md = re.sub(r"[ \t]{3,}", " ", md)
     # Fix table alignment — ensure proper pipe spacing
     md = re.sub(r"\|\|", "| |", md)
     return md.strip()
