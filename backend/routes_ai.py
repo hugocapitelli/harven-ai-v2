@@ -528,6 +528,75 @@ async def audio_generate_from_content(
     }
 
 
+class ReprocessContentRequest(BaseModel):
+    content_id: str = Field(..., min_length=1)
+
+
+@router.post("/api/ai/reprocess-content", tags=["AI"])
+async def reprocess_content(
+    body: ReprocessContentRequest,
+    current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
+    client: Client = Depends(get_supabase),
+):
+    """Reprocess content body with AI to improve formatting and readability."""
+    from repositories import ContentRepository
+
+    content_repo = ContentRepository(client)
+    record = content_repo.get_by_id(body.content_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Conteudo nao encontrado")
+
+    raw_body = record.get("body") or ""
+    if not raw_body.strip():
+        raise HTTPException(status_code=400, detail="Conteudo vazio — nada para reprocessar")
+
+    svc = get_ai_service()
+    if not svc.client:
+        raise HTTPException(status_code=503, detail="Servico de IA indisponivel")
+
+    try:
+        result = svc.client.chat.completions.create(
+            model=svc.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Voce e um formatador de texto academico. Recebera um texto extraido de um PDF que pode estar "
+                        "mal formatado (com tags HTML residuais, tabelas quebradas, numeros de slide soltos, frases "
+                        "cortadas, etc). Seu trabalho:\n"
+                        "1. Limpar TODA formatacao ruim (remover <br>, tags HTML, caracteres estranhos)\n"
+                        "2. Reconstruir paragrafos quebrados em frases completas\n"
+                        "3. Organizar em secoes com titulos markdown (## Titulo)\n"
+                        "4. Preservar TODO o conteudo original — nao inventar, nao resumir, nao omitir\n"
+                        "5. Tabelas devem virar listas ou markdown tables limpas\n"
+                        "6. Manter em portugues\n"
+                        "7. Retornar APENAS o texto formatado em Markdown, sem explicacoes adicionais"
+                    ),
+                },
+                {"role": "user", "content": raw_body[:15000]},
+            ],
+            max_tokens=4000,
+            temperature=0.1,
+        )
+        improved = result.choices[0].message.content or ""
+    except Exception as e:
+        logger.error(f"AI reprocess failed: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail="Falha ao reprocessar com IA")
+
+    if not improved.strip():
+        return {"body": raw_body, "reprocessed": False, "message": "IA nao conseguiu melhorar o conteudo"}
+
+    # Save improved body to DB
+    content_repo.update(body.content_id, {"body": improved.strip()})
+
+    return {
+        "body": improved.strip(),
+        "reprocessed": True,
+        "original_length": len(raw_body),
+        "new_length": len(improved.strip()),
+    }
+
+
 @router.get("/api/ai/tts/status", tags=["AI - TTS"])
 async def tts_status():
     svc = get_ai_service()

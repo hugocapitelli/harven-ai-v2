@@ -479,6 +479,57 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
     }
   };
 
+  // ---- Reprocess with AI ----
+
+  const [reprocessing, setReprocessing] = useState(false);
+
+  const handleReprocess = async () => {
+    if (!contentId || !content?.body) return;
+    setReprocessing(true);
+    try {
+      const res = await fetch(
+        `${import.meta.env.VITE_API_URL || ''}/api/ai/reprocess-content`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${sessionStorage.getItem('access_token') ?? ''}`,
+          },
+          body: JSON.stringify({ content_id: contentId }),
+        },
+      );
+      if (!res.ok) throw new Error('Reprocess failed');
+      const data = await res.json();
+      if (data.body) {
+        setContent((prev) => (prev ? { ...prev, body: data.body } : prev));
+        toast.success('Conteudo reprocessado com IA!');
+      } else {
+        toast.info('IA nao conseguiu melhorar o conteudo.');
+      }
+    } catch {
+      toast.error('Erro ao reprocessar com IA');
+    } finally {
+      setReprocessing(false);
+    }
+  };
+
+  // ---- Save progress (instructor) ----
+
+  const [savingProgress, setSavingProgress] = useState(false);
+
+  const handleSaveProgress = async () => {
+    if (!contentId || !content) return;
+    setSavingProgress(true);
+    try {
+      await contentsApi.update(contentId, { body: content.body });
+      toast.success('Progresso salvo!');
+    } catch {
+      toast.error('Erro ao salvar progresso');
+    } finally {
+      setSavingProgress(false);
+    }
+  };
+
   // ---------- Render ----------
 
   if (loading) {
@@ -572,14 +623,45 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
               </span>
             )}
 
-            {isInstructor && content.type === 'TEXT' && !editing && (
-              <button
-                onClick={() => setEditing(true)}
-                className="flex items-center gap-1 border border-harven-border bg-white hover:bg-harven-bg text-foreground font-bold px-3 py-2 rounded-lg text-xs uppercase tracking-widest transition-colors"
-              >
-                <span className="material-symbols-outlined text-[16px]">edit</span>
-                Editar
-              </button>
+            {isInstructor && !editing && (
+              <>
+                {/* Reprocess with AI */}
+                <button
+                  onClick={handleReprocess}
+                  disabled={reprocessing}
+                  className="flex items-center gap-1.5 border border-violet-200 bg-violet-50 hover:bg-violet-100 text-violet-700 font-bold px-3 py-2 rounded-lg text-xs uppercase tracking-widest transition-colors disabled:opacity-50"
+                  title="Reprocessar texto com IA para melhorar formatação"
+                >
+                  <span className={`material-symbols-outlined text-[16px] ${reprocessing ? 'animate-spin' : ''}`}>
+                    {reprocessing ? 'progress_activity' : 'auto_fix_high'}
+                  </span>
+                  {reprocessing ? 'Processando...' : 'Reprocessar IA'}
+                </button>
+
+                {/* Save progress */}
+                <button
+                  onClick={handleSaveProgress}
+                  disabled={savingProgress}
+                  className="flex items-center gap-1.5 border border-harven-border bg-white hover:bg-harven-bg text-foreground font-bold px-3 py-2 rounded-lg text-xs uppercase tracking-widest transition-colors disabled:opacity-50"
+                  title="Salvar alterações no conteúdo"
+                >
+                  <span className={`material-symbols-outlined text-[16px] ${savingProgress ? 'animate-spin' : ''}`}>
+                    {savingProgress ? 'progress_activity' : 'save'}
+                  </span>
+                  {savingProgress ? 'Salvando...' : 'Salvar'}
+                </button>
+
+                {/* Edit mode */}
+                {content.type === 'TEXT' && (
+                  <button
+                    onClick={() => setEditing(true)}
+                    className="flex items-center gap-1 border border-harven-border bg-white hover:bg-harven-bg text-foreground font-bold px-3 py-2 rounded-lg text-xs uppercase tracking-widest transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">edit</span>
+                    Editar
+                  </button>
+                )}
+              </>
             )}
 
             {!content.completed && !editing && (
