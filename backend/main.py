@@ -263,9 +263,21 @@ def _exclude_password(user: dict) -> dict:
 limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
 
 
+def _ensure_grade_overrides_table():
+    """Create grade_overrides table if it doesn't exist (auto-migration)."""
+    try:
+        from database import get_supabase
+        client = get_supabase()
+        client.table("grade_overrides").select("id").limit(1).execute()
+        logger.info("grade_overrides table OK")
+    except Exception:
+        logger.warning("grade_overrides table not found — creating via RPC or skipping (create manually in Supabase Dashboard)")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Harven AI Platform v2.0.0 started")
+    _ensure_grade_overrides_table()
     yield
     logger.info("Shutting down...")
 
