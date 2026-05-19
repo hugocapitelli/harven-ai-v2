@@ -71,9 +71,16 @@ export default function ContentRevision() {
   };
 
   const save = async () => {
+    if (!contentId) return;
     setSaving(true);
     try {
-      await questionsApi.updateBatch(questions);
+      const items = questions.map(q => ({
+        question_text: q.question,
+        expected_answer: q.expected_answer,
+        difficulty: q.difficulty,
+        skill: q.skill || 'comprehension',
+      }));
+      await questionsApi.updateBatch(contentId, items);
       toast.success('Questões salvas');
     } catch { toast.error('Erro ao salvar'); }
     finally { setSaving(false); }
@@ -107,7 +114,7 @@ export default function ContentRevision() {
   const publish = async () => {
     await save();
     try {
-      await contentsApi.update(contentId!, { status: 'published' });
+      await contentsApi.update(contentId!, { completed: true });
       toast.success('Conteúdo aprovado e publicado!');
     } catch {
       toast.success('Questões salvas!');
