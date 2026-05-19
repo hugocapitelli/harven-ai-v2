@@ -569,27 +569,37 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
 
   const hasFile = Boolean(content.file_url);
 
+  // UI mode guards
+  const showInstructorUI = isInstructor && !studentView;
+  const isStudentExperience = !isInstructor || studentView;
+
   return (
     <div className="flex flex-col h-full animate-in fade-in duration-300">
       {/* Breadcrumb + Header */}
-      <div className="bg-white border-b border-harven-border px-8 py-4 flex-shrink-0">
-        <nav className="flex items-center gap-2 text-xs text-gray-400 mb-2">
-          <button
-            onClick={() => navigate(`/course/${courseId}`)}
-            className="text-harven-gold hover:text-primary-dark"
-          >
-            Curso
-          </button>
-          <span className="material-symbols-outlined text-[14px]">chevron_right</span>
-          <button
-            onClick={() => navigate(`/course/${courseId}/chapter/${chapterId}`)}
-            className="text-harven-gold hover:text-primary-dark"
-          >
-            Capitulo
-          </button>
-          <span className="material-symbols-outlined text-[14px]">chevron_right</span>
-          <span className="text-foreground">{content.title}</span>
-        </nav>
+      <div className={cn(
+        'bg-white border-b border-harven-border flex-shrink-0',
+        isStudentExperience ? 'px-8 py-5' : 'px-8 py-4',
+      )}>
+        {/* Breadcrumb — hidden for student experience */}
+        {!isStudentExperience && (
+          <nav className="flex items-center gap-2 text-xs text-gray-400 mb-2">
+            <button
+              onClick={() => navigate(`/course/${courseId}`)}
+              className="text-harven-gold hover:text-primary-dark"
+            >
+              Curso
+            </button>
+            <span className="material-symbols-outlined text-[14px]">chevron_right</span>
+            <button
+              onClick={() => navigate(`/course/${courseId}/chapter/${chapterId}`)}
+              className="text-harven-gold hover:text-primary-dark"
+            >
+              Capitulo
+            </button>
+            <span className="material-symbols-outlined text-[14px]">chevron_right</span>
+            <span className="text-foreground">{content.title}</span>
+          </nav>
+        )}
 
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4 min-w-0 flex-1">
@@ -606,7 +616,12 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                 className="flex-1 rounded-lg border border-harven-border bg-white px-3 py-1.5 text-xl font-display font-bold focus:border-primary focus:outline-none"
               />
             ) : (
-              <h1 className="text-xl font-display font-bold truncate">{content.title}</h1>
+              <h1 className={cn(
+                'font-display font-bold truncate',
+                isStudentExperience ? 'text-2xl' : 'text-xl',
+              )}>
+                {content.title}
+              </h1>
             )}
             <span
               className={cn(
@@ -618,8 +633,12 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
             </span>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
-            {studyMinutes > 0 && (
+          <div className={cn(
+            'flex items-center shrink-0',
+            isStudentExperience ? 'gap-2' : 'gap-3',
+          )}>
+            {/* Study timer — hidden for student experience */}
+            {!isStudentExperience && studyMinutes > 0 && (
               <span className="text-xs text-muted-foreground flex items-center gap-1">
                 <span className="material-symbols-outlined text-[14px]">schedule</span>
                 {studyMinutes} min
@@ -640,7 +659,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
               </button>
             )}
 
-            {isInstructor && !editing && !studentView && (
+            {showInstructorUI && !editing && (
               <>
                 {/* Reprocess with AI */}
                 <button
@@ -681,16 +700,27 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
               </>
             )}
 
+            {/* Concluir — prominent in student experience */}
             {!content.completed && !editing && (
               <button
                 onClick={markComplete}
-                className="bg-primary hover:bg-primary-dark text-harven-dark font-bold px-4 py-2 rounded-lg text-xs uppercase tracking-widest"
+                className={cn(
+                  'bg-primary hover:bg-primary-dark text-harven-dark font-bold rounded-lg text-xs uppercase tracking-widest transition-colors',
+                  isStudentExperience
+                    ? 'px-8 py-2.5 text-sm'
+                    : 'px-4 py-2',
+                )}
               >
                 Concluir
               </button>
             )}
             {content.completed && (
-              <span className="bg-green-100 text-green-700 text-xs font-bold px-3 py-1 rounded flex items-center gap-1">
+              <span className={cn(
+                'bg-green-100 text-green-700 font-bold rounded flex items-center gap-1',
+                isStudentExperience
+                  ? 'text-sm px-4 py-1.5'
+                  : 'text-xs px-3 py-1',
+              )}>
                 <span className="material-symbols-outlined text-[14px] fill-1">check_circle</span>
                 Concluido
               </span>
@@ -799,7 +829,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
 
                 {/* Text/PDF — read view (Markdown) */}
                 {!editing && activeView === 'text' && (content?.body || content?.extracted_text) && (
-                  <article className="bg-white rounded-xl border border-harven-border p-8 prose prose-sm prose-headings:text-harven-dark prose-headings:font-display prose-strong:text-gray-800 prose-table:text-xs max-w-none leading-relaxed">
+                  <article className="bg-white rounded-xl border border-harven-border px-10 py-8 prose prose-lg prose-headings:text-harven-dark prose-headings:font-display prose-headings:mt-8 prose-headings:mb-4 prose-strong:text-gray-800 prose-p:text-gray-700 prose-p:leading-7 prose-table:text-xs max-w-none leading-relaxed">
                     <ReactMarkdown>{content.body || content.extracted_text || ''}</ReactMarkdown>
                   </article>
                 )}
@@ -841,7 +871,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                         <span className="material-symbols-outlined text-harven-gold">psychology</span>
                         Questões Socráticas
                       </h3>
-                      <p className="text-sm text-muted-foreground mt-1">
+                      <p className="text-sm text-muted-foreground mt-2">
                         Selecione uma pergunta para iniciar o diálogo com o tutor IA.
                       </p>
                     </div>
@@ -913,78 +943,90 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                     <TableOfContents items={toc} activeId={activeTocId} />
                   )}
 
-                  {/* TTS card */}
-                  {!editing && (
-                    <div className="rounded-xl border border-harven-border bg-white p-4">
-                      <div className="mb-3 flex items-center gap-2">
-                        <span className="material-symbols-outlined text-harven-gold">mic</span>
-                        <p className="text-sm font-bold">Gerar audio</p>
-                      </div>
-                      <p className="mb-3 text-xs text-muted-foreground">
-                        Escute o conteudo em diferentes formatos.
-                      </p>
-                      <div className="space-y-2">
-                        {(Object.keys(TTS_LABEL) as TtsStyle[]).map((style) => {
-                          const meta = TTS_LABEL[style];
-                          const isGen = generatingTts === style;
-                          const url = ttsUrls[style];
-                          return (
-                            <div key={style}>
-                              {url ? (
-                                <div className="rounded-lg border border-harven-border p-2">
-                                  <p className="mb-1 text-xs font-bold">{meta.label}</p>
-                                  <audio src={url} controls className="w-full h-8" />
-                                </div>
-                              ) : (
-                                <button
-                                  disabled={Boolean(generatingTts)}
-                                  onClick={() => handleGenerateTts(style)}
-                                  className="flex w-full items-center justify-between rounded-lg border border-harven-border hover:bg-harven-bg px-3 py-2 text-xs transition-colors disabled:opacity-50"
-                                >
-                                  <span className="flex items-center gap-2 min-w-0">
-                                    <span className="material-symbols-outlined text-[16px] shrink-0">
-                                      {meta.icon}
-                                    </span>
-                                    <span className="text-left min-w-0">
-                                      <span className="block font-bold text-foreground">
-                                        {meta.label}
+                  {/* TTS card — hidden in student experience (students consume audio, not generate) */}
+                  {!editing && !isStudentExperience && (
+                    <div className="rounded-xl border border-harven-border bg-white overflow-hidden">
+                      <div className="border-t-4 border-harven-gold" />
+                      <div className="p-4">
+                        <div className="mb-3 flex items-center gap-2">
+                          <span className="material-symbols-outlined text-harven-gold">mic</span>
+                          <p className="text-sm font-bold">Gerar audio</p>
+                        </div>
+                        <p className="mb-3 text-xs text-muted-foreground">
+                          Escute o conteudo em diferentes formatos.
+                        </p>
+                        <div className="space-y-2">
+                          {(Object.keys(TTS_LABEL) as TtsStyle[]).map((style) => {
+                            const meta = TTS_LABEL[style];
+                            const isGen = generatingTts === style;
+                            const url = ttsUrls[style];
+                            return (
+                              <div key={style}>
+                                {url ? (
+                                  <div className="rounded-lg border border-harven-border p-2">
+                                    <p className="mb-1 text-xs font-bold">{meta.label}</p>
+                                    <audio src={url} controls className="w-full h-8" />
+                                  </div>
+                                ) : (
+                                  <button
+                                    disabled={Boolean(generatingTts)}
+                                    onClick={() => handleGenerateTts(style)}
+                                    className="flex w-full items-center justify-between rounded-lg border border-harven-border hover:bg-harven-bg px-3 py-2 text-xs transition-colors disabled:opacity-50"
+                                  >
+                                    <span className="flex items-center gap-2 min-w-0">
+                                      <span className="material-symbols-outlined text-[16px] shrink-0">
+                                        {meta.icon}
                                       </span>
-                                      <span className="block text-[10px] text-muted-foreground truncate">
-                                        {meta.desc}
+                                      <span className="text-left min-w-0">
+                                        <span className="block font-bold text-foreground">
+                                          {meta.label}
+                                        </span>
+                                        <span className="block text-[10px] text-muted-foreground truncate">
+                                          {meta.desc}
+                                        </span>
                                       </span>
                                     </span>
-                                  </span>
-                                  {isGen ? (
-                                    <span className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent shrink-0" />
-                                  ) : (
-                                    <span className="material-symbols-outlined text-[16px] text-muted-foreground shrink-0">
-                                      play_arrow
-                                    </span>
-                                  )}
-                                </button>
-                              )}
-                            </div>
-                          );
-                        })}
+                                    {isGen ? (
+                                      <span className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent shrink-0" />
+                                    ) : (
+                                      <span className="material-symbols-outlined text-[16px] text-muted-foreground shrink-0">
+                                        play_arrow
+                                      </span>
+                                    )}
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
                       </div>
                     </div>
                   )}
 
                   {/* Status card */}
-                  <div className="rounded-xl bg-harven-dark p-4 text-white">
+                  <div className={cn(
+                    'rounded-xl p-4 text-white',
+                    content.completed ? 'bg-gradient-to-br from-green-700 to-green-900' : 'bg-harven-dark',
+                  )}>
                     <p className="text-[10px] uppercase tracking-wider text-white/60">Status</p>
                     <p className="mt-1 font-display text-lg font-bold">
                       {content.completed ? 'Concluido' : 'Em andamento'}
                     </p>
                     {content.completed ? (
-                      <div className="mt-2 flex items-center gap-2 text-xs text-primary">
-                        <span className="material-symbols-outlined text-[16px]">check_circle</span>
+                      <div className="mt-2 flex items-center gap-2 text-sm text-green-200">
+                        <span className="material-symbols-outlined text-[18px] fill-1">check_circle</span>
                         Bom trabalho!
                       </div>
                     ) : (
-                      <p className="mt-2 text-xs text-white/60">
-                        Tempo de estudo registrado automaticamente.
-                      </p>
+                      <div className="mt-3">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
+                          <p className="text-xs text-white/80">Leitura em progresso</p>
+                        </div>
+                        <p className="text-[10px] text-white/50">
+                          Tempo de estudo registrado automaticamente.
+                        </p>
+                      </div>
                     )}
                   </div>
                 </div>
