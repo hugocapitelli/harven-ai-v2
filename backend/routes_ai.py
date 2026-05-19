@@ -172,7 +172,7 @@ async def ai_creator_generate(
         raise
     except Exception as e:
         logger.error(f"Creator error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Erro interno do servidor")
+        raise HTTPException(status_code=500, detail=f"Erro ao gerar questoes: {str(e)[:200]}")
 
 
 @router.post("/api/ai/creator/suggest-chapters", tags=["AI"])

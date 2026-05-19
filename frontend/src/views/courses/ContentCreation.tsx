@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { contentsApi, aiApi, questionsApi } from '@/services/api';
 
@@ -194,7 +195,12 @@ export default function ContentCreation() {
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {
         console.error('AI processing failed', err);
-        setMethod('manual');
+        toast.error('Erro no processamento com IA. Redirecionando para edição manual.');
+        setAiStage('done');
+        setTimeout(() => {
+          setStep(3);
+          setMethod('manual');
+        }, 1500);
       }
     }
   };
