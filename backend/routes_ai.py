@@ -289,11 +289,32 @@ async def ai_tester_validate(
 async def ai_organizer_session(
     req: OrganizeSessionRequest,
     current_user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
     try:
+        payload = dict(req.payload)
+
+        # Enrich get_session_status with real DB data
+        if req.action == "get_session_status":
+            session_id = payload.get("session_id")
+            if session_id:
+                # Load session status from DB
+                sess_result = client.table("chat_sessions").select(
+                    "id, status, total_messages, created_at"
+                ).eq("id", session_id).maybe_single().execute()
+                if sess_result and sess_result.data:
+                    payload["status"] = sess_result.data.get("status", "active")
+
+                # Count actual messages from chat_messages table
+                msg_count_result = client.table("chat_messages").select(
+                    "id", count="exact"
+                ).eq("session_id", session_id).execute()
+                actual_count = msg_count_result.count if msg_count_result and msg_count_result.count is not None else 0
+                payload["total_messages"] = actual_count
+
         return await get_ai_service().organize_session(
             action=req.action,
-            payload=req.payload,
+            payload=payload,
             metadata=req.metadata,
         )
     except AIServiceError as e:
@@ -307,9 +328,71 @@ async def ai_organizer_session(
 async def ai_organizer_prepare_export(
     session_data: dict,
     current_user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
 ):
     try:
-        return get_ai_service().prepare_moodle_export(session_data)
+        enriched = dict(session_data)
+
+        # If session_id provided, load session + messages from DB
+        session_id = enriched.get("session_id")
+        if session_id and not enriched.get("messages"):
+            sess_result = client.table("chat_sessions").select("*").eq(
+                "id", session_id
+            ).maybe_single().execute()
+            if sess_result and sess_result.data:
+                sess = sess_result.data
+                for k, v in sess.items():
+                    enriched.setdefault(k, v)
+                enriched.setdefault("session_id", sess.get("id"))
+
+                msgs_result = client.table("chat_messages").select("*").eq(
+                    "session_id", session_id
+                ).order("created_at").execute()
+                enriched["messages"] = msgs_result.data or []
+
+        # Populate actor from user_id
+        user_id = enriched.get("user_id") or current_user.get("id")
+        if user_id and (not enriched.get("user_name") or not enriched.get("user_email")):
+            user_result = client.table("users").select("name, email").eq(
+                "id", user_id
+            ).maybe_single().execute()
+            if user_result and user_result.data:
+                enriched.setdefault("user_name", user_result.data.get("name") or "")
+                enriched.setdefault("user_email", user_result.data.get("email") or "")
+
+        # Populate context: content -> chapter -> course
+        content_id = enriched.get("content_id")
+        if content_id and not enriched.get("course_title"):
+            content_result = client.table("contents").select("id, title, chapter_id").eq(
+                "id", content_id
+            ).maybe_single().execute()
+            if content_result and content_result.data:
+                enriched.setdefault("content_title", content_result.data.get("title") or "")
+                chapter_id = content_result.data.get("chapter_id") or enriched.get("chapter_id")
+                if chapter_id:
+                    enriched.setdefault("chapter_id", chapter_id)
+                    chapter_result = client.table("chapters").select("id, title, course_id").eq(
+                        "id", chapter_id
+                    ).maybe_single().execute()
+                    if chapter_result and chapter_result.data:
+                        enriched.setdefault("chapter_title", chapter_result.data.get("title") or "")
+                        course_id = chapter_result.data.get("course_id") or enriched.get("course_id")
+                        if course_id:
+                            enriched.setdefault("course_id", course_id)
+                            course_result = client.table("courses").select("id, title").eq(
+                                "id", course_id
+                            ).maybe_single().execute()
+                            if course_result and course_result.data:
+                                enriched.setdefault("course_title", course_result.data.get("title") or "")
+
+        # Fallbacks for required fields
+        enriched.setdefault("user_name", "Unknown Student")
+        enriched.setdefault("user_email", "unknown@harven.ai")
+        enriched.setdefault("course_title", "Unknown Course")
+        enriched.setdefault("chapter_title", "Unknown Chapter")
+        enriched.setdefault("content_title", "Unknown Content")
+
+        return get_ai_service().prepare_moodle_export(enriched)
     except Exception as e:
         logger.error(f"Export error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Erro interno do servidor")
