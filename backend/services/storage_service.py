@@ -18,6 +18,21 @@ ALLOWED_EXTENSIONS = {
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 
+def _get_base_url() -> str:
+    """Return the API base URL from settings, stripping trailing slash."""
+    settings = get_settings()
+    base = os.getenv("API_BASE_URL", "").rstrip("/")
+    if not base:
+        # Fallback: derive from FRONTEND_URL by replacing the port/host
+        frontend = settings.FRONTEND_URL.rstrip("/")
+        if "localhost" in frontend or "127.0.0.1" in frontend:
+            base = f"http://localhost:{settings.PORT}"
+        else:
+            # In production, uploads are served from the backend origin
+            base = ""
+    return base
+
+
 class StorageService:
     def __init__(self):
         settings = get_settings()
@@ -42,13 +57,24 @@ class StorageService:
         with open(dest_path, "wb") as f:
             f.write(content)
 
-        return f"/uploads/{subdir}/{safe_name}"
+        relative_path = f"/uploads/{subdir}/{safe_name}"
+        base_url = _get_base_url()
+        return f"{base_url}{relative_path}" if base_url else relative_path
 
     def get_public_url(self, filename: str, subdir: str = "general") -> str:
-        return f"/uploads/{subdir}/{filename}"
+        relative_path = f"/uploads/{subdir}/{filename}"
+        base_url = _get_base_url()
+        return f"{base_url}{relative_path}" if base_url else relative_path
 
     def delete_file(self, path: str) -> bool:
-        full_path = self.base_dir / path.lstrip("/uploads/")
+        # Strip any base URL prefix to get the relative path
+        relative = path
+        for prefix in ("http://", "https://"):
+            if relative.startswith(prefix):
+                # Remove scheme + host
+                relative = "/" + "/".join(relative.split("/")[3:])
+                break
+        full_path = self.base_dir / relative.lstrip("/uploads/")
         if full_path.exists():
             full_path.unlink()
             return True

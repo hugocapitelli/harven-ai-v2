@@ -103,11 +103,15 @@ class CertificateCreate(BaseModel):
 
 
 def _mask_sensitive(data: dict) -> dict:
-    """Mask sensitive fields: show first 4 chars + ****."""
+    """Mask sensitive fields: show first 4 chars + **** or 'not_configured' for null."""
     out = dict(data)
     for key in SENSITIVE_FIELDS:
-        val = out.get(key)
-        if val and isinstance(val, str) and len(val) > 4:
+        if key not in out:
+            continue
+        val = out[key]
+        if val is None:
+            out[key] = "not_configured"
+        elif isinstance(val, str) and len(val) > 4:
             out[key] = val[:4] + "****"
         elif val:
             out[key] = "****"
@@ -850,12 +854,20 @@ async def dashboard_stats(
     total_disciplines = (client.table("disciplines").select("id", count="exact").execute()).count or 0
     total_sessions = (client.table("chat_sessions").select("id", count="exact").execute()).count or 0
 
+    # Users by role breakdown
+    all_users = client.table("users").select("role").execute()
+    by_role: dict[str, int] = {}
+    for u in (all_users.data or []):
+        role = u.get("role", "unknown")
+        by_role[role] = by_role.get(role, 0) + 1
+
     scored = client.table("chat_sessions").select("performance_score").not_.is_("performance_score", "null").execute()
     scores = [r["performance_score"] for r in (scored.data or []) if r.get("performance_score") is not None]
     avg_score = sum(scores) / len(scores) if scores else 0
 
     return {
         "total_users": total_users,
+        "users_by_role": by_role,
         "total_courses": total_courses,
         "total_disciplines": total_disciplines,
         "total_sessions": total_sessions,
@@ -969,25 +981,35 @@ async def user_stats(
     _user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
-    res = (client.table("user_stats").select("*").eq("user_id", user_id).maybe_single().execute() or type("_R", (), {"data": None})())
-    row = res.data if res else None
-    if not row:
+    try:
+        res = (client.table("user_stats").select("*").eq("user_id", user_id).maybe_single().execute() or type("_R", (), {"data": None})())
+        row = res.data if res else None
+        if not row:
+            return {
+                "user_id": user_id,
+                "courses_completed": 0,
+                "hours_studied": 0.0,
+                "average_score": 0.0,
+                "streak_days": 0,
+                "total_points": 0,
+            }
         return {
             "user_id": user_id,
-            "courses_completed": 0,
-            "hours_studied": 0.0,
-            "average_score": 0.0,
-            "streak_days": 0,
-            "total_points": 0,
+            "courses_completed": row.get("courses_completed", 0),
+            "hours_studied": row.get("hours_studied", 0.0),
+            "average_score": row.get("average_score", 0.0),
+            "streak_days": row.get("streak_days", 0),
+            "total_points": row.get("total_points", 0),
         }
-    return {
-        "user_id": user_id,
-        "courses_completed": row.get("courses_completed", 0),
-        "hours_studied": row.get("hours_studied", 0.0),
-        "average_score": row.get("average_score", 0.0),
-        "streak_days": row.get("streak_days", 0),
-        "total_points": row.get("total_points", 0),
-    }
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "relation" in error_msg or "does not exist" in error_msg or "undefined_table" in error_msg:
+            raise HTTPException(
+                status_code=503,
+                detail="Tabelas de gamificacao nao encontradas. Execute as migrations do banco de dados.",
+            )
+        logger.error(f"user_stats error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Erro interno do servidor")
 
 
 @router.get("/users/{user_id}/activities", tags=["Gamification"], summary="Atividades do usuario")
@@ -1035,37 +1057,47 @@ async def create_activity(
     _user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
-    new_id = str(uuid4())
-    res = client.table("user_activities").insert(
-        {
-            "id": new_id,
-            "user_id": user_id,
-            "activity_type": body.activity_type,
-            "description": body.description,
-            "points": body.points,
-            "metadata": body.metadata,
-        }
-    ).execute()
-    row = res.data[0] if res.data else {}
-
-    # Update user stats (upsert)
-    stats_res = (client.table("user_stats").select("*").eq("user_id", user_id).maybe_single().execute() or type("_R", (), {"data": None})())
-    if stats_res.data:
-        current_points = stats_res.data.get("total_points", 0) or 0
-        client.table("user_stats").update(
-            {"total_points": current_points + body.points}
-        ).eq("user_id", user_id).execute()
-    else:
-        client.table("user_stats").insert(
-            {"id": str(uuid4()), "user_id": user_id, "total_points": body.points}
+    try:
+        new_id = str(uuid4())
+        res = client.table("user_activities").insert(
+            {
+                "id": new_id,
+                "user_id": user_id,
+                "activity_type": body.activity_type,
+                "description": body.description,
+                "points": body.points,
+                "metadata": body.metadata,
+            }
         ).execute()
+        row = res.data[0] if res.data else {}
 
-    return {
-        "id": row.get("id", new_id),
-        "activity_type": row.get("activity_type", body.activity_type),
-        "points": row.get("points", body.points),
-        "created_at": row.get("created_at"),
-    }
+        # Update user stats (upsert)
+        stats_res = (client.table("user_stats").select("*").eq("user_id", user_id).maybe_single().execute() or type("_R", (), {"data": None})())
+        if stats_res.data:
+            current_points = stats_res.data.get("total_points", 0) or 0
+            client.table("user_stats").update(
+                {"total_points": current_points + body.points}
+            ).eq("user_id", user_id).execute()
+        else:
+            client.table("user_stats").insert(
+                {"id": str(uuid4()), "user_id": user_id, "total_points": body.points}
+            ).execute()
+
+        return {
+            "id": row.get("id", new_id),
+            "activity_type": row.get("activity_type", body.activity_type),
+            "points": row.get("points", body.points),
+            "created_at": row.get("created_at"),
+        }
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "relation" in error_msg or "does not exist" in error_msg or "undefined_table" in error_msg:
+            raise HTTPException(
+                status_code=503,
+                detail="Tabelas de gamificacao nao encontradas. Execute as migrations do banco de dados.",
+            )
+        logger.error(f"create_activity error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Erro interno do servidor")
 
 
 @router.get("/users/{user_id}/achievements", tags=["Gamification"], summary="Conquistas do usuario")
@@ -1225,31 +1257,41 @@ async def user_course_progress(
     _user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
-    res = (
-        client.table("course_progress")
-        .select("*")
-        .eq("user_id", user_id)
-        .eq("course_id", course_id)
-        .maybe_single()
-        .execute()
-    )
-    row = res.data
-    if not row:
+    try:
+        res = (
+            client.table("course_progress")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("course_id", course_id)
+            .maybe_single()
+            .execute()
+        )
+        row = res.data
+        if not row:
+            return {
+                "user_id": user_id,
+                "course_id": course_id,
+                "progress_percent": 0.0,
+                "completed_contents": 0,
+                "total_contents": 0,
+            }
         return {
             "user_id": user_id,
             "course_id": course_id,
-            "progress_percent": 0.0,
-            "completed_contents": 0,
-            "total_contents": 0,
+            "progress_percent": row.get("progress_percent", 0.0),
+            "completed_contents": row.get("completed_contents", 0),
+            "total_contents": row.get("total_contents", 0),
+            "updated_at": row.get("updated_at"),
         }
-    return {
-        "user_id": user_id,
-        "course_id": course_id,
-        "progress_percent": row.get("progress_percent", 0.0),
-        "completed_contents": row.get("completed_contents", 0),
-        "total_contents": row.get("total_contents", 0),
-        "updated_at": row.get("updated_at"),
-    }
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "relation" in error_msg or "does not exist" in error_msg or "undefined_table" in error_msg:
+            raise HTTPException(
+                status_code=503,
+                detail="Tabelas de gamificacao nao encontradas. Execute as migrations do banco de dados.",
+            )
+        logger.error(f"user_course_progress error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Erro interno do servidor")
 
 
 @router.post(
@@ -1264,76 +1306,88 @@ async def complete_content(
     _user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
-    # Verify content exists
-    content_res = (client.table("contents").select("id, title").eq("id", content_id).maybe_single().execute() or type("_R", (), {"data": None})())
-    content = content_res.data
-    if not content:
-        raise HTTPException(status_code=404, detail="Conteudo nao encontrado")
+    try:
+        # Verify content exists
+        content_res = (client.table("contents").select("id, title").eq("id", content_id).maybe_single().execute() or type("_R", (), {"data": None})())
+        content = content_res.data
+        if not content:
+            raise HTTPException(status_code=404, detail="Conteudo nao encontrado")
 
-    # Count total contents in the course: chapters belonging to course_id, then contents in those chapters
-    chapters_res = client.table("chapters").select("id").eq("course_id", course_id).execute()
-    chapter_ids = [ch["id"] for ch in (chapters_res.data or [])]
+        # Count total contents in the course: chapters belonging to course_id, then contents in those chapters
+        chapters_res = client.table("chapters").select("id").eq("course_id", course_id).execute()
+        chapter_ids = [ch["id"] for ch in (chapters_res.data or [])]
 
-    total_contents = 0
-    if chapter_ids:
-        contents_res = client.table("contents").select("id", count="exact").in_("chapter_id", chapter_ids).execute()
-        total_contents = contents_res.count or 0
+        total_contents = 0
+        if chapter_ids:
+            contents_res = client.table("contents").select("id", count="exact").in_("chapter_id", chapter_ids).execute()
+            total_contents = contents_res.count or 0
 
-    # Upsert course progress
-    progress_res = (
-        client.table("course_progress")
-        .select("*")
-        .eq("user_id", user_id)
-        .eq("course_id", course_id)
-        .maybe_single()
-        .execute()
-    )
-    progress = progress_res.data
+        # Upsert course progress
+        progress_res = (
+            client.table("course_progress")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("course_id", course_id)
+            .maybe_single()
+            .execute()
+        )
+        progress = progress_res.data
 
-    if not progress:
-        new_completed = 1
-        progress_percent = round(new_completed / total_contents * 100, 1) if total_contents > 0 else 0
-        new_id = str(uuid4())
-        client.table("course_progress").insert(
+        if not progress:
+            new_completed = 1
+            progress_percent = round(new_completed / total_contents * 100, 1) if total_contents > 0 else 0
+            new_id = str(uuid4())
+            client.table("course_progress").insert(
+                {
+                    "id": new_id,
+                    "user_id": user_id,
+                    "course_id": course_id,
+                    "completed_contents": new_completed,
+                    "total_contents": total_contents,
+                    "progress_percent": progress_percent,
+                }
+            ).execute()
+            completed_contents = new_completed
+        else:
+            completed_contents = min((progress.get("completed_contents") or 0) + 1, total_contents)
+            progress_percent = round(completed_contents / total_contents * 100, 1) if total_contents > 0 else 0
+            client.table("course_progress").update(
+                {
+                    "completed_contents": completed_contents,
+                    "total_contents": total_contents,
+                    "progress_percent": progress_percent,
+                }
+            ).eq("id", progress["id"]).execute()
+
+        # Log activity
+        client.table("user_activities").insert(
             {
-                "id": new_id,
+                "id": str(uuid4()),
                 "user_id": user_id,
-                "course_id": course_id,
-                "completed_contents": new_completed,
-                "total_contents": total_contents,
-                "progress_percent": progress_percent,
+                "activity_type": "content_completed",
+                "description": f"Conteudo {content.get('title', '')} completo",
+                "points": 10,
             }
         ).execute()
-        completed_contents = new_completed
-    else:
-        completed_contents = min((progress.get("completed_contents") or 0) + 1, total_contents)
-        progress_percent = round(completed_contents / total_contents * 100, 1) if total_contents > 0 else 0
-        client.table("course_progress").update(
-            {
-                "completed_contents": completed_contents,
-                "total_contents": total_contents,
-                "progress_percent": progress_percent,
-            }
-        ).eq("id", progress["id"]).execute()
 
-    # Log activity
-    client.table("user_activities").insert(
-        {
-            "id": str(uuid4()),
-            "user_id": user_id,
-            "activity_type": "content_completed",
-            "description": f"Conteudo {content.get('title', '')} completo",
-            "points": 10,
+        return {
+            "course_id": course_id,
+            "content_id": content_id,
+            "progress_percent": progress_percent,
+            "completed_contents": completed_contents,
+            "total_contents": total_contents,
         }
-    ).execute()
-
-    return {
-        "course_id": course_id,
-        "content_id": content_id,
-        "progress_percent": progress_percent,
-        "completed_contents": completed_contents,
-        "total_contents": total_contents,
-    }
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "relation" in error_msg or "does not exist" in error_msg or "undefined_table" in error_msg:
+            raise HTTPException(
+                status_code=503,
+                detail="Tabelas de gamificacao nao encontradas. Execute as migrations do banco de dados.",
+            )
+        logger.error(f"complete_content error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Erro interno do servidor")
 
 
 @router.post(

@@ -1202,8 +1202,8 @@ async def upload_file(
         url = await storage.save_file(file, subdir="general")
         return {"url": url, "filename": file.filename}
     except ValueError as e:
-        logger.error(f"Upload validation error: {e}", exc_info=True)
-        raise HTTPException(status_code=400, detail="Tipo de arquivo nao permitido. Formatos aceitos: pdf, doc, docx, txt, pptx, mp4, jpg, png, etc.")
+        logger.warning(f"Upload validation error: {e}")
+        raise HTTPException(status_code=400, detail=f"Tipo de arquivo nao permitido: {file.filename or 'desconhecido'}. Formatos aceitos: pdf, doc, docx, txt, pptx, mp4, jpg, png, etc.")
     except Exception as e:
         logger.error(f"Upload error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Erro ao fazer upload")

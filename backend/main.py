@@ -30,7 +30,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -172,6 +172,14 @@ class QuestionItem(BaseModel):
 
 class QuestionBatchCreate(BaseModel):
     items: List[QuestionItem]
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_questions_alias(cls, data):
+        """Accept 'questions' as an alias for 'items'."""
+        if isinstance(data, dict) and "questions" in data and "items" not in data:
+            data["items"] = data.pop("questions")
+        return data
 
 
 class QuestionUpdate(BaseModel):
@@ -1035,7 +1043,7 @@ async def create_discipline_course(
     data["discipline_id"] = class_id
     if not data.get("instructor_id"):
         data["instructor_id"] = current_user["id"]
-    data["status"] = "Ativa"
+    data["status"] = "active"
     course = course_repo.create(data)
     return course
 

@@ -59,8 +59,8 @@ def _is_heading_line(line: str) -> Optional[str]:
     stripped = line.strip()
     if not stripped:
         return None
-    # Markdown headings: # or ##
-    m = re.match(r"^#{1,2}\s+(.+)", stripped)
+    # Markdown headings: #, ##, or ###
+    m = re.match(r"^#{1,3}\s+(.+)", stripped)
     if m:
         return m.group(1).strip()
     # Numbered sections: "1. Topic", "2. Topic", "1 - Topic"
