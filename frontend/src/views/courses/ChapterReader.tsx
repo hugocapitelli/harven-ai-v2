@@ -455,9 +455,12 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
     setGeneratingTts(style);
     try {
       const result = await ttsApi.generateSummary(contentId, style);
-      const url = result?.audio_url ?? result?.url ?? result?.data?.audio_url;
-      if (url) {
-        setTtsUrls((prev) => ({ ...prev, [style]: url }));
+      const rawUrl = result?.audio_url ?? result?.url ?? result?.data?.audio_url;
+      if (rawUrl) {
+        // Prefix with API base URL if relative path (files are on backend, not frontend)
+        const apiBase = import.meta.env.VITE_API_URL || '';
+        const fullUrl = rawUrl.startsWith('/') ? `${apiBase}${rawUrl}` : rawUrl;
+        setTtsUrls((prev) => ({ ...prev, [style]: fullUrl }));
         toast.success(`${TTS_LABEL[style].label} gerado`);
       } else {
         toast.error('Audio indisponivel');
