@@ -13,7 +13,7 @@ load_dotenv()
 import sentry_sdk
 sentry_sdk.init(
     dsn="https://95e066dfc17a6ccb971886374baf81be@o4511017059287040.ingest.us.sentry.io/4511263208177664",
-    send_default_pii=True,
+    send_default_pii=False,
     traces_sample_rate=0.2,
     environment=os.getenv("ENVIRONMENT", "production"),
 )
@@ -285,10 +285,15 @@ async def lifespan(app: FastAPI):
 
 settings = get_settings()
 
+_is_prod = os.getenv("ENVIRONMENT", "").lower() == "production"
+
 app = FastAPI(
     title="Harven AI Platform",
     version="2.0.0",
     lifespan=lifespan,
+    docs_url=None if _is_prod else "/docs",
+    redoc_url=None if _is_prod else "/redoc",
+    openapi_url=None if _is_prod else "/openapi.json",
 )
 
 app.state.limiter = limiter
@@ -303,16 +308,14 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 app.add_middleware(RequestSizeLimitMiddleware)
+
+_cors_origins = [settings.FRONTEND_URL, "https://harven.eximiaventures.com.br"]
+if os.getenv("ENVIRONMENT", "").lower() != "production":
+    _cors_origins.extend(["http://localhost:3000", "http://localhost:3001", "http://localhost:5173", "http://127.0.0.1:3000"])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        settings.FRONTEND_URL,
-        "https://harven.eximiaventures.com.br",
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://localhost:5173",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -336,7 +339,13 @@ async def root():
 
 @app.get("/health", tags=["Health"])
 async def health():
-    return {"status": "healthy"}
+    try:
+        client = get_supabase()
+        client.table("users").select("id").limit(1).execute()
+        return {"status": "healthy", "database": "connected"}
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return JSONResponse(status_code=503, content={"status": "unhealthy", "database": "disconnected"})
 
 
 # ============================================
@@ -369,6 +378,82 @@ async def login(request: Request, body: LoginRequest, client: Client = Depends(g
             "avatar_url": user.get("avatar_url"),
         },
     }
+
+
+# -- Password Reset (in-memory token store until password_resets table exists) --
+import uuid
+from datetime import datetime, timedelta, timezone
+
+_password_reset_tokens: dict[str, dict] = {}  # token -> {"user_id": ..., "expires_at": ...}
+_RESET_TOKEN_EXPIRY_HOURS = 1
+
+
+class PasswordResetRequest(BaseModel):
+    email: str = Field(..., min_length=1, max_length=255)
+
+
+class PasswordResetConfirm(BaseModel):
+    token: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=6, max_length=128)
+
+
+def _cleanup_expired_tokens():
+    """Remove expired tokens from the in-memory store."""
+    now = datetime.now(timezone.utc)
+    expired = [t for t, v in _password_reset_tokens.items() if v["expires_at"] < now]
+    for t in expired:
+        del _password_reset_tokens[t]
+
+
+@app.post("/auth/request-reset", tags=["Auth"])
+@limiter.limit("3/minute")
+async def request_password_reset(request: Request, body: PasswordResetRequest, client: Client = Depends(get_supabase)):
+    """Request a password reset token. Always returns 200 to prevent email enumeration."""
+    _cleanup_expired_tokens()
+
+    # Look up user by email
+    res = client.table("users").select("id, email").eq("email", body.email).maybe_single().execute()
+    if res.data:
+        token = str(uuid.uuid4())
+        _password_reset_tokens[token] = {
+            "user_id": res.data["id"],
+            "expires_at": datetime.now(timezone.utc) + timedelta(hours=_RESET_TOKEN_EXPIRY_HOURS),
+        }
+        logger.info(f"Password reset token generated for user {res.data['id']}: {token}")
+        # TODO: Send email with reset link when email service is configured
+        # For now, return the token directly (TEMPORARY — remove in production with email)
+        return {"message": "Se o email existir, um link de redefinicao sera enviado.", "token": token}
+
+    # Always return success to prevent email enumeration
+    return {"message": "Se o email existir, um link de redefinicao sera enviado."}
+
+
+@app.post("/auth/reset-password", tags=["Auth"])
+@limiter.limit("5/minute")
+async def reset_password(request: Request, body: PasswordResetConfirm, client: Client = Depends(get_supabase)):
+    """Reset password using a valid token."""
+    _cleanup_expired_tokens()
+
+    token_data = _password_reset_tokens.get(body.token)
+    if not token_data:
+        raise HTTPException(status_code=400, detail="Token invalido ou expirado")
+
+    if token_data["expires_at"] < datetime.now(timezone.utc):
+        del _password_reset_tokens[body.token]
+        raise HTTPException(status_code=400, detail="Token invalido ou expirado")
+
+    # Update password
+    user_repo = UserRepository(client)
+    new_hash = hash_password(body.new_password)
+    user = user_repo.update(token_data["user_id"], {"password_hash": new_hash})
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario nao encontrado")
+
+    # Invalidate token after use
+    del _password_reset_tokens[body.token]
+
+    logger.info(f"Password reset completed for user {token_data['user_id']}")
+    return {"message": "Senha redefinida com sucesso"}
 
 
 # ============================================

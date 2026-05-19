@@ -16,3 +16,8 @@ CREATE TABLE IF NOT EXISTS grade_overrides (
 -- Index for fast gradebook queries
 CREATE INDEX IF NOT EXISTS idx_grade_overrides_discipline ON grade_overrides(discipline_id);
 CREATE INDEX IF NOT EXISTS idx_grade_overrides_student ON grade_overrides(student_id);
+
+-- NOTE (2026-05-18): Test data cleanup was performed on production database.
+-- Any seed/test users, courses, or content created during development should be
+-- removed via direct API calls or Supabase Dashboard. This migration does not
+-- contain destructive DELETE statements to avoid accidental data loss on re-run.
