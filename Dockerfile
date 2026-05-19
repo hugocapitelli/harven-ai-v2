@@ -2,6 +2,7 @@ FROM python:3.11-slim
 WORKDIR /app
 RUN apt-get update && apt-get install -y gcc libpq-dev curl && rm -rf /var/lib/apt/lists/*
 COPY backend/requirements.txt .
+# cache-bust: elevenlabs added 2026-05-19
 RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ .
 RUN mkdir -p /app/uploads && useradd -m appuser && chown -R appuser:appuser /app
