@@ -290,7 +290,7 @@ export default function InstructorDetail() {
                       {/* Actions */}
                       <div className="flex items-center gap-1">
                         <button
-                          onClick={(e) => { e.stopPropagation(); navigate(`/course/${c.id}/edit`); }}
+                          onClick={(e) => { e.stopPropagation(); navigate(`/courses/${c.id}/edit`); }}
                           className="p-1.5 rounded-md text-muted-foreground hover:text-primary hover:bg-muted transition-colors"
                           title="Editar curso"
                         >
