@@ -194,13 +194,21 @@ export default function ContentCreation() {
       }, 1000);
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {
-        console.error('AI processing failed', err);
-        toast.error('Erro no processamento com IA. Redirecionando para edição manual.');
+        const axErr = err as { response?: { status?: number; data?: { detail?: string } } };
+        const detail = axErr?.response?.data?.detail || '';
+        const is400 = axErr?.response?.status === 400;
+
+        if (is400 && detail.toLowerCase().includes('sem conteudo')) {
+          toast.error('Este PDF não possui texto extraível (pode ser baseado em imagens). Use a edição manual para adicionar o conteúdo.');
+        } else {
+          toast.error(detail || 'Erro no processamento com IA.');
+        }
+
         setAiStage('done');
         setTimeout(() => {
           setStep(3);
           setMethod('manual');
-        }, 1500);
+        }, 2000);
       }
     }
   };
