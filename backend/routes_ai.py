@@ -548,53 +548,54 @@ async def audio_generate_from_content(
     voice_id = body.voice if body.voice in ELEVENLABS_VOICES else "21m00Tcm4TlvDq8ikWAM"
 
     # Prepare text based on audio_type (summary/explanation use OpenAI for text generation)
-    tts_input = content_text
-    if body.audio_type == "summary" and svc.client:
-        try:
+    # Run blocking calls in thread pool to avoid async timeout issues
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+    _tts_executor = ThreadPoolExecutor(max_workers=2)
+
+    def _generate_tts_sync():
+        tts_input = content_text
+
+        if body.audio_type == "summary" and svc.client:
             result = svc.client.chat.completions.create(
                 model=svc.model,
                 messages=[
                     {"role": "system", "content": "Voce e um assistente educacional. Resuma o conteudo abaixo de forma clara e concisa, em portugues, mantendo os conceitos-chave. Maximo 3 paragrafos."},
-                    {"role": "user", "content": content_text[:12000]},
+                    {"role": "user", "content": content_text[:8000]},
                 ],
-                max_tokens=1000,
+                max_tokens=800,
             )
             tts_input = result.choices[0].message.content or content_text
-        except Exception as e:
-            logger.error(f"Audio summary generation failed: {e}", exc_info=True)
-            raise HTTPException(status_code=502, detail="Falha ao gerar resumo do conteudo para audio.")
-    elif body.audio_type == "explanation" and svc.client:
-        try:
+        elif body.audio_type == "explanation" and svc.client:
             result = svc.client.chat.completions.create(
                 model=svc.model,
                 messages=[
                     {"role": "system", "content": "Voce e um professor didatico. Transforme o conteudo abaixo em uma explicacao clara e acessivel, como se estivesse explicando para um aluno. Use linguagem natural e exemplos quando possivel. Em portugues. Maximo 4 paragrafos."},
-                    {"role": "user", "content": content_text[:12000]},
+                    {"role": "user", "content": content_text[:8000]},
                 ],
-                max_tokens=1500,
+                max_tokens=1000,
             )
             tts_input = result.choices[0].message.content or content_text
-        except Exception as e:
-            logger.error(f"Audio explanation generation failed: {e}", exc_info=True)
-            raise HTTPException(status_code=502, detail="Falha ao gerar explicacao didatica para audio.")
-    # podcast mode: use full text directly
 
-    # ElevenLabs supports longer text than OpenAI TTS; truncate at 5000 chars
-    tts_input = tts_input[:5000]
+        # Truncate for ElevenLabs
+        tts_input = tts_input[:5000]
 
-    try:
-        from elevenlabs.client import ElevenLabs
-        el_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+        from elevenlabs.client import ElevenLabs as EL
+        el_client = EL(api_key=ELEVENLABS_API_KEY)
         audio_generator = el_client.text_to_speech.convert(
             text=tts_input,
             voice_id=voice_id,
             model_id="eleven_multilingual_v2",
             output_format="mp3_44100_128",
         )
-        audio_bytes = b"".join(audio_generator)
+        return b"".join(audio_generator)
+
+    try:
+        loop = asyncio.get_event_loop()
+        audio_bytes = await loop.run_in_executor(_tts_executor, _generate_tts_sync)
     except Exception as e:
-        logger.error(f"Audio TTS failed: {e}", exc_info=True)
-        raise HTTPException(status_code=502, detail=f"Falha na geracao de audio: {sanitize_ai_error(e)}")
+        logger.error(f"Audio generation failed: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Falha na geracao de audio: {str(e)[:200]}")
 
     subdir = "tts"
     dest_dir = storage.base_dir / subdir
