@@ -24,6 +24,12 @@ from services.storage_service import StorageService
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# ElevenLabs TTS
+# ---------------------------------------------------------------------------
+
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
@@ -416,26 +422,29 @@ async def ai_estimate_cost(
 # ===================================================================
 
 
+ELEVENLABS_VOICES = {
+    "21m00Tcm4TlvDq8ikWAM": {"name": "Rachel", "gender": "female"},
+    "29vD33N1CtxCmqQRPOHJ": {"name": "Drew", "gender": "male"},
+    "EXAVITQu4vr4xnSDxMaL": {"name": "Bella", "gender": "female"},
+    "ErXwobaYiN019PkySvjV": {"name": "Antoni", "gender": "male"},
+    "MF3mGyEYCl7XYWbV9V6O": {"name": "Elli", "gender": "female"},
+    "TxGEqnHWrfWFTfGW9XjX": {"name": "Josh", "gender": "male"},
+}
+
+
 @router.get("/api/ai/tts/voices", tags=["AI - TTS"])
 async def tts_voices():
     return {
         "voices": [
-            {"id": "alloy", "name": "Alloy", "gender": "neutral"},
-            {"id": "echo", "name": "Echo", "gender": "male"},
-            {"id": "fable", "name": "Fable", "gender": "female"},
-            {"id": "onyx", "name": "Onyx", "gender": "male"},
-            {"id": "nova", "name": "Nova", "gender": "female"},
-            {"id": "shimmer", "name": "Shimmer", "gender": "female"},
+            {"id": vid, "name": meta["name"], "gender": meta["gender"]}
+            for vid, meta in ELEVENLABS_VOICES.items()
         ]
     }
 
 
-VALID_TTS_VOICES = {"alloy", "echo", "fable", "onyx", "nova", "shimmer"}
-
-
 class TTSGenerateRequest(BaseModel):
     text: Optional[str] = Field(None, max_length=50000)
-    voice: str = Field("alloy", max_length=20)
+    voice: str = Field("21m00Tcm4TlvDq8ikWAM", max_length=50)
     content_id: Optional[str] = None
 
 
@@ -446,11 +455,10 @@ async def tts_generate(
     storage: StorageService = Depends(get_storage_service),
     client: Client = Depends(get_supabase),
 ):
-    svc = get_ai_service()
-    if svc.mock_mode or svc.client is None:
+    if not ELEVENLABS_API_KEY:
         raise HTTPException(
             status_code=503,
-            detail="TTS indisponivel: OPENAI_API_KEY nao configurada ou em mock mode.",
+            detail="TTS indisponivel: ELEVENLABS_API_KEY nao configurada.",
         )
 
     # Resolve text: from body.text or from content_id
@@ -464,21 +472,21 @@ async def tts_generate(
     if not text.strip():
         raise HTTPException(status_code=400, detail="Texto vazio. Envie 'text' ou 'content_id' valido.")
 
-    voice = body.voice if body.voice in VALID_TTS_VOICES else "alloy"
-
-    # OpenAI TTS has a 4096-char limit per request; truncate if needed
-    tts_text = text[:4096]
+    voice_id = body.voice if body.voice in ELEVENLABS_VOICES else "21m00Tcm4TlvDq8ikWAM"
 
     try:
-        response = svc.client.audio.speech.create(
-            model="tts-1",
-            voice=voice,
-            input=tts_text,
+        from elevenlabs.client import ElevenLabs
+        el_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+        audio_generator = el_client.text_to_speech.convert(
+            text=text[:5000],
+            voice_id=voice_id,
+            model_id="eleven_multilingual_v2",
+            output_format="mp3_44100_128",
         )
-        audio_bytes = response.content
+        audio_bytes = b"".join(audio_generator)
     except Exception as e:
         logger.error(f"TTS generate failed: {e}", exc_info=True)
-        raise HTTPException(status_code=502, detail=f"Falha na chamada OpenAI TTS: {sanitize_ai_error(e)}")
+        raise HTTPException(status_code=502, detail=f"Falha na chamada ElevenLabs TTS: {sanitize_ai_error(e)}")
 
     subdir = "tts"
     dest_dir = storage.base_dir / subdir
@@ -497,8 +505,9 @@ async def tts_generate(
     return {
         "status": "ok",
         "audio_url": audio_url,
-        "voice": voice,
-        "model": "tts-1",
+        "voice": voice_id,
+        "provider": "elevenlabs",
+        "model": "eleven_multilingual_v2",
         "size_bytes": len(audio_bytes),
     }
 
@@ -506,7 +515,7 @@ async def tts_generate(
 class AudioGenerateRequest(BaseModel):
     content_id: str = Field(..., min_length=1)
     audio_type: str = Field("summary", pattern="^(podcast|summary|explanation)$")
-    voice: str = Field("nova", max_length=20)
+    voice: str = Field("21m00Tcm4TlvDq8ikWAM", max_length=50)
 
 
 @router.post("/api/ai/audio/generate-from-content", tags=["AI - TTS"])
@@ -517,12 +526,13 @@ async def audio_generate_from_content(
     client: Client = Depends(get_supabase),
 ):
     """Generate audio from content body. Modes: podcast (full text), summary, explanation."""
-    svc = get_ai_service()
-    if svc.mock_mode or svc.client is None:
+    if not ELEVENLABS_API_KEY:
         raise HTTPException(
             status_code=503,
-            detail="Audio indisponivel: OPENAI_API_KEY nao configurada ou em mock mode.",
+            detail="Audio indisponivel: ELEVENLABS_API_KEY nao configurada.",
         )
+
+    svc = get_ai_service()
 
     # Load content from DB
     from repositories import ContentRepository
@@ -535,11 +545,11 @@ async def audio_generate_from_content(
     if not content_text.strip():
         raise HTTPException(status_code=400, detail="Conteudo sem texto. Envie um documento com texto extraivel.")
 
-    voice = body.voice if body.voice in VALID_TTS_VOICES else "nova"
+    voice_id = body.voice if body.voice in ELEVENLABS_VOICES else "21m00Tcm4TlvDq8ikWAM"
 
-    # Prepare text based on audio_type
+    # Prepare text based on audio_type (summary/explanation use OpenAI for text generation)
     tts_input = content_text
-    if body.audio_type == "summary":
+    if body.audio_type == "summary" and svc.client:
         try:
             result = svc.client.chat.completions.create(
                 model=svc.model,
@@ -553,7 +563,7 @@ async def audio_generate_from_content(
         except Exception as e:
             logger.error(f"Audio summary generation failed: {e}", exc_info=True)
             raise HTTPException(status_code=502, detail="Falha ao gerar resumo do conteudo para audio.")
-    elif body.audio_type == "explanation":
+    elif body.audio_type == "explanation" and svc.client:
         try:
             result = svc.client.chat.completions.create(
                 model=svc.model,
@@ -569,16 +579,19 @@ async def audio_generate_from_content(
             raise HTTPException(status_code=502, detail="Falha ao gerar explicacao didatica para audio.")
     # podcast mode: use full text directly
 
-    # Truncate to TTS limit
-    tts_input = tts_input[:4096]
+    # ElevenLabs supports longer text than OpenAI TTS; truncate at 5000 chars
+    tts_input = tts_input[:5000]
 
     try:
-        response = svc.client.audio.speech.create(
-            model="tts-1",
-            voice=voice,
-            input=tts_input,
+        from elevenlabs.client import ElevenLabs
+        el_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
+        audio_generator = el_client.text_to_speech.convert(
+            text=tts_input,
+            voice_id=voice_id,
+            model_id="eleven_multilingual_v2",
+            output_format="mp3_44100_128",
         )
-        audio_bytes = response.content
+        audio_bytes = b"".join(audio_generator)
     except Exception as e:
         logger.error(f"Audio TTS failed: {e}", exc_info=True)
         raise HTTPException(status_code=502, detail=f"Falha na geracao de audio: {sanitize_ai_error(e)}")
@@ -597,7 +610,7 @@ async def audio_generate_from_content(
         raise HTTPException(status_code=500, detail="Falha ao salvar audio gerado.")
 
     audio_url = f"/uploads/{subdir}/{filename}"
-    # Rough estimate: TTS-1 generates ~150 words/minute
+    # Rough estimate: ~150 words/minute
     word_count = len(tts_input.split())
     duration_minutes = max(1, round(word_count / 150))
     duration_estimate = f"~{duration_minutes} min"
@@ -606,7 +619,8 @@ async def audio_generate_from_content(
         "audio_url": audio_url,
         "duration_estimate": duration_estimate,
         "audio_type": body.audio_type,
-        "voice": voice,
+        "voice": voice_id,
+        "provider": "elevenlabs",
         "size_bytes": len(audio_bytes),
     }
 
@@ -682,12 +696,11 @@ async def reprocess_content(
 
 @router.get("/api/ai/tts/status", tags=["AI - TTS"])
 async def tts_status():
-    svc = get_ai_service()
-    enabled = svc.client is not None and not svc.mock_mode
+    enabled = bool(ELEVENLABS_API_KEY)
     return {
         "enabled": enabled,
-        "provider": "openai" if enabled else None,
-        "model": "tts-1" if enabled else None,
+        "provider": "elevenlabs" if enabled else None,
+        "model": "eleven_multilingual_v2" if enabled else None,
     }
 
 

@@ -168,6 +168,9 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
   const [loading, setLoading] = useState(true);
   const [activeView, setActiveView] = useState<ViewMode>('text');
 
+  // Student view toggle
+  const [studentView, setStudentView] = useState(false);
+
   // Edit mode
   const [editing, setEditing] = useState(false);
   const [editTitle, setEditTitle] = useState('');
@@ -623,7 +626,21 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
               </span>
             )}
 
-            {isInstructor && !editing && (
+            {isInstructor && (
+              <button
+                onClick={() => setStudentView(v => !v)}
+                className={`flex items-center gap-1.5 border rounded-lg px-3 py-2 text-xs uppercase tracking-widest font-bold transition-colors ${
+                  studentView
+                    ? 'bg-blue-50 border-blue-200 text-blue-700'
+                    : 'border-harven-border bg-white hover:bg-harven-bg text-foreground'
+                }`}
+              >
+                <span className="material-symbols-outlined text-[16px]">{studentView ? 'visibility_off' : 'visibility'}</span>
+                {studentView ? 'Visao Professor' : 'Visao Aluno'}
+              </button>
+            )}
+
+            {isInstructor && !editing && !studentView && (
               <>
                 {/* Reprocess with AI */}
                 <button
