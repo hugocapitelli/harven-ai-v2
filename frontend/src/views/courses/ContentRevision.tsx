@@ -134,7 +134,7 @@ export default function ContentRevision() {
       {/* Header */}
       <div className="h-14 bg-white border-b border-harven-border flex items-center justify-between px-6 flex-shrink-0">
         <div className="flex items-center gap-4">
-          <button onClick={() => navigate(-1)} className="text-gray-400 hover:text-foreground">
+          <button onClick={() => navigate(`/course/${courseId}`)} className="text-gray-400 hover:text-foreground">
             <span className="material-symbols-outlined">arrow_back</span>
           </button>
           <div>
@@ -143,7 +143,7 @@ export default function ContentRevision() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={() => navigate(-1)} className="px-3 py-1.5 text-xs font-bold border rounded-lg hover:bg-gray-50">Descartar</button>
+          <button onClick={() => navigate(`/course/${courseId}`)} className="px-3 py-1.5 text-xs font-bold border rounded-lg hover:bg-gray-50">Descartar</button>
           <button onClick={reprocess} disabled={reprocessing} className="px-3 py-1.5 text-xs font-bold border rounded-lg hover:bg-gray-50 flex items-center gap-1 disabled:opacity-50">
             <span className="material-symbols-outlined text-[14px]">auto_awesome</span>
             {reprocessing ? 'Processando...' : 'Reprocessar IA'}
