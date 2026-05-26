@@ -151,10 +151,10 @@ export default function CourseEdit({ userRole: _userRole }: CourseEditProps) {
             )}
             {sideTab === 'settings' && (
               <div className="space-y-4">
-                <div><label className="text-[10px] font-bold uppercase text-gray-400">Titulo</label><input value={editForm.title} onChange={e => { setEditForm({...editForm, title: e.target.value}); setDirty(true); }} className="w-full bg-harven-bg border-none rounded-lg px-3 py-2 text-sm focus:ring-1 focus:ring-primary mt-1" /></div>
+                <div><label className="text-[11px] font-medium uppercase text-gray-400">Titulo</label><input value={editForm.title} onChange={e => { setEditForm({...editForm, title: e.target.value}); setDirty(true); }} className="w-full bg-harven-bg border-none rounded-lg px-3 py-2 text-sm focus:ring-1 focus:ring-primary mt-1" /></div>
                 <Textarea label="Descrição" value={editForm.description} onChange={e => { setEditForm({...editForm, description: e.target.value}); setDirty(true); }} rows={4} />
                 <div>
-                  <label className="text-[10px] font-bold uppercase text-gray-400">Capa</label>
+                  <label className="text-[11px] font-medium uppercase text-gray-400">Capa</label>
                   {(course?.image_url || course?.image) && <img src={String(course.image_url || course.image)} alt="" className="w-full h-32 object-cover rounded-lg mt-1" />}
                   <input type="file" accept="image/*" onChange={handleImageUpload} className="mt-2 text-xs" />
                 </div>

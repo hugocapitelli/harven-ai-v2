@@ -12,8 +12,8 @@ interface ChapterWithMeta extends Chapter {
 }
 
 const CONTENT_TYPE_META: Record<string, { icon: string; color: string; label: string }> = {
-  VIDEO: { icon: 'play_circle', color: 'text-blue-600 bg-blue-50', label: 'Vídeo' },
-  AUDIO: { icon: 'headphones', color: 'text-purple-600 bg-purple-50', label: 'Áudio' },
+  VIDEO: { icon: 'play_circle', color: 'text-harven-dark bg-harven-dark/10', label: 'Vídeo' },
+  AUDIO: { icon: 'headphones', color: 'text-harven-gold bg-harven-gold/10', label: 'Áudio' },
   TEXT: { icon: 'article', color: 'text-green-600 bg-green-50', label: 'Texto' },
 };
 
@@ -269,8 +269,8 @@ export default function ChapterDetail() {
             {/* Tutor card */}
             <div className="rounded-2xl border border-border bg-card p-5">
               <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-purple-100">
-                  <span className="material-symbols-outlined text-purple-600">psychology</span>
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-harven-dark/10">
+                  <span className="material-symbols-outlined text-harven-dark">psychology</span>
                 </div>
                 <div>
                   <p className="text-sm font-semibold text-foreground">Tutor Socrático</p>

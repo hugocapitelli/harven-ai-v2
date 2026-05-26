@@ -175,12 +175,12 @@ export default function SystemSettings() {
       {activeTab === 'general' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <Card>
-            <CardHeader><h2 className="text-sm font-bold text-foreground">Plataforma</h2></CardHeader>
+            <CardHeader><h2 className="text-sm font-semibold text-foreground">Plataforma</h2></CardHeader>
             <CardContent className="flex flex-col gap-4">
               <Input label="Nome da Plataforma" value={settings.platform_name ?? ''} onChange={(e) => set('platform_name', e.target.value)} />
               <Input label="Email de Suporte" type="email" value={settings.support_email ?? ''} onChange={(e) => set('support_email', e.target.value)} />
               <div className="space-y-1.5">
-                <label className="block text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Cor Primária</label>
+                <label className="block text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Cor Primária</label>
                 <div className="flex items-center gap-3">
                   <input type="color" value={settings.primary_color ?? '#d0ff00'} onChange={(e) => set('primary_color', e.target.value)} className="h-10 w-10 rounded-lg border border-border cursor-pointer" />
                   <Input value={settings.primary_color ?? '#d0ff00'} onChange={(e) => set('primary_color', e.target.value)} containerClassName="flex-1" />
@@ -190,7 +190,7 @@ export default function SystemSettings() {
           </Card>
 
           <Card>
-            <CardHeader><h2 className="text-sm font-bold text-foreground">Logos</h2></CardHeader>
+            <CardHeader><h2 className="text-sm font-semibold text-foreground">Logos</h2></CardHeader>
             <CardContent className="flex flex-col gap-4">
               {(['logo', 'login-logo', 'login-bg'] as const).map((type) => {
                 const key =
@@ -220,7 +220,7 @@ export default function SystemSettings() {
           </Card>
 
           <Card>
-            <CardHeader><h2 className="text-sm font-bold text-foreground">Módulos</h2></CardHeader>
+            <CardHeader><h2 className="text-sm font-semibold text-foreground">Módulos</h2></CardHeader>
             <CardContent>
               <Toggle label="Tutor IA (Socrático)" checked={settings.ai_tutor_enabled ?? false} onChange={(v) => set('ai_tutor_enabled', v)} />
               <Toggle label="Gamificação" checked={settings.gamification_enabled ?? false} onChange={(v) => set('gamification_enabled', v)} />
@@ -229,7 +229,7 @@ export default function SystemSettings() {
           </Card>
 
           <Card>
-            <CardHeader><h2 className="text-sm font-bold text-foreground">Quotas e Armazenamento</h2></CardHeader>
+            <CardHeader><h2 className="text-sm font-semibold text-foreground">Quotas e Armazenamento</h2></CardHeader>
             <CardContent className="flex flex-col gap-4">
               <Input label="Tokens por Resposta (max)" type="number" value={String(settings.max_tokens_per_response ?? 2048)} onChange={(e) => set('max_tokens_per_response', Number(e.target.value))} />
               <Input label="Upload Máximo (MB)" type="number" value={String(settings.max_upload_mb ?? 50)} onChange={(e) => set('max_upload_mb', Number(e.target.value))} />
@@ -248,7 +248,7 @@ export default function SystemSettings() {
       {activeTab === 'security' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <Card>
-            <CardHeader><h2 className="text-sm font-bold text-foreground">Política de Senhas</h2></CardHeader>
+            <CardHeader><h2 className="text-sm font-semibold text-foreground">Política de Senhas</h2></CardHeader>
             <CardContent className="flex flex-col gap-4">
               <Input label="Tamanho Mínimo" type="number" value={String(settings.min_password_length ?? 8)} onChange={(e) => set('min_password_length', Number(e.target.value))} />
               <Toggle label="Exigir Caracteres Especiais" checked={settings.require_special_chars ?? false} onChange={(v) => set('require_special_chars', v)} />
@@ -257,7 +257,7 @@ export default function SystemSettings() {
           </Card>
 
           <Card>
-            <CardHeader><h2 className="text-sm font-bold text-foreground">Sessão</h2></CardHeader>
+            <CardHeader><h2 className="text-sm font-semibold text-foreground">Sessão</h2></CardHeader>
             <CardContent className="flex flex-col gap-4">
               <Input label="Timeout de Sessão (minutos)" type="number" value={String(settings.session_timeout ?? 60)} onChange={(e) => set('session_timeout', Number(e.target.value))} />
               <Button variant="destructive" onClick={async () => {
@@ -274,7 +274,7 @@ export default function SystemSettings() {
       {activeTab === 'backups' && (
         <Card>
           <CardHeader className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-foreground">Backups</h2>
+            <h2 className="text-sm font-semibold text-foreground">Backups</h2>
             <Button size="sm" onClick={async () => {
               try { await adminApi.createBackup(); toast.success('Backup criado.'); const d = await adminApi.listBackups(); setBackups(unwrapList<Backup>(d)); } catch { toast.error('Erro.'); }
             }}>
@@ -285,10 +285,10 @@ export default function SystemSettings() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border">
-                  <th className="text-left px-4 py-2 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Arquivo</th>
-                  <th className="text-left px-4 py-2 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Tamanho</th>
-                  <th className="text-left px-4 py-2 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Data</th>
-                  <th className="text-right px-4 py-2 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Ações</th>
+                  <th className="text-left px-4 py-2 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Arquivo</th>
+                  <th className="text-left px-4 py-2 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Tamanho</th>
+                  <th className="text-left px-4 py-2 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Data</th>
+                  <th className="text-right px-4 py-2 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Ações</th>
                 </tr>
               </thead>
               <tbody>
@@ -335,7 +335,7 @@ export default function SystemSettings() {
             ))}
           </div>
           <Card>
-            <CardHeader><h2 className="text-sm font-bold text-foreground">Cache</h2></CardHeader>
+            <CardHeader><h2 className="text-sm font-semibold text-foreground">Cache</h2></CardHeader>
             <CardContent>
               <Button variant="outline" onClick={async () => {
                 try { await adminApi.clearCache(); toast.success('Cache limpo.'); } catch { toast.error('Erro.'); }
@@ -369,10 +369,10 @@ export default function SystemSettings() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border">
-                  <th className="text-left px-4 py-2 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Tipo</th>
-                  <th className="text-left px-4 py-2 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Mensagem</th>
-                  <th className="text-left px-4 py-2 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Autor</th>
-                  <th className="text-left px-4 py-2 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Data</th>
+                  <th className="text-left px-4 py-2 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Tipo</th>
+                  <th className="text-left px-4 py-2 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Mensagem</th>
+                  <th className="text-left px-4 py-2 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Autor</th>
+                  <th className="text-left px-4 py-2 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Data</th>
                 </tr>
               </thead>
               <tbody>

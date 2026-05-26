@@ -24,14 +24,14 @@ const statusVariant = (status?: string) => {
   }
 };
 
-/* Gradient palette for discipline cards without images */
-const GRADIENTS = [
-  'from-emerald-600 to-teal-700',
-  'from-indigo-600 to-violet-700',
-  'from-amber-600 to-orange-700',
-  'from-rose-600 to-pink-700',
-  'from-cyan-600 to-blue-700',
-  'from-fuchsia-600 to-purple-700',
+/* Brand-aligned solid color palette for discipline cards without images */
+const CARD_COLORS = [
+  'bg-harven-dark',
+  'bg-[#2a4528]',
+  'bg-[#3d6339]',
+  'bg-harven-gold',
+  'bg-harven-dark',
+  'bg-[#2a4528]',
 ];
 
 const ICONS = ['school', 'biotech', 'psychology', 'architecture', 'science', 'balance'];
@@ -151,8 +151,7 @@ export default function InstructorList() {
                   <img src={d.image} alt={d.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
                 </div>
               ) : (
-                <div className={`h-40 bg-gradient-to-br ${GRADIENTS[idx % GRADIENTS.length]} flex items-center justify-center relative overflow-hidden`}>
-                  <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMiIgZmlsbD0icmdiYSgyNTUsMjU1LDI1NSwwLjEpIi8+PC9zdmc+')] opacity-60" />
+                <div className={`h-40 ${CARD_COLORS[idx % CARD_COLORS.length]} flex items-center justify-center relative overflow-hidden hover:opacity-90 transition-opacity`}>
                   <span className="material-symbols-outlined text-white/30 text-[72px] group-hover:scale-110 transition-transform duration-300">
                     {ICONS[idx % ICONS.length]}
                   </span>
@@ -194,7 +193,7 @@ export default function InstructorList() {
               className="flex items-center gap-5 p-5 cursor-pointer group"
             >
               {/* Icon placeholder */}
-              <div className={`h-14 w-14 rounded-xl bg-gradient-to-br ${GRADIENTS[idx % GRADIENTS.length]} flex items-center justify-center shrink-0 overflow-hidden`}>
+              <div className={`h-14 w-14 rounded-xl ${CARD_COLORS[idx % CARD_COLORS.length]} flex items-center justify-center shrink-0 overflow-hidden`}>
                 {d.image ? (
                   <img src={d.image} alt="" className="h-full w-full object-cover" />
                 ) : (

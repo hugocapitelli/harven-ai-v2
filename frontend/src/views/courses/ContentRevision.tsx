@@ -10,7 +10,7 @@ import type { Content, Question } from '../../types';
 const difficultyMap = { easy: 'Fácil', medium: 'Médio', hard: 'Difícil' } as const;
 const difficultyColors = {
   easy: 'bg-green-100 text-green-700 border-green-200',
-  medium: 'bg-amber-100 text-amber-700 border-amber-200',
+  medium: 'bg-orange-100 text-orange-700 border-orange-200',
   hard: 'bg-red-100 text-red-700 border-red-200',
 } as const;
 const difficultyIcons = { easy: 'sentiment_satisfied', medium: 'psychology', hard: 'local_fire_department' };

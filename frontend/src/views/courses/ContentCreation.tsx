@@ -29,8 +29,8 @@ const FILE_MAX: Record<ContentType, number> = {
 
 const TYPE_META: Record<ContentType, { icon: string; label: string; color: string }> = {
   TEXT: { icon: 'article', label: 'Documento', color: 'border-green-400 bg-green-50 text-green-700' },
-  VIDEO: { icon: 'play_circle', label: 'Vídeo', color: 'border-blue-400 bg-blue-50 text-blue-700' },
-  AUDIO: { icon: 'headphones', label: 'Áudio', color: 'border-purple-400 bg-purple-50 text-purple-700' },
+  VIDEO: { icon: 'play_circle', label: 'Vídeo', color: 'border-harven-dark/40 bg-harven-dark/5 text-harven-dark' },
+  AUDIO: { icon: 'headphones', label: 'Áudio', color: 'border-harven-gold/40 bg-harven-gold/5 text-harven-gold' },
 };
 
 const AI_STAGES: { key: AiStage; label: string; icon: string }[] = [
@@ -412,13 +412,13 @@ export default function ContentCreation() {
             onClick={() => handleMethodSelect('ai')}
             className="group flex w-full items-start gap-4 rounded-2xl border-2 border-border bg-card p-6 text-left transition-all hover:border-harven-primary hover:shadow-sm"
           >
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-purple-100">
-              <span className="material-symbols-outlined text-2xl text-purple-600">auto_awesome</span>
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-harven-dark/10">
+              <span className="material-symbols-outlined text-2xl text-harven-dark">auto_awesome</span>
             </div>
             <div>
               <div className="flex items-center gap-2">
                 <p className="font-semibold text-foreground">Processamento com IA</p>
-                <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-purple-700">
+                <span className="rounded-full bg-harven-dark/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-harven-dark">
                   BETA
                 </span>
               </div>
@@ -461,13 +461,13 @@ export default function ContentCreation() {
       {step === 3 && method === 'ai' && (
         <div className="mt-12 flex flex-col items-center text-center">
           <div className="relative">
-            <div className="flex h-20 w-20 items-center justify-center rounded-full bg-purple-100">
-              <span className="material-symbols-outlined animate-pulse text-4xl text-purple-600">
+            <div className="flex h-20 w-20 items-center justify-center rounded-full bg-harven-dark/10">
+              <span className="material-symbols-outlined animate-pulse text-4xl text-harven-dark">
                 auto_awesome
               </span>
             </div>
             {aiStage !== 'done' && (
-              <div className="absolute -inset-2 animate-ping rounded-full border-2 border-purple-300 opacity-20" />
+              <div className="absolute -inset-2 animate-ping rounded-full border-2 border-harven-dark/30 opacity-20" />
             )}
           </div>
 
@@ -485,7 +485,7 @@ export default function ContentCreation() {
                   className={cn(
                     'flex items-center gap-3 rounded-xl px-4 py-3 text-sm transition-all',
                     isDone && 'bg-green-50 text-green-700',
-                    isCurrent && 'bg-purple-50 text-purple-700 font-medium',
+                    isCurrent && 'bg-harven-dark/10 text-harven-dark font-medium',
                     isPending && 'text-muted-foreground/50',
                   )}
                 >
@@ -494,7 +494,7 @@ export default function ContentCreation() {
                   </span>
                   {s.label}
                   {isCurrent && (
-                    <div className="ml-auto h-4 w-4 animate-spin rounded-full border-2 border-purple-300 border-t-purple-600" />
+                    <div className="ml-auto h-4 w-4 animate-spin rounded-full border-2 border-harven-dark/30 border-t-harven-dark" />
                   )}
                 </div>
               );

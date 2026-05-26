@@ -25,8 +25,8 @@ const MAX_INTERACTIONS = 20;
 const STUDY_SAVE_INTERVAL_MS = 5 * 60 * 1000; // 5 min
 
 const TYPE_BADGE: Record<string, string> = {
-  VIDEO: 'bg-blue-100 text-blue-600',
-  AUDIO: 'bg-purple-100 text-purple-600',
+  VIDEO: 'bg-harven-dark/10 text-harven-dark',
+  AUDIO: 'bg-harven-gold/10 text-harven-gold',
   TEXT: 'bg-green-100 text-green-600',
 };
 
@@ -653,7 +653,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                 onClick={() => setStudentView(v => !v)}
                 className={`flex items-center gap-1.5 border rounded-lg px-3 py-2 text-xs uppercase tracking-widest font-bold transition-colors ${
                   studentView
-                    ? 'bg-blue-50 border-blue-200 text-blue-700'
+                    ? 'bg-harven-dark/10 border-harven-dark/30 text-harven-dark'
                     : 'border-harven-border bg-white hover:bg-harven-bg text-foreground'
                 }`}
               >
@@ -668,7 +668,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                 <button
                   onClick={handleReprocess}
                   disabled={reprocessing}
-                  className="flex items-center gap-1.5 border border-violet-200 bg-violet-50 hover:bg-violet-100 text-violet-700 font-bold px-3 py-2 rounded-lg text-xs uppercase tracking-widest transition-colors disabled:opacity-50"
+                  className="flex items-center gap-1.5 border border-harven-dark/30 bg-harven-dark/10 hover:bg-harven-dark/20 text-harven-dark font-bold px-3 py-2 rounded-lg text-xs uppercase tracking-widest transition-colors disabled:opacity-50"
                   title="Reprocessar texto com IA para melhorar formatação"
                 >
                   <span className={`material-symbols-outlined text-[16px] ${reprocessing ? 'animate-spin' : ''}`}>
@@ -801,8 +801,8 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                 {content.type === 'AUDIO' && (
                   <div className="bg-white rounded-xl border border-harven-border p-6">
                     <div className="flex items-center gap-4 mb-4">
-                      <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-purple-100">
-                        <span className="material-symbols-outlined text-3xl text-purple-600">
+                      <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-harven-gold/10">
+                        <span className="material-symbols-outlined text-3xl text-harven-gold">
                           headphones
                         </span>
                       </div>
@@ -887,7 +887,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                             ? 'bg-green-100 text-green-700 border-green-200'
                             : diff === 'hard'
                               ? 'bg-red-100 text-red-700 border-red-200'
-                              : 'bg-amber-100 text-amber-700 border-amber-200';
+                              : 'bg-orange-100 text-orange-700 border-orange-200';
                         const diffIcon = diff === 'easy' ? 'sentiment_satisfied' : diff === 'hard' ? 'local_fire_department' : 'psychology';
                         const isSelected = selectedQuestion === q.question;
                         return (
@@ -1023,7 +1023,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                     ) : (
                       <div className="mt-3">
                         <div className="flex items-center gap-2 mb-2">
-                          <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
+                          <span className="h-2 w-2 rounded-full bg-primary animate-pulse" />
                           <p className="text-xs text-white/80">Leitura em progresso</p>
                         </div>
                         <p className="text-[10px] text-white/50">

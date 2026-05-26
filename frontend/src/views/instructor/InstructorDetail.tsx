@@ -207,7 +207,7 @@ export default function InstructorDetail() {
         <StatCard icon="menu_book" label="Cursos" value={stats.course_count ?? stats.courses_count ?? courses.length} />
         <StatCard icon="group" label="Alunos" value={stats.student_count ?? stats.students_count ?? students.length} />
         <StatCard icon="forum" label="Conversas" value={stats.session_count ?? stats.sessions_count ?? sessions.length} />
-        <StatCard icon="trending_up" label="Progresso Médio" value={`${stats.avg_progress ?? 0}%`} />
+        <StatCard icon="trending_up" label="Progresso Médio" value={`${stats.avg_progress ?? 0}%`} variant="highlight" />
       </div>
 
       {/* Toolbar */}
@@ -241,7 +241,7 @@ export default function InstructorDetail() {
             </Card>
           ) : (
             filteredCourses.map((c, idx) => {
-              const gradients = ['from-emerald-600 to-teal-700','from-indigo-600 to-violet-700','from-amber-600 to-orange-700','from-rose-600 to-pink-700','from-cyan-600 to-blue-700'];
+              const cardColors = ['bg-harven-dark','bg-[#2a4528]','bg-[#3d6339]','bg-harven-gold','bg-harven-dark'];
               const icons = ['auto_stories','psychology','science','architecture','biotech'];
               return (
                 <Card key={c.id} className="overflow-hidden group">
@@ -252,10 +252,9 @@ export default function InstructorDetail() {
                     </div>
                   ) : (
                     <div
-                      className={`h-36 bg-gradient-to-br ${gradients[idx % gradients.length]} flex items-center justify-center cursor-pointer relative overflow-hidden`}
+                      className={`h-36 ${cardColors[idx % cardColors.length]} flex items-center justify-center cursor-pointer overflow-hidden hover:opacity-90 transition-opacity`}
                       onClick={() => navigate(`/course/${c.id}`)}
                     >
-                      <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGNpcmNsZSBjeD0iMjAiIGN5PSIyMCIgcj0iMiIgZmlsbD0icmdiYSgyNTUsMjU1LDI1NSwwLjEpIi8+PC9zdmc+')] opacity-60" />
                       <span className="material-symbols-outlined text-white/25 text-[64px] group-hover:scale-110 transition-transform duration-300">{icons[idx % icons.length]}</span>
                     </div>
                   )}
@@ -322,10 +321,10 @@ export default function InstructorDetail() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border">
-                  <th className="text-left px-4 py-3 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Aluno</th>
-                  <th className="text-left px-4 py-3 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Progresso</th>
-                  <th className="text-left px-4 py-3 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Nota</th>
-                  <th className="text-left px-4 py-3 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Sessões</th>
+                  <th className="text-left px-4 py-3 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Aluno</th>
+                  <th className="text-left px-4 py-3 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Progresso</th>
+                  <th className="text-left px-4 py-3 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Nota</th>
+                  <th className="text-left px-4 py-3 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Sessões</th>
                 </tr>
               </thead>
               <tbody>
@@ -367,13 +366,13 @@ export default function InstructorDetail() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border">
-                  <th className="text-left px-4 py-3 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Aluno</th>
+                  <th className="text-left px-4 py-3 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Aluno</th>
                   {courses.slice(0, 8).map((c) => (
-                    <th key={c.id} className="text-center px-3 py-3 text-[10px] font-bold text-muted-foreground uppercase tracking-widest max-w-[120px] truncate">
+                    <th key={c.id} className="text-center px-3 py-3 text-[11px] font-medium text-muted-foreground uppercase tracking-wide max-w-[120px] truncate">
                       {c.title}
                     </th>
                   ))}
-                  <th className="text-center px-4 py-3 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Média</th>
+                  <th className="text-center px-4 py-3 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Média</th>
                 </tr>
               </thead>
               <tbody>

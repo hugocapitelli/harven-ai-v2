@@ -181,7 +181,7 @@ export default function DisciplineEdit() {
           {sidebarTab === 'materials' && (
             <div className="flex flex-col gap-4">
               <div className="flex items-center justify-between">
-                <h2 className="text-lg font-display font-bold text-foreground">Cursos</h2>
+                <h2 className="text-lg font-display font-semibold text-foreground">Cursos</h2>
                 <Button size="sm" onClick={() => { setCourseForm(EMPTY_COURSE); setCourseModal({ open: true, editing: null }); }}>
                   <span className="material-symbols-outlined text-[16px] mr-1">add</span> Novo Curso
                 </Button>
@@ -256,7 +256,7 @@ export default function DisciplineEdit() {
               />
 
               <div className="space-y-1.5">
-                <label className="block text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Imagem de Capa</label>
+                <label className="block text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Imagem de Capa</label>
                 <div className="flex items-center gap-4">
                   {imagePreview ? (
                     <div className="h-24 w-40 rounded-lg overflow-hidden bg-muted">

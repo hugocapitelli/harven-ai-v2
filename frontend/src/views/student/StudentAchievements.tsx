@@ -8,19 +8,26 @@ import { PageHeader } from '../../components/ui/PageHeader';
 
 const categoryInfo: Record<string, { icon: string; color: string; label: string }> = {
   jornada: { icon: 'route', color: 'text-green-500', label: 'Jornada' },
-  tempo: { icon: 'schedule', color: 'text-blue-500', label: 'Tempo' },
+  tempo: { icon: 'schedule', color: 'text-harven-gold', label: 'Tempo' },
   desempenho: { icon: 'trending_up', color: 'text-orange-500', label: 'Desempenho' },
   certificados: { icon: 'workspace_premium', color: 'text-yellow-500', label: 'Certificados' },
   consistencia: { icon: 'bolt', color: 'text-red-500', label: 'Consistencia' },
-  social: { icon: 'group', color: 'text-pink-500', label: 'Social' },
-  especial: { icon: 'agriculture', color: 'text-emerald-600', label: 'Agro' },
+  social: { icon: 'group', color: 'text-muted-foreground', label: 'Social' },
+  especial: { icon: 'agriculture', color: 'text-green-500', label: 'Agro' },
 };
 
 const rarityStyles: Record<string, string> = {
-  comum: 'bg-gray-100 text-gray-600',
-  raro: 'bg-blue-100 text-blue-600',
-  epico: 'bg-purple-100 text-purple-600',
-  lendario: 'bg-gradient-to-br from-amber-100 to-yellow-100 text-amber-600',
+  comum: 'bg-[#3d6339]/10 text-[#3d6339]',
+  raro: 'bg-harven-dark/10 text-harven-dark',
+  epico: 'bg-harven-gold/10 text-harven-gold',
+  lendario: 'bg-primary/10 text-harven-dark',
+};
+
+const rarityAnimations: Record<string, string> = {
+  comum: 'animate-achievement-common',
+  raro: 'animate-achievement-rare',
+  epico: 'animate-achievement-epic',
+  lendario: 'animate-achievement-legendary',
 };
 
 const levelTitles = ['Novato', 'Iniciante Promissor', 'Aprendiz Curioso', 'Estudioso Dedicado', 'Erudito Socratico', 'Mestre Erudito', 'Lenda Suprema'];
@@ -161,7 +168,7 @@ export default function StudentAchievements() {
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {filtered.map(a => (
-                <button key={a.id} onClick={() => setSelected(a)} className={cn('text-left p-4 rounded-xl border transition-colors', a.unlocked ? 'bg-white border-harven-border hover:border-primary/50' : 'bg-gray-50 border-gray-200 opacity-70')}>
+                <button key={a.id} onClick={() => setSelected(a)} className={cn('text-left p-4 rounded-xl border transition-colors', a.unlocked ? 'bg-white border-harven-border hover:border-primary/50' : 'bg-gray-50 border-gray-200 opacity-70', a.unlocked ? (rarityAnimations[a.rarity] ?? '') : '')}>
                   <div className="flex items-center gap-3 mb-2">
                     <div className={cn('size-10 rounded-lg flex items-center justify-center', rarityStyles[a.rarity] ?? 'bg-gray-100 text-gray-500')}>
                       <span className="material-symbols-outlined">{a.unlocked ? a.icon : 'lock'}</span>
@@ -186,7 +193,7 @@ export default function StudentAchievements() {
         <div className="space-y-6">
           <div className="bg-white rounded-xl border border-harven-border p-6">
             <h3 className="font-display font-bold mb-4 flex items-center gap-2">
-              <span className="material-symbols-outlined text-purple-500">category</span> Por Categoria
+              <span className="material-symbols-outlined text-harven-gold">category</span> Por Categoria
             </h3>
             <div className="space-y-3">
               {Object.entries(categoryInfo).map(([key, info]) => {
@@ -250,7 +257,7 @@ export default function StudentAchievements() {
                   <div className="h-3 bg-gray-100 rounded-full overflow-hidden"><div className="h-full bg-primary rounded-full" style={{ width: `${selected.progress_percent}%` }} /></div>
                 </div>
               )}
-              <div className="flex items-center justify-center gap-2 text-lg"><span className="material-symbols-outlined text-yellow-500">star</span><span className="font-bold">{selected.points} pontos</span></div>
+              <div className="flex items-center justify-center gap-2 text-lg"><span className="material-symbols-outlined text-harven-gold">star</span><span className="font-bold">{selected.points} pontos</span></div>
             </div>
             <button onClick={() => setSelected(null)} className="w-full mt-6 py-3 bg-harven-dark text-white font-bold rounded-xl hover:bg-black transition-colors">Fechar</button>
           </div>

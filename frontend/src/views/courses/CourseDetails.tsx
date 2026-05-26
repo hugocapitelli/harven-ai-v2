@@ -174,7 +174,7 @@ export default function CourseDetails({ userRole }: CourseDetailsProps) {
                             </div>
                             {isInstructor && (
                               <div className="flex gap-2">
-                                <button onClick={e => { e.stopPropagation(); navigate(`/course/${courseId}/chapter/${mod.id}/content/${content.id}/revision`); }} className="p-1.5 bg-white border rounded-lg text-gray-400 hover:text-blue-500"><span className="material-symbols-outlined text-[16px]">edit</span></button>
+                                <button onClick={e => { e.stopPropagation(); navigate(`/course/${courseId}/chapter/${mod.id}/content/${content.id}/revision`); }} className="p-1.5 bg-white border rounded-lg text-gray-400 hover:text-harven-dark"><span className="material-symbols-outlined text-[16px]">edit</span></button>
                                 <button onClick={e => { e.stopPropagation(); setDeleteTarget({ type: 'content', id: content.id }); }} className="p-1.5 bg-white border rounded-lg text-gray-400 hover:text-red-500"><span className="material-symbols-outlined text-[16px]">delete</span></button>
                               </div>
                             )}

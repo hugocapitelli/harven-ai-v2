@@ -40,8 +40,8 @@ const ROLE_VARIANT: Record<string, 'default' | 'success' | 'danger'> = { STUDENT
 
 const RARITY_COLORS: Record<string, string> = {
   comum: 'border-gray-300 bg-gray-50',
-  raro: 'border-blue-300 bg-blue-50',
-  epico: 'border-purple-300 bg-purple-50',
+  raro: 'border-harven-dark/30 bg-harven-dark/5',
+  epico: 'border-harven-gold/30 bg-harven-gold/5',
   lendario: 'border-harven-gold bg-yellow-50',
 };
 
@@ -152,7 +152,7 @@ export default function UserProfile() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Recent Activity */}
         <Card>
-          <CardHeader><h2 className="text-sm font-bold text-foreground">Atividade Recente</h2></CardHeader>
+          <CardHeader><h2 className="text-sm font-semibold text-foreground">Atividade Recente</h2></CardHeader>
           <CardContent>
             {activities.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-4">Nenhuma atividade registrada.</p>
@@ -181,7 +181,7 @@ export default function UserProfile() {
 
         {/* Certificates */}
         <Card>
-          <CardHeader><h2 className="text-sm font-bold text-foreground">Certificados</h2></CardHeader>
+          <CardHeader><h2 className="text-sm font-semibold text-foreground">Certificados</h2></CardHeader>
           <CardContent>
             {certificates.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-4">Nenhum certificado emitido.</p>
@@ -213,7 +213,7 @@ export default function UserProfile() {
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-foreground">Conquistas</h2>
+            <h2 className="text-sm font-semibold text-foreground">Conquistas</h2>
             <span className="text-xs text-muted-foreground">{unlockedAchievements.length} / {achievements.length}</span>
           </div>
         </CardHeader>

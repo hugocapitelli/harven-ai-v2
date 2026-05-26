@@ -162,12 +162,12 @@ export default function CourseList({ userRole }: CourseListProps) {
         <Modal.Body>
           <form id="create-course-form" onSubmit={handleCreate} className="space-y-4">
             <div>
-              <label className="text-[10px] font-bold uppercase text-gray-400">Titulo</label>
+              <label className="text-[11px] font-medium uppercase text-gray-400">Titulo</label>
               <input value={newCourse.title} onChange={e => setNewCourse({...newCourse, title: e.target.value})} className="w-full bg-harven-bg border-none rounded-lg px-4 py-2 text-sm focus:ring-1 focus:ring-primary mt-1" required />
             </div>
             {userRole === 'ADMIN' && (
               <div>
-                <label className="text-[10px] font-bold uppercase text-gray-400">Atribuir ao Instrutor</label>
+                <label className="text-[11px] font-medium uppercase text-gray-400">Atribuir ao Instrutor</label>
                 <select
                   value={newCourse.instructor_id}
                   onChange={e => setNewCourse({...newCourse, instructor_id: e.target.value})}

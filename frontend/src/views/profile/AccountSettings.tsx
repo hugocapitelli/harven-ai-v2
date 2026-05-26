@@ -157,7 +157,7 @@ export default function AccountSettings() {
             <Input label="Título" placeholder="Ex.: Prof., Dr., Me." value={title} onChange={(e) => setTitle(e.target.value)} />
 
             <div className="space-y-1.5">
-              <label className="block text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Bio</label>
+              <label className="block text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Bio</label>
               <textarea
                 rows={3}
                 value={bio}
@@ -177,7 +177,7 @@ export default function AccountSettings() {
       {/* Tab: Security */}
       {activeTab === 'security' && (
         <Card>
-          <CardHeader><h2 className="text-sm font-bold text-foreground">Alterar Senha</h2></CardHeader>
+          <CardHeader><h2 className="text-sm font-semibold text-foreground">Alterar Senha</h2></CardHeader>
           <CardContent className="flex flex-col gap-4">
             <Input
               label="Senha Atual"
@@ -211,7 +211,7 @@ export default function AccountSettings() {
       {activeTab === 'notifications' && (
         <div className="flex flex-col gap-4">
           <Card>
-            <CardHeader><h2 className="text-sm font-bold text-foreground">Email</h2></CardHeader>
+            <CardHeader><h2 className="text-sm font-semibold text-foreground">Email</h2></CardHeader>
             <CardContent>
               <Toggle
                 label="Novo conteúdo disponível"
@@ -235,7 +235,7 @@ export default function AccountSettings() {
           </Card>
 
           <Card>
-            <CardHeader><h2 className="text-sm font-bold text-foreground">Push</h2></CardHeader>
+            <CardHeader><h2 className="text-sm font-semibold text-foreground">Push</h2></CardHeader>
             <CardContent>
               <Toggle
                 label="Mensagens"

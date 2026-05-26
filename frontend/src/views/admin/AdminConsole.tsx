@@ -167,7 +167,7 @@ export default function AdminConsole() {
       {stats.users_by_role && Object.keys(stats.users_by_role).length > 0 && (
         <Card>
           <CardHeader>
-            <h2 className="text-sm font-bold text-foreground">Distribuição de Usuários</h2>
+            <h2 className="text-sm font-semibold text-foreground">Distribuição de Usuários</h2>
           </CardHeader>
           <CardContent>
             <div className="flex flex-col gap-3">
@@ -175,7 +175,7 @@ export default function AdminConsole() {
                 const total = stats.total_users || 1;
                 const pct = (Number(count) / total) * 100;
                 const label = role === 'TEACHER' ? 'Professores' : role === 'STUDENT' ? 'Alunos' : role === 'ADMIN' ? 'Administradores' : role;
-                const color = role === 'ADMIN' ? 'bg-purple-500' : role === 'TEACHER' ? 'bg-harven-gold' : 'bg-blue-500';
+                const color = role === 'ADMIN' ? 'bg-harven-dark' : role === 'TEACHER' ? 'bg-harven-gold' : 'bg-[#3d6339]';
                 return (
                   <div key={role} className="flex flex-col gap-1">
                     <div className="flex justify-between text-xs">
@@ -195,7 +195,7 @@ export default function AdminConsole() {
 
       {/* Quick Actions */}
       <div>
-        <h2 className="text-sm font-bold text-foreground mb-3">Ações Rápidas</h2>
+        <h2 className="text-sm font-semibold text-foreground mb-3">Ações Rápidas</h2>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           {QUICK_ACTIONS.map((action) => (
             <Card
@@ -214,7 +214,7 @@ export default function AdminConsole() {
       {/* Logs */}
       <Card>
         <CardHeader className="flex items-center justify-between">
-          <h2 className="text-sm font-bold text-foreground">Logs do Sistema</h2>
+          <h2 className="text-sm font-semibold text-foreground">Logs do Sistema</h2>
           <Button variant="ghost" size="sm" onClick={() => navigate('/admin/settings?tab=logs')}>
             Ver todos
           </Button>
@@ -223,10 +223,10 @@ export default function AdminConsole() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border">
-                <th className="text-left px-4 py-2 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Tipo</th>
-                <th className="text-left px-4 py-2 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Mensagem</th>
-                <th className="text-left px-4 py-2 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Autor</th>
-                <th className="text-left px-4 py-2 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Data</th>
+                <th className="text-left px-4 py-2 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Tipo</th>
+                <th className="text-left px-4 py-2 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Mensagem</th>
+                <th className="text-left px-4 py-2 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Autor</th>
+                <th className="text-left px-4 py-2 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Data</th>
               </tr>
             </thead>
             <tbody>

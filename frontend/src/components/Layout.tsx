@@ -153,7 +153,7 @@ export default function Layout({ children }: { children: ReactNode }) {
       <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <div className="flex-1 flex flex-col md:ml-64 min-w-0">
         <Header onToggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
-        <main className="flex-1 overflow-y-auto">{children}</main>
+        <main className="flex-1 overflow-y-auto animate-page-enter">{children}</main>
       </div>
     </div>
   );

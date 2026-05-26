@@ -189,7 +189,7 @@ export default function SessionReview() {
           <CardHeader className="shrink-0 py-3">
             <div className="flex items-center gap-2">
               <span className="material-symbols-outlined text-[18px] text-primary">forum</span>
-              <h2 className="text-sm font-bold text-foreground">Conversa Socrática</h2>
+              <h2 className="text-sm font-semibold text-foreground">Conversa Socrática</h2>
               <span className="text-xs text-muted-foreground">({messages.length} mensagens)</span>
             </div>
           </CardHeader>
@@ -201,7 +201,7 @@ export default function SessionReview() {
                   <Avatar
                     fallback={isStudent ? 'AL' : 'IA'}
                     size="sm"
-                    className={isStudent ? 'bg-blue-100' : 'bg-accent'}
+                    className={isStudent ? 'bg-harven-dark/10' : 'bg-accent'}
                   />
                   <div
                     className={`max-w-[75%] rounded-xl px-4 py-3 text-sm ${
@@ -240,11 +240,11 @@ export default function SessionReview() {
         <div className="flex flex-col gap-4">
           <Card>
             <CardHeader className="py-3">
-              <h2 className="text-sm font-bold text-foreground">Avaliação</h2>
+              <h2 className="text-sm font-semibold text-foreground">Avaliação</h2>
             </CardHeader>
             <CardContent className="flex flex-col gap-5">
               <div>
-                <label className="block text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Nota</label>
+                <label className="block text-[11px] font-medium text-muted-foreground uppercase tracking-wide mb-2">Nota</label>
                 <StarInput value={rating} onChange={setRating} />
               </div>
 

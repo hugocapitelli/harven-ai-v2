@@ -29,6 +29,23 @@
   --color-harven-sidebar: #152214;
   --color-harven-primary: #d0ff00;
 
+  /* Stat card scale (monochrome greens) */
+  --color-stat-1: #1c2d1b;
+  --color-stat-2: #2a4528;
+  --color-stat-3: #3d6339;
+  --color-stat-4: #8a7a4f;
+
+  /* Achievement rarity */
+  --color-rarity-common: #3d6339;
+  --color-rarity-rare: #1c2d1b;
+  --color-rarity-epic: #8a7a4f;
+  --color-rarity-legendary: #d0ff00;
+
+  /* Semantic (brand-derived) */
+  --color-success: #3d6339;
+  --color-warning: #c9a227;
+  --color-info: #2a4528;
+
   --font-display: "Lexend", sans-serif;
   --font-sans: "Noto Sans", sans-serif;
 
@@ -75,3 +92,43 @@ body {
   from { opacity: 0; transform: scale(0.96) translateY(8px); }
   to { opacity: 1; transform: scale(1) translateY(0); }
 }
+
+/* Achievement unlock animations */
+@keyframes achievementCommon {
+  0% { box-shadow: 0 0 0 0 rgba(208, 255, 0, 0); }
+  50% { box-shadow: 0 0 20px 4px rgba(208, 255, 0, 0.3); }
+  100% { box-shadow: 0 0 0 0 rgba(208, 255, 0, 0); }
+}
+
+@keyframes achievementRare {
+  0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(208, 255, 0, 0); }
+  40% { transform: scale(1.08); box-shadow: 0 0 24px 6px rgba(208, 255, 0, 0.4); }
+  100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(208, 255, 0, 0); }
+}
+
+@keyframes achievementEpic {
+  0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(138, 122, 79, 0); }
+  30% { transform: scale(1.12); box-shadow: 0 0 30px 8px rgba(138, 122, 79, 0.5); }
+  60% { transform: scale(1.04); box-shadow: 0 0 15px 4px rgba(208, 255, 0, 0.3); }
+  100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(208, 255, 0, 0); }
+}
+
+@keyframes achievementLegendary {
+  0% { transform: scale(0.95); opacity: 0.8; box-shadow: 0 0 0 0 rgba(208, 255, 0, 0); }
+  20% { transform: scale(1.15); opacity: 1; box-shadow: 0 0 40px 12px rgba(208, 255, 0, 0.6); }
+  50% { transform: scale(1.05); box-shadow: 0 0 25px 8px rgba(208, 255, 0, 0.3); }
+  70% { transform: scale(1.08); box-shadow: 0 0 30px 10px rgba(138, 122, 79, 0.4); }
+  100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(208, 255, 0, 0); }
+}
+
+/* Page enter animation */
+@keyframes pageEnter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-achievement-common { animation: achievementCommon 600ms ease-out; }
+.animate-achievement-rare { animation: achievementRare 800ms ease-out; }
+.animate-achievement-epic { animation: achievementEpic 1000ms ease-out; }
+.animate-achievement-legendary { animation: achievementLegendary 1200ms ease-out; }
+.animate-page-enter { animation: pageEnter 400ms ease-out; }

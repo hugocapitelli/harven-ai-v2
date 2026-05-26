@@ -347,7 +347,7 @@ export default function ClassManagement() {
                   <Input label="Nome" value={editForm.name} onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))} />
                   <Input label="Código" value={editForm.code} onChange={(e) => setEditForm((f) => ({ ...f, code: e.target.value }))} />
                   <div className="w-full">
-                    <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-gray-400">Semestre</label>
+                    <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-wide text-gray-400">Semestre</label>
                     <select
                       value={editForm.semester}
                       onChange={(e) => setEditForm((f) => ({ ...f, semester: e.target.value }))}
@@ -398,7 +398,7 @@ export default function ClassManagement() {
               {editState.tab === 'teachers' && (
                 <div className="flex flex-col gap-4">
                   <div>
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Vincular professor</p>
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground mb-2">Vincular professor</p>
                     <SearchInput placeholder="Buscar professor..." value={userSearch} onChange={setUserSearch} />
                     <div className="border border-border rounded-lg max-h-48 overflow-y-auto mt-2">
                       {availableTeachers.length === 0 ? (
@@ -420,7 +420,7 @@ export default function ClassManagement() {
                     </div>
                   </div>
                   <div>
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Vinculados ({teachers.length})</p>
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground mb-2">Vinculados ({teachers.length})</p>
                     <div className="flex flex-col gap-2">
                       {teachers.map((t) => (
                         <Card key={t.id} className="flex items-center gap-3 p-3">
@@ -442,7 +442,7 @@ export default function ClassManagement() {
                 <div className="flex flex-col gap-4">
                   <div>
                     <div className="flex items-center justify-between mb-2">
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Vincular aluno</p>
+                      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Vincular aluno</p>
                       <input ref={csvRef} type="file" accept=".csv" className="hidden" onChange={handleCsvStudents} />
                       <Button variant="outline" size="sm" onClick={() => csvRef.current?.click()}>
                         <span className="material-symbols-outlined text-[16px] mr-1">upload_file</span> CSV
@@ -469,7 +469,7 @@ export default function ClassManagement() {
                     </div>
                   </div>
                   <div>
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Vinculados ({students.length})</p>
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground mb-2">Vinculados ({students.length})</p>
                     <div className="flex flex-col gap-2">
                       {students.map((s) => (
                         <Card key={s.id} className="flex items-center gap-3 p-3">
@@ -534,7 +534,7 @@ export default function ClassManagement() {
               required
             />
             <div className="w-full">
-              <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-gray-400">Semestre</label>
+              <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-wide text-gray-400">Semestre</label>
               <select
                 value={createForm.semester}
                 onChange={(e) => setCreateForm((f) => ({ ...f, semester: e.target.value }))}

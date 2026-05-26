@@ -18,8 +18,8 @@ interface Activity {
 }
 
 const typeConfig: Record<string, { label: string; icon: string; color: string; bg: string }> = {
-  CHAT: { label: 'Debate Socratico', icon: 'forum', color: 'text-purple-600', bg: 'bg-purple-100' },
-  QUIZ: { label: 'Quiz', icon: 'quiz', color: 'text-blue-600', bg: 'bg-blue-100' },
+  CHAT: { label: 'Debate Socratico', icon: 'forum', color: 'text-harven-dark', bg: 'bg-harven-dark/10' },
+  QUIZ: { label: 'Quiz', icon: 'quiz', color: 'text-harven-gold', bg: 'bg-harven-gold/10' },
   CONTENT: { label: 'Conteudo', icon: 'article', color: 'text-green-600', bg: 'bg-green-100' },
   COURSE: { label: 'Curso', icon: 'school', color: 'text-orange-600', bg: 'bg-orange-100' },
 };

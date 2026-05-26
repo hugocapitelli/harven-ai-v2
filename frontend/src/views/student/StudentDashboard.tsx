@@ -95,7 +95,7 @@ export default function StudentDashboard() {
 
       {/* Courses */}
       <div className="space-y-4">
-        <h2 className="text-xl font-display font-bold text-foreground">Minhas Disciplinas</h2>
+        <h2 className="text-xl font-display font-semibold text-foreground">Minhas Disciplinas</h2>
         {courses.length === 0 ? (
           <div className="bg-white rounded-2xl border border-harven-border">
             <EmptyState icon="school" title="Nenhum curso encontrado" description="Voce ainda nao esta matriculado em nenhuma disciplina." />
