@@ -617,6 +617,12 @@ async def audio_generate_from_content(
     duration_minutes = max(1, round(word_count / 150))
     duration_estimate = f"~{duration_minutes} min"
 
+    # Persist audio URL to content record so students can access it
+    try:
+        client.table("contents").update({"audio_url": audio_url}).eq("id", body.content_id).execute()
+    except Exception as e:
+        logger.warning(f"Failed to persist audio_url to content: {e}")
+
     return {
         "audio_url": audio_url,
         "duration_estimate": duration_estimate,

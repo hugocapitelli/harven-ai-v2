@@ -1006,6 +1006,25 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                     </div>
                   )}
 
+                  {/* Audio player for students — show when audio exists */}
+                  {isStudentExperience && content.audio_url && (
+                    <div className="rounded-xl border border-harven-border bg-[#fffdf8] overflow-hidden">
+                      <div className="border-t-4 border-harven-gold" />
+                      <div className="p-4">
+                        <div className="mb-3 flex items-center gap-2">
+                          <span className="material-symbols-outlined text-harven-gold">headphones</span>
+                          <p className="text-sm font-semibold">Ouvir conteudo</p>
+                        </div>
+                        <audio
+                          controls
+                          className="w-full"
+                          src={`${import.meta.env.VITE_API_URL || ''}${content.audio_url}`}
+                          preload="metadata"
+                        />
+                      </div>
+                    </div>
+                  )}
+
                   {/* Status card */}
                   <div className={cn(
                     'rounded-xl p-4 text-white',
