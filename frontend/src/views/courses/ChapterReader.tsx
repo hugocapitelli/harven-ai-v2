@@ -216,6 +216,10 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
         setContent(contentData);
         setEditTitle(contentData?.title ?? '');
         setEditBody(contentData?.body ?? contentData?.extracted_text ?? '');
+        // Pre-populate TTS player if audio was previously generated
+        if (contentData?.audio_url) {
+          setTtsUrls((prev) => ({ ...prev, summary: contentData.audio_url }));
+        }
         const rawQ = Array.isArray(questionsData) ? questionsData : [];
         setQuestions(rawQ.map((item: Record<string, unknown>) => ({
           ...item,
@@ -946,8 +950,8 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                     <TableOfContents items={toc} activeId={activeTocId} />
                   )}
 
-                  {/* TTS card — hidden in student experience (students consume audio, not generate) */}
-                  {!editing && !isStudentExperience && (
+                  {/* TTS card — students see player only, instructors see player + generate */}
+                  {!editing && (Object.keys(ttsUrls).length > 0 || !isStudentExperience) && (
                     <div className="rounded-xl border border-harven-border bg-white overflow-hidden">
                       <div className="border-t-4 border-harven-gold" />
                       <div className="p-4">
@@ -963,12 +967,14 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                             const meta = TTS_LABEL[style];
                             const isGen = generatingTts === style;
                             const url = ttsUrls[style];
+                            // Students only see audio that exists; instructors see generate buttons too
+                            if (!url && isStudentExperience) return null;
                             return (
                               <div key={style}>
                                 {url ? (
                                   <div className="rounded-lg border border-harven-border p-2">
                                     <p className="mb-1 text-xs font-bold">{meta.label}</p>
-                                    <audio src={url} controls className="w-full h-8" />
+                                    <audio src={`${import.meta.env.VITE_API_URL || ''}${url}`} controls className="w-full h-8" />
                                   </div>
                                 ) : (
                                   <button
@@ -1002,25 +1008,6 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                             );
                           })}
                         </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Audio player for students — show when audio exists */}
-                  {isStudentExperience && content.audio_url && (
-                    <div className="rounded-xl border border-harven-border bg-[#fffdf8] overflow-hidden">
-                      <div className="border-t-4 border-harven-gold" />
-                      <div className="p-4">
-                        <div className="mb-3 flex items-center gap-2">
-                          <span className="material-symbols-outlined text-harven-gold">headphones</span>
-                          <p className="text-sm font-semibold">Ouvir conteudo</p>
-                        </div>
-                        <audio
-                          controls
-                          className="w-full"
-                          src={`${import.meta.env.VITE_API_URL || ''}${content.audio_url}`}
-                          preload="metadata"
-                        />
                       </div>
                     </div>
                   )}
