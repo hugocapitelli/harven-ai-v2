@@ -6,9 +6,11 @@ import { disciplinesApi, dashboardApi } from '../../services/api';
 import { unwrapList } from '../../lib/utils';
 import { Button } from '../../components/ui/Button';
 import { Card, CardContent } from '../../components/ui/Card';
-import { Input } from '../../components/ui/Input';
 import { Badge } from '../../components/ui/Badge';
 import { Skeleton, SkeletonCard } from '../../components/ui/Skeleton';
+import { EmptyState } from '../../components/ui/EmptyState';
+import { SearchInput } from '../../components/ui/SearchInput';
+import { PageHeader } from '../../components/ui/PageHeader';
 import type { Discipline } from '../../types';
 
 type ViewMode = 'grid' | 'list';
@@ -86,22 +88,19 @@ export default function InstructorList() {
 
   return (
     <div className="max-w-7xl mx-auto px-6 py-10 flex flex-col gap-10 animate-in fade-in duration-500">
-      {/* Header */}
-      <div>
-        <h1 className="text-3xl font-display font-bold text-foreground tracking-tight">Minhas Disciplinas</h1>
-        <p className="text-base text-muted-foreground mt-2">
-          {loading ? 'Carregando...' : `${filtered.length} disciplina${filtered.length !== 1 ? 's' : ''} ativa${filtered.length !== 1 ? 's' : ''}`}
-        </p>
-      </div>
+      <PageHeader
+        title="Minhas Disciplinas"
+        subtitle={loading ? 'Carregando...' : `${filtered.length} disciplina${filtered.length !== 1 ? 's' : ''} ativa${filtered.length !== 1 ? 's' : ''}`}
+        constrained={false}
+      />
 
       {/* Toolbar */}
       <div className="flex items-center gap-4">
-        <Input
-          icon="search"
+        <SearchInput
           placeholder="Buscar disciplina..."
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          containerClassName="flex-1 max-w-lg"
+          onChange={setSearch}
+          className="flex-1 max-w-lg"
         />
         <div className="flex border border-border rounded-lg overflow-hidden">
           <button
@@ -129,14 +128,13 @@ export default function InstructorList() {
           ))}
         </div>
       ) : filtered.length === 0 ? (
-        <Card className="py-20 px-12 text-center">
-          <span className="material-symbols-outlined text-6xl text-muted-foreground/40 mb-4 block">school</span>
-          <p className="text-lg text-muted-foreground font-medium">
-            {search ? 'Nenhuma disciplina encontrada.' : 'Nenhuma disciplina cadastrada ainda.'}
-          </p>
-          <p className="text-sm text-muted-foreground/70 mt-2">
-            {search ? 'Tente outro termo de busca.' : 'As disciplinas aparecerão aqui quando forem atribuídas a você.'}
-          </p>
+        <Card className="col-span-full">
+          <EmptyState
+            icon="school"
+            title={search ? 'Nenhuma disciplina encontrada.' : 'Nenhuma disciplina cadastrada ainda.'}
+            description={search ? 'Tente outro termo de busca.' : 'As disciplinas aparecerão aqui quando forem atribuídas a você.'}
+            size="lg"
+          />
         </Card>
       ) : viewMode === 'grid' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">

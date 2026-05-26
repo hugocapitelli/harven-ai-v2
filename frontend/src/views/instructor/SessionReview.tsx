@@ -8,6 +8,8 @@ import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
 import { Avatar } from '../../components/ui/Avatar';
 import { Skeleton, SkeletonText } from '../../components/ui/Skeleton';
+import { Textarea } from '../../components/ui/Textarea';
+import { PageHeader } from '../../components/ui/PageHeader';
 import type { ChatMessage, SessionReview as SessionReviewType } from '../../types';
 
 interface SessionData {
@@ -168,21 +170,18 @@ export default function SessionReview() {
 
   return (
     <div className="max-w-7xl mx-auto p-8 animate-in fade-in duration-500">
-      {/* Header */}
-      <div className="flex items-center gap-3 mb-6">
-        <Button variant="ghost" size="icon" onClick={() => navigate(-1)}>
-          <span className="material-symbols-outlined">arrow_back</span>
-        </Button>
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <h1 className="text-xl font-display font-bold text-foreground">Revisão de Sessão</h1>
-            <Badge variant={status.variant}>{status.text}</Badge>
-          </div>
-          <p className="text-sm text-muted-foreground">
-            {session?.student_name ?? 'Aluno'} · {session?.content_title ?? ''}
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        title="Revisão de Sessão"
+        subtitle={`${session?.student_name ?? 'Aluno'}${session?.content_title ? ' · ' + session.content_title : ''}`}
+        backAction={{ onClick: () => navigate(-1) }}
+        breadcrumbs={[
+          { label: 'Disciplinas', onClick: () => navigate('/instructor') },
+          { label: session?.student_name ?? 'Aluno' },
+          { label: 'Sessão' },
+        ]}
+        actions={<Badge variant={status.variant}>{status.text}</Badge>}
+        constrained={false}
+      />
 
       <div className="grid grid-cols-[1fr_380px] gap-6" style={{ height: 'calc(100vh - 220px)' }}>
         {/* Left: Conversation */}
@@ -249,16 +248,13 @@ export default function SessionReview() {
                 <StarInput value={rating} onChange={setRating} />
               </div>
 
-              <div>
-                <label className="block text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Feedback</label>
-                <textarea
-                  rows={6}
-                  value={feedback}
-                  onChange={(e) => setFeedback(e.target.value)}
-                  placeholder="Observações sobre a performance do aluno nesta sessão socrática..."
-                  className="w-full bg-harven-bg border-none rounded-lg text-sm text-foreground placeholder-gray-400 focus:ring-1 focus:ring-primary px-4 py-3 resize-none"
-                />
-              </div>
+              <Textarea
+                label="Feedback"
+                rows={6}
+                value={feedback}
+                onChange={(e) => setFeedback(e.target.value)}
+                placeholder="Observações sobre a performance do aluno nesta sessão socrática..."
+              />
 
               <Button onClick={handleSubmitReview} disabled={submitting || rating === 0} fullWidth>
                 {submitting ? 'Enviando...' : review ? 'Atualizar Avaliação' : 'Enviar Avaliação'}

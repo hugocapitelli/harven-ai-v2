@@ -4,6 +4,10 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { coursesApi, chaptersApi, contentsApi, uploadApi } from '../../services/api';
 import { cn } from '../../lib/utils';
+import { Textarea } from '../../components/ui/Textarea';
+import { Modal } from '../../components/ui/Modal';
+import { PageHeader } from '../../components/ui/PageHeader';
+import { Button } from '../../components/ui/Button';
 import type { UserRole, Chapter, Content } from '../../types';
 
 interface CourseEditProps { userRole: UserRole }
@@ -95,16 +99,23 @@ export default function CourseEdit({ userRole: _userRole }: CourseEditProps) {
   return (
     <div className="flex flex-col h-full bg-background animate-in fade-in duration-300">
       {/* Sticky Header */}
-      <div className="sticky top-0 z-10 h-16 bg-white border-b border-harven-border flex items-center justify-between px-6 flex-shrink-0">
-        <div className="flex items-center gap-4">
-          <button onClick={() => navigate(-1)} className="text-gray-400 hover:text-foreground"><span className="material-symbols-outlined">arrow_back</span></button>
-          <h1 className="font-display font-bold text-lg truncate">{editForm.title || 'Editar Curso'}</h1>
-          <span className={cn('text-[10px] font-bold px-2 py-0.5 rounded uppercase', course?.status === 'published' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500')}>{course?.status === 'published' ? 'Publicado' : 'Rascunho'}</span>
-        </div>
-        <button onClick={save} disabled={saving} className="relative bg-primary hover:bg-primary-dark text-harven-dark font-bold px-5 py-2 rounded-lg text-xs uppercase tracking-widest disabled:opacity-50 transition-all">
-          {saving ? 'Salvando...' : 'Salvar'}
-          {dirty && <span className="absolute -top-1 -right-1 size-3 bg-red-500 rounded-full" />}
-        </button>
+      <div className="sticky top-0 z-10 bg-white border-b border-harven-border px-6 py-3 flex-shrink-0">
+        <PageHeader
+          title={editForm.title || 'Editar Curso'}
+          backAction={{ onClick: () => navigate(-1) }}
+          breadcrumbs={[
+            { label: 'Cursos', onClick: () => navigate('/courses') },
+            { label: editForm.title || 'Editar Curso' },
+          ]}
+          actions={
+            <button onClick={save} disabled={saving} className="relative bg-primary hover:bg-primary-dark text-harven-dark font-bold px-5 py-2 rounded-lg text-xs uppercase tracking-widest disabled:opacity-50 transition-all">
+              {saving ? 'Salvando...' : 'Salvar'}
+              {dirty && <span className="absolute -top-1 -right-1 size-3 bg-red-500 rounded-full" />}
+            </button>
+          }
+          constrained={false}
+          className="mb-0"
+        />
       </div>
 
       <div className="flex flex-1 overflow-hidden">
@@ -141,7 +152,7 @@ export default function CourseEdit({ userRole: _userRole }: CourseEditProps) {
             {sideTab === 'settings' && (
               <div className="space-y-4">
                 <div><label className="text-[10px] font-bold uppercase text-gray-400">Titulo</label><input value={editForm.title} onChange={e => { setEditForm({...editForm, title: e.target.value}); setDirty(true); }} className="w-full bg-harven-bg border-none rounded-lg px-3 py-2 text-sm focus:ring-1 focus:ring-primary mt-1" /></div>
-                <div><label className="text-[10px] font-bold uppercase text-gray-400">Descricao</label><textarea value={editForm.description} onChange={e => { setEditForm({...editForm, description: e.target.value}); setDirty(true); }} rows={4} className="w-full bg-harven-bg border-none rounded-lg px-3 py-2 text-sm focus:ring-1 focus:ring-primary mt-1 resize-none" /></div>
+                <Textarea label="Descrição" value={editForm.description} onChange={e => { setEditForm({...editForm, description: e.target.value}); setDirty(true); }} rows={4} />
                 <div>
                   <label className="text-[10px] font-bold uppercase text-gray-400">Capa</label>
                   {(course?.image_url || course?.image) && <img src={String(course.image_url || course.image)} alt="" className="w-full h-32 object-cover rounded-lg mt-1" />}
@@ -185,18 +196,16 @@ export default function CourseEdit({ userRole: _userRole }: CourseEditProps) {
         </div>
       </div>
 
-      {deleteTarget && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setDeleteTarget(null)}>
-          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6" onClick={e => e.stopPropagation()}>
-            <h3 className="text-lg font-bold mb-2">Confirmar Exclusao</h3>
-            <p className="text-sm text-gray-500 mb-6">Esta acao nao pode ser desfeita.</p>
-            <div className="flex gap-2">
-              <button onClick={() => setDeleteTarget(null)} className="flex-1 py-2 rounded-lg border text-sm font-bold">Cancelar</button>
-              <button onClick={confirmDelete} className="flex-1 py-2 rounded-lg bg-red-500 text-white text-sm font-bold">Excluir</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Modal.Root open={!!deleteTarget} onClose={() => setDeleteTarget(null)} size="sm">
+        <Modal.Header title="Confirmar Exclusão" onClose={() => setDeleteTarget(null)} />
+        <Modal.Body>
+          <p className="text-sm text-muted-foreground">Esta ação não pode ser desfeita.</p>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancelar</Button>
+          <Button variant="destructive" onClick={confirmDelete}>Excluir</Button>
+        </Modal.Footer>
+      </Modal.Root>
     </div>
   );
 }

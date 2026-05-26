@@ -2,9 +2,12 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { dashboardApi, disciplinesApi, coursesApi } from '../../services/api';
-import { cn, unwrapList } from '../../lib/utils';
+import { unwrapList } from '../../lib/utils';
+import { StatCard } from '../../components/ui/StatCard';
+import { EmptyState } from '../../components/ui/EmptyState';
+import { PageHeader } from '../../components/ui/PageHeader';
 
-interface StatItem { label: string; value: string | number; icon: string; color: string }
+interface StatItem { label: string; value: string | number; icon: string }
 
 export default function StudentDashboard() {
   const { user } = useAuth();
@@ -25,10 +28,10 @@ export default function StudentDashboard() {
         if (ctrl.signal.aborted) return;
 
         setStats([
-          { label: 'Cursos em Andamento', value: statsData?.courses_in_progress ?? 0, icon: 'menu_book', color: 'text-blue-500' },
-          { label: 'Horas Estudadas', value: `${statsData?.hours_studied ?? 0}h`, icon: 'schedule', color: 'text-green-500' },
-          { label: 'Media Geral', value: statsData?.average_score?.toFixed?.(1) ?? '-', icon: 'trending_up', color: 'text-orange-500' },
-          { label: 'Conquistas', value: statsData?.achievements_count ?? 0, icon: 'emoji_events', color: 'text-yellow-500' },
+          { label: 'Cursos em Andamento', value: statsData?.courses_in_progress ?? 0, icon: 'menu_book' },
+          { label: 'Horas Estudadas', value: `${statsData?.hours_studied ?? 0}h`, icon: 'schedule' },
+          { label: 'Media Geral', value: statsData?.average_score?.toFixed?.(1) ?? '-', icon: 'trending_up' },
+          { label: 'Conquistas', value: statsData?.achievements_count ?? 0, icon: 'emoji_events' },
         ]);
 
         const allCourses: Record<string, unknown>[] = [];
@@ -77,23 +80,16 @@ export default function StudentDashboard() {
 
   return (
     <div className="max-w-7xl mx-auto p-8 space-y-8 animate-in fade-in duration-500">
-      <div>
-        <h1 className="text-3xl font-display font-bold text-foreground">Bem-vindo de volta, {user?.name?.split(' ')[0]}!</h1>
-        <p className="text-muted-foreground mt-1">Continue de onde parou.</p>
-      </div>
+      <PageHeader
+        title={`Bem-vindo de volta, ${user?.name?.split(' ')[0]}!`}
+        subtitle="Continue de onde parou."
+        constrained={false}
+      />
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {stats.map((s) => (
-          <div key={s.label} className="bg-white rounded-xl border border-harven-border p-4 flex items-center gap-4 shadow-sm">
-            <div className={cn('size-12 rounded-xl bg-gray-100 flex items-center justify-center', s.color)}>
-              <span className="material-symbols-outlined text-[24px]">{s.icon}</span>
-            </div>
-            <div>
-              <p className="text-2xl font-display font-bold text-foreground">{s.value}</p>
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">{s.label}</p>
-            </div>
-          </div>
+        {stats.map((s, i) => (
+          <StatCard key={s.label} icon={s.icon} value={s.value} label={s.label} variant={i === 0 ? 'highlight' : 'default'} />
         ))}
       </div>
 
@@ -101,10 +97,8 @@ export default function StudentDashboard() {
       <div className="space-y-4">
         <h2 className="text-xl font-display font-bold text-foreground">Minhas Disciplinas</h2>
         {courses.length === 0 ? (
-          <div className="text-center py-16 bg-white rounded-2xl border border-harven-border">
-            <span className="material-symbols-outlined text-5xl text-gray-300 mb-3">school</span>
-            <p className="text-gray-500 font-medium">Nenhum curso encontrado</p>
-            <p className="text-xs text-gray-400 mt-1">Voce ainda nao esta matriculado em nenhuma disciplina.</p>
+          <div className="bg-white rounded-2xl border border-harven-border">
+            <EmptyState icon="school" title="Nenhum curso encontrado" description="Voce ainda nao esta matriculado em nenhuma disciplina." />
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

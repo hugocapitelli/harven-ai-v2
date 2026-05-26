@@ -7,12 +7,17 @@ import { disciplinesApi, coursesApi } from '../../services/api';
 import { unwrapList } from '../../lib/utils';
 import { Button } from '../../components/ui/Button';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
-import { Input } from '../../components/ui/Input';
 import { Badge } from '../../components/ui/Badge';
 import { Tabs } from '../../components/ui/Tabs';
 import { Avatar } from '../../components/ui/Avatar';
 import { Progress } from '../../components/ui/Progress';
 import { Skeleton, SkeletonCard, SkeletonText } from '../../components/ui/Skeleton';
+import { EmptyState } from '../../components/ui/EmptyState';
+import { SearchInput } from '../../components/ui/SearchInput';
+import { StatCard } from '../../components/ui/StatCard';
+import { Input } from '../../components/ui/Input';
+import { Modal } from '../../components/ui/Modal';
+import { PageHeader } from '../../components/ui/PageHeader';
 import type { Discipline, Course } from '../../types';
 
 interface StudentStat {
@@ -186,48 +191,34 @@ export default function InstructorDetail() {
 
   return (
     <div className="max-w-7xl mx-auto p-8 flex flex-col gap-8 animate-in fade-in duration-500">
-      {/* Header Banner */}
-      <div className="relative rounded-xl overflow-hidden bg-accent text-accent-foreground p-8">
-        {discipline.image && (
-          <img src={discipline.image} alt="" className="absolute inset-0 w-full h-full object-cover opacity-20" />
-        )}
-        <div className="relative z-10">
-          <Button variant="ghost" size="sm" className="mb-4 text-accent-foreground/70" onClick={() => navigate('/instructor')}>
-            <span className="material-symbols-outlined text-[16px] mr-1">arrow_back</span> Voltar
-          </Button>
-          <h1 className="text-3xl font-display font-bold">{discipline.name}</h1>
-          {discipline.code && <p className="text-sm opacity-70 mt-1">{discipline.code} · {discipline.department ?? ''}</p>}
-          <div className="flex gap-4 mt-6">
-            {[
-              { icon: 'menu_book', label: 'Cursos', value: stats.course_count ?? stats.courses_count ?? courses.length },
-              { icon: 'group', label: 'Alunos', value: stats.student_count ?? stats.students_count ?? students.length },
-              { icon: 'forum', label: 'Conversas', value: stats.session_count ?? stats.sessions_count ?? sessions.length },
-              { icon: 'trending_up', label: 'Progresso Médio', value: `${stats.avg_progress ?? 0}%` },
-            ].map((s) => (
-              <Card key={s.label} className="bg-white/10 border-white/20 backdrop-blur-sm px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <span className="material-symbols-outlined text-[20px] text-primary">{s.icon}</span>
-                  <div>
-                    <p className="text-lg font-bold text-white">{s.value}</p>
-                    <p className="text-[10px] uppercase tracking-widest text-white/60">{s.label}</p>
-                  </div>
-                </div>
-              </Card>
-            ))}
-          </div>
-        </div>
+      <PageHeader
+        title={discipline.name}
+        subtitle={discipline.code ? `${discipline.code}${discipline.department ? ' · ' + discipline.department : ''}` : undefined}
+        backAction={{ onClick: () => navigate('/instructor') }}
+        breadcrumbs={[
+          { label: 'Disciplinas', onClick: () => navigate('/instructor') },
+          { label: discipline.name },
+        ]}
+        constrained={false}
+      />
+
+      {/* Stats */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <StatCard icon="menu_book" label="Cursos" value={stats.course_count ?? stats.courses_count ?? courses.length} />
+        <StatCard icon="group" label="Alunos" value={stats.student_count ?? stats.students_count ?? students.length} />
+        <StatCard icon="forum" label="Conversas" value={stats.session_count ?? stats.sessions_count ?? sessions.length} />
+        <StatCard icon="trending_up" label="Progresso Médio" value={`${stats.avg_progress ?? 0}%`} />
       </div>
 
       {/* Toolbar */}
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <Tabs items={TABS} activeTab={activeTab} onChange={setActiveTab} ariaLabel="Seções da disciplina" />
         <div className="flex items-center gap-3">
-          <Input
-            icon="search"
+          <SearchInput
             placeholder="Buscar..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            containerClassName="w-64"
+            onChange={setSearch}
+            className="w-64"
           />
           {activeTab === 'disciplinas' && (
             <Button size="sm" onClick={() => setShowAddCourse(true)}>
@@ -241,10 +232,12 @@ export default function InstructorDetail() {
       {activeTab === 'disciplinas' && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {filteredCourses.length === 0 ? (
-            <Card className="col-span-full py-16 px-8 text-center">
-              <span className="material-symbols-outlined text-5xl text-muted-foreground/40 mb-3 block">menu_book</span>
-              <p className="text-lg text-muted-foreground font-medium">Nenhum curso encontrado.</p>
-              <p className="text-sm text-muted-foreground/70 mt-1">Clique em "+ Curso" para criar o primeiro.</p>
+            <Card className="col-span-full">
+              <EmptyState
+                icon="menu_book"
+                title="Nenhum curso encontrado."
+                description="Clique em &quot;+ Curso&quot; para criar o primeiro."
+              />
             </Card>
           ) : (
             filteredCourses.map((c, idx) => {
@@ -426,9 +419,11 @@ export default function InstructorDetail() {
       {activeTab === 'conversas' && (
         <div className="flex flex-col gap-3">
           {filteredSessions.length === 0 ? (
-            <Card className="p-8 text-center">
-              <span className="material-symbols-outlined text-4xl text-muted-foreground mb-2 block">forum</span>
-              <p className="text-muted-foreground">Nenhuma conversa socrática encontrada.</p>
+            <Card>
+              <EmptyState
+                icon="forum"
+                title="Nenhuma conversa socrática encontrada."
+              />
             </Card>
           ) : (
             filteredSessions.map((s) => (
@@ -459,27 +454,24 @@ export default function InstructorDetail() {
       )}
 
       {/* Add Course Modal */}
-      {showAddCourse && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="fixed inset-0 bg-black/50" onClick={() => setShowAddCourse(false)} />
-          <div className="relative bg-card rounded-xl shadow-xl p-6 w-full max-w-md mx-4" role="dialog" aria-modal="true">
-            <h3 className="text-lg font-display font-bold text-foreground mb-4">Adicionar Curso</h3>
-            <Input
-              label="Título do Curso"
-              placeholder="Ex.: Introdução à Inteligência Artificial"
-              value={newCourseTitle}
-              onChange={(e) => setNewCourseTitle(e.target.value)}
-              autoFocus
-            />
-            <div className="flex justify-end gap-3 mt-6">
-              <Button variant="outline" onClick={() => setShowAddCourse(false)}>Cancelar</Button>
-              <Button onClick={handleAddCourse} disabled={saving || !newCourseTitle.trim()}>
-                {saving ? 'Criando...' : 'Criar Curso'}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Modal.Root open={showAddCourse} onClose={() => setShowAddCourse(false)} size="md">
+        <Modal.Header title="Adicionar Curso" onClose={() => setShowAddCourse(false)} />
+        <Modal.Body>
+          <Input
+            label="Título do Curso"
+            placeholder="Ex.: Introdução à Inteligência Artificial"
+            value={newCourseTitle}
+            onChange={(e) => setNewCourseTitle(e.target.value)}
+            autoFocus
+          />
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="outline" onClick={() => setShowAddCourse(false)}>Cancelar</Button>
+          <Button onClick={handleAddCourse} disabled={saving || !newCourseTitle.trim()}>
+            {saving ? 'Criando...' : 'Criar Curso'}
+          </Button>
+        </Modal.Footer>
+      </Modal.Root>
     </div>
   );
 }

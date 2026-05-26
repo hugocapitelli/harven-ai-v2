@@ -3,6 +3,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { userStatsApi } from '../../services/api';
 import { cn } from '../../lib/utils';
 import type { Achievement } from '../../types';
+import { EmptyState } from '../../components/ui/EmptyState';
+import { PageHeader } from '../../components/ui/PageHeader';
 
 const categoryInfo: Record<string, { icon: string; color: string; label: string }> = {
   jornada: { icon: 'route', color: 'text-green-500', label: 'Jornada' },
@@ -78,6 +80,8 @@ export default function StudentAchievements() {
 
   return (
     <div className="max-w-7xl mx-auto p-8 space-y-8 animate-in fade-in duration-500">
+      <PageHeader title="Conquistas" subtitle="Sua jornada de aprendizado em conquistas e pontos." constrained={false} />
+
       {/* Hero */}
       <div className="bg-harven-dark rounded-2xl p-8 text-white relative overflow-hidden">
         <div className="absolute top-0 right-0 size-64 bg-primary/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/4" />
@@ -151,9 +155,8 @@ export default function StudentAchievements() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2">
           {filtered.length === 0 ? (
-            <div className="text-center py-16 bg-white rounded-2xl border border-harven-border">
-              <span className="material-symbols-outlined text-5xl text-gray-300 mb-3">emoji_events</span>
-              <p className="text-gray-500">Nenhuma conquista encontrada</p>
+            <div className="bg-white rounded-2xl border border-harven-border">
+              <EmptyState icon="emoji_events" title="Nenhuma conquista encontrada" />
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

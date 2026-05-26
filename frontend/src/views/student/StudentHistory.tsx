@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { userStatsApi } from '../../services/api';
 import { cn } from '../../lib/utils';
+import { EmptyState } from '../../components/ui/EmptyState';
+import { PageHeader } from '../../components/ui/PageHeader';
 
 interface Activity {
   id: string;
@@ -71,7 +73,7 @@ export default function StudentHistory() {
 
   return (
     <div className="max-w-4xl mx-auto p-8 space-y-6 animate-in fade-in duration-500">
-      <h1 className="text-3xl font-display font-bold text-foreground">Historico de Atividades</h1>
+      <PageHeader title="Historico de Atividades" constrained={false} />
 
       {/* Tabs */}
       <div className="flex bg-muted rounded-lg p-1 gap-1">
@@ -87,10 +89,8 @@ export default function StudentHistory() {
       </div>
 
       {filtered.length === 0 ? (
-        <div className="text-center py-16 bg-white rounded-2xl border border-harven-border">
-          <span className="material-symbols-outlined text-5xl text-gray-300 mb-3">history</span>
-          <p className="text-gray-500 font-medium">Nenhuma atividade encontrada</p>
-          <p className="text-xs text-gray-400 mt-1">Suas atividades aparecerão aqui conforme voce estuda.</p>
+        <div className="bg-white rounded-2xl border border-harven-border">
+          <EmptyState icon="history" title="Nenhuma atividade encontrada" description="Suas atividades aparecerão aqui conforme voce estuda." />
         </div>
       ) : (
         <div className="relative">

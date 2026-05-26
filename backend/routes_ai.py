@@ -588,11 +588,12 @@ async def audio_generate_from_content(
             model_id="eleven_multilingual_v2",
             output_format="mp3_44100_128",
         )
-        return b"".join(audio_generator)
+        audio_data = b"".join(audio_generator)
+        return audio_data, tts_input
 
     try:
         loop = asyncio.get_event_loop()
-        audio_bytes = await loop.run_in_executor(_tts_executor, _generate_tts_sync)
+        audio_bytes, final_text = await loop.run_in_executor(_tts_executor, _generate_tts_sync)
     except Exception as e:
         logger.error(f"Audio generation failed: {e}", exc_info=True)
         raise HTTPException(status_code=502, detail=f"Falha na geracao de audio: {str(e)[:200]}")
@@ -612,7 +613,7 @@ async def audio_generate_from_content(
 
     audio_url = f"/uploads/{subdir}/{filename}"
     # Rough estimate: ~150 words/minute
-    word_count = len(tts_input.split())
+    word_count = len(final_text.split())
     duration_minutes = max(1, round(word_count / 150))
     duration_estimate = f"~{duration_minutes} min"
 

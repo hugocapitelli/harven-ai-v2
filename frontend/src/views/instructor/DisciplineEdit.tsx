@@ -9,6 +9,9 @@ import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Input } from '../../components/ui/Input';
 import { Badge } from '../../components/ui/Badge';
 import { Skeleton, SkeletonText } from '../../components/ui/Skeleton';
+import { Textarea } from '../../components/ui/Textarea';
+import { Modal } from '../../components/ui/Modal';
+import { PageHeader } from '../../components/ui/PageHeader';
 import type { Discipline, Course } from '../../types';
 
 type SidebarTab = 'materials' | 'settings';
@@ -137,21 +140,21 @@ export default function DisciplineEdit() {
 
   return (
     <div className="max-w-7xl mx-auto p-8 animate-in fade-in duration-500">
-      {/* Top bar */}
-      <div className="flex items-center justify-between mb-8">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => navigate(-1)}>
-            <span className="material-symbols-outlined">arrow_back</span>
+      <PageHeader
+        title={isNew ? 'Nova Disciplina' : (discipline.name ?? '')}
+        subtitle={discipline.code ?? undefined}
+        backAction={{ onClick: () => navigate(-1) }}
+        breadcrumbs={[
+          { label: 'Disciplinas', onClick: () => navigate('/instructor') },
+          { label: isNew ? 'Nova Disciplina' : (discipline.name ?? '') },
+        ]}
+        actions={
+          <Button onClick={handleSaveDiscipline} disabled={saving}>
+            {saving ? 'Salvando...' : 'Salvar'}
           </Button>
-          <div>
-            <h1 className="text-xl font-display font-bold text-foreground">{isNew ? 'Nova Disciplina' : discipline.name}</h1>
-            {discipline.code && <p className="text-xs text-muted-foreground">{discipline.code}</p>}
-          </div>
-        </div>
-        <Button onClick={handleSaveDiscipline} disabled={saving}>
-          {saving ? 'Salvando...' : 'Salvar'}
-        </Button>
-      </div>
+        }
+        constrained={false}
+      />
 
       <div className="grid grid-cols-[220px_1fr] gap-8">
         {/* Sidebar */}
@@ -244,16 +247,13 @@ export default function DisciplineEdit() {
                 />
               </div>
 
-              <div className="space-y-1.5">
-                <label className="block text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Descrição</label>
-                <textarea
-                  rows={4}
-                  value={(discipline as Record<string, unknown>).description as string ?? ''}
-                  onChange={(e) => setDiscipline((d) => ({ ...d, description: e.target.value }))}
-                  className="w-full bg-harven-bg border-none rounded-lg text-sm text-foreground placeholder-gray-400 focus:ring-1 focus:ring-primary transition-all px-4 py-2 resize-none"
-                  placeholder="Descreva a disciplina..."
-                />
-              </div>
+              <Textarea
+                label="Descrição"
+                rows={4}
+                value={(discipline as Record<string, unknown>).description as string ?? ''}
+                onChange={(e) => setDiscipline((d) => ({ ...d, description: e.target.value }))}
+                placeholder="Descreva a disciplina..."
+              />
 
               <div className="space-y-1.5">
                 <label className="block text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Imagem de Capa</label>
@@ -282,49 +282,41 @@ export default function DisciplineEdit() {
       </div>
 
       {/* Course Modal */}
-      {courseModal.open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="fixed inset-0 bg-black/50" onClick={() => setCourseModal({ open: false, editing: null })} />
-          <div className="relative bg-card rounded-xl shadow-xl p-6 w-full max-w-md mx-4" role="dialog" aria-modal="true">
-            <h3 className="text-lg font-display font-bold text-foreground mb-4">
-              {courseModal.editing ? 'Editar Curso' : 'Novo Curso'}
-            </h3>
-            <div className="flex flex-col gap-4">
-              <Input label="Título" value={courseForm.title} onChange={(e) => setCourseForm((f) => ({ ...f, title: e.target.value }))} autoFocus />
-              <div className="space-y-1.5">
-                <label className="block text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Descrição</label>
-                <textarea
-                  rows={3}
-                  value={courseForm.description}
-                  onChange={(e) => setCourseForm((f) => ({ ...f, description: e.target.value }))}
-                  className="w-full bg-harven-bg border-none rounded-lg text-sm text-foreground placeholder-gray-400 focus:ring-1 focus:ring-primary px-4 py-2 resize-none"
-                />
-              </div>
-            </div>
-            <div className="flex justify-end gap-3 mt-6">
-              <Button variant="outline" onClick={() => setCourseModal({ open: false, editing: null })}>Cancelar</Button>
-              <Button onClick={handleSaveCourse} disabled={saving || !courseForm.title.trim()}>
-                {saving ? 'Salvando...' : courseModal.editing ? 'Atualizar' : 'Criar'}
-              </Button>
-            </div>
+      <Modal.Root open={courseModal.open} onClose={() => setCourseModal({ open: false, editing: null })} size="md">
+        <Modal.Header
+          title={courseModal.editing ? 'Editar Curso' : 'Novo Curso'}
+          onClose={() => setCourseModal({ open: false, editing: null })}
+        />
+        <Modal.Body>
+          <div className="flex flex-col gap-4">
+            <Input label="Título" value={courseForm.title} onChange={(e) => setCourseForm((f) => ({ ...f, title: e.target.value }))} autoFocus />
+            <Textarea
+              label="Descrição"
+              rows={3}
+              value={courseForm.description}
+              onChange={(e) => setCourseForm((f) => ({ ...f, description: e.target.value }))}
+            />
           </div>
-        </div>
-      )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="outline" onClick={() => setCourseModal({ open: false, editing: null })}>Cancelar</Button>
+          <Button onClick={handleSaveCourse} disabled={saving || !courseForm.title.trim()}>
+            {saving ? 'Salvando...' : courseModal.editing ? 'Atualizar' : 'Criar'}
+          </Button>
+        </Modal.Footer>
+      </Modal.Root>
 
       {/* Delete Confirm */}
-      {confirmDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="fixed inset-0 bg-black/50" onClick={() => setConfirmDelete(null)} />
-          <div className="relative bg-card rounded-xl shadow-xl p-6 w-full max-w-sm mx-4" role="alertdialog" aria-modal="true">
-            <h3 className="text-lg font-bold text-foreground mb-2">Excluir Curso</h3>
-            <p className="text-sm text-muted-foreground mb-6">Essa ação não pode ser desfeita. Deseja continuar?</p>
-            <div className="flex justify-end gap-3">
-              <Button variant="outline" onClick={() => setConfirmDelete(null)}>Cancelar</Button>
-              <Button variant="destructive" onClick={() => handleDeleteCourse(confirmDelete)}>Excluir</Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Modal.Root open={!!confirmDelete} onClose={() => setConfirmDelete(null)} size="sm">
+        <Modal.Header title="Excluir Curso" onClose={() => setConfirmDelete(null)} />
+        <Modal.Body>
+          <p className="text-sm text-muted-foreground">Essa ação não pode ser desfeita. Deseja continuar?</p>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="outline" onClick={() => setConfirmDelete(null)}>Cancelar</Button>
+          <Button variant="destructive" onClick={() => confirmDelete && handleDeleteCourse(confirmDelete)}>Excluir</Button>
+        </Modal.Footer>
+      </Modal.Root>
     </div>
   );
 }

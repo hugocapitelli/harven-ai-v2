@@ -10,6 +10,10 @@ import { Badge } from '../../components/ui/Badge';
 import { Tabs } from '../../components/ui/Tabs';
 import { Avatar } from '../../components/ui/Avatar';
 import { Skeleton, SkeletonCard } from '../../components/ui/Skeleton';
+import { EmptyState } from '../../components/ui/EmptyState';
+import { Modal } from '../../components/ui/Modal';
+import { SearchInput } from '../../components/ui/SearchInput';
+import { PageHeader } from '../../components/ui/PageHeader';
 import type { Discipline, Course, User } from '../../types';
 
 type ViewMode = 'grid' | 'list';
@@ -245,19 +249,20 @@ export default function ClassManagement() {
   return (
     <div className="max-w-7xl mx-auto p-8 flex flex-col gap-6 animate-in fade-in duration-500">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-display font-bold text-foreground">Gestão de Turmas</h1>
-          <p className="text-sm text-muted-foreground mt-1">{loading ? '...' : `${filtered.length} turma(s)`}</p>
-        </div>
-        <Button onClick={() => setShowCreateModal(true)} disabled={saving}>
-          <span className="material-symbols-outlined text-[18px] mr-2">add</span> Nova Disciplina
-        </Button>
-      </div>
+      <PageHeader
+        constrained={false}
+        title="Gestão de Turmas"
+        subtitle={loading ? '...' : `${filtered.length} turma(s)`}
+        actions={
+          <Button onClick={() => setShowCreateModal(true)} disabled={saving}>
+            <span className="material-symbols-outlined text-[18px] mr-2">add</span> Nova Disciplina
+          </Button>
+        }
+      />
 
       {/* Toolbar */}
       <div className="flex items-center gap-3">
-        <Input icon="search" placeholder="Buscar turma..." value={search} onChange={(e) => setSearch(e.target.value)} containerClassName="flex-1 max-w-sm" />
+        <SearchInput placeholder="Buscar turma..." value={search} onChange={setSearch} className="flex-1 max-w-sm" />
         <div className="flex border border-border rounded-lg overflow-hidden">
           <button onClick={() => setViewMode('grid')} className={`p-2 ${viewMode === 'grid' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}`}>
             <span className="material-symbols-outlined text-[20px]">grid_view</span>
@@ -272,9 +277,12 @@ export default function ClassManagement() {
       {loading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{Array.from({ length: 6 }).map((_, i) => <SkeletonCard key={i} />)}</div>
       ) : filtered.length === 0 ? (
-        <Card className="p-12 text-center">
-          <span className="material-symbols-outlined text-5xl text-muted-foreground mb-3 block">school</span>
-          <p className="text-muted-foreground">{search ? 'Nenhuma turma encontrada.' : 'Nenhuma turma cadastrada.'}</p>
+        <Card>
+          <EmptyState
+            icon="school"
+            title={search ? 'Nenhuma turma encontrada' : 'Nenhuma turma cadastrada'}
+            description={search ? 'Tente ajustar a busca' : 'Crie a primeira disciplina clicando em "Nova Disciplina"'}
+          />
         </Card>
       ) : viewMode === 'grid' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -317,22 +325,22 @@ export default function ClassManagement() {
       )}
 
       {/* Edit Modal */}
-      {editState.open && editState.discipline && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="fixed inset-0 bg-black/50" onClick={() => setEditState({ open: false, discipline: null, tab: 'info' })} />
-          <div className="relative bg-card rounded-xl shadow-xl w-full max-w-3xl mx-4 max-h-[85vh] flex flex-col" role="dialog" aria-modal="true">
-            <div className="p-6 border-b border-border flex items-center justify-between shrink-0">
-              <h3 className="text-lg font-display font-bold text-foreground">{editState.discipline.name ?? editState.discipline.title}</h3>
-              <Button variant="ghost" size="icon" onClick={() => setEditState({ open: false, discipline: null, tab: 'info' })}>
-                <span className="material-symbols-outlined">close</span>
-              </Button>
-            </div>
+      <Modal.Root
+        open={editState.open && !!editState.discipline}
+        onClose={() => setEditState({ open: false, discipline: null, tab: 'info' })}
+        size="xl"
+        className="max-h-[85vh] flex flex-col"
+      >
+        <Modal.Header
+          title={editState.discipline?.name ?? editState.discipline?.title ?? ''}
+          onClose={() => setEditState({ open: false, discipline: null, tab: 'info' })}
+        />
 
-            <div className="px-6 pt-4 shrink-0">
-              <Tabs items={EDIT_TABS} activeTab={editState.tab} onChange={(t) => { setEditState((s) => ({ ...s, tab: t as EditTab })); setUserSearch(''); }} />
-            </div>
+        <div className="px-6 pt-4 shrink-0">
+          <Tabs items={EDIT_TABS} activeTab={editState.tab} onChange={(t) => { setEditState((s) => ({ ...s, tab: t as EditTab })); setUserSearch(''); }} />
+        </div>
 
-            <div className="flex-1 overflow-y-auto p-6">
+        <Modal.Body className="flex-1 overflow-y-auto">
               {/* Tab: Info */}
               {editState.tab === 'info' && (
                 <div className="flex flex-col gap-4 max-w-md">
@@ -391,14 +399,14 @@ export default function ClassManagement() {
                 <div className="flex flex-col gap-4">
                   <div>
                     <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">Vincular professor</p>
-                    <Input icon="search" placeholder="Buscar professor..." value={userSearch} onChange={(e) => setUserSearch(e.target.value)} />
+                    <SearchInput placeholder="Buscar professor..." value={userSearch} onChange={setUserSearch} />
                     <div className="border border-border rounded-lg max-h-48 overflow-y-auto mt-2">
                       {availableTeachers.length === 0 ? (
-                        <p className="text-sm text-muted-foreground text-center py-3">
-                          {allUsers.filter((u) => u.role === 'INSTRUCTOR' || u.role === 'TEACHER').length === 0
-                            ? 'Nenhum professor cadastrado. Crie em Usuarios.'
-                            : 'Todos os professores já estão vinculados.'}
-                        </p>
+                        <EmptyState
+                          icon="school"
+                          title={allUsers.filter((u) => u.role === 'INSTRUCTOR' || u.role === 'TEACHER').length === 0 ? 'Nenhum professor cadastrado' : 'Todos os professores já vinculados'}
+                          size="sm"
+                        />
                       ) : (
                         availableTeachers.slice(0, 20).map((u) => (
                           <button key={u.id} onClick={() => handleAddTeacher(u.id)} className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted transition-colors">
@@ -423,7 +431,7 @@ export default function ClassManagement() {
                           </Button>
                         </Card>
                       ))}
-                      {teachers.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">Nenhum professor vinculado.</p>}
+                      {teachers.length === 0 && <EmptyState icon="person_off" title="Nenhum professor vinculado" size="sm" />}
                     </div>
                   </div>
                 </div>
@@ -440,14 +448,14 @@ export default function ClassManagement() {
                         <span className="material-symbols-outlined text-[16px] mr-1">upload_file</span> CSV
                       </Button>
                     </div>
-                    <Input icon="search" placeholder="Buscar aluno..." value={userSearch} onChange={(e) => setUserSearch(e.target.value)} />
+                    <SearchInput placeholder="Buscar aluno..." value={userSearch} onChange={setUserSearch} />
                     <div className="border border-border rounded-lg max-h-48 overflow-y-auto mt-2">
                       {availableStudents.length === 0 ? (
-                        <p className="text-sm text-muted-foreground text-center py-3">
-                          {allUsers.filter((u) => u.role === 'STUDENT').length === 0
-                            ? 'Nenhum aluno cadastrado. Crie em Usuarios.'
-                            : 'Todos os alunos já estão vinculados.'}
-                        </p>
+                        <EmptyState
+                          icon="group"
+                          title={allUsers.filter((u) => u.role === 'STUDENT').length === 0 ? 'Nenhum aluno cadastrado' : 'Todos os alunos já vinculados'}
+                          size="sm"
+                        />
                       ) : (
                         availableStudents.slice(0, 20).map((u) => (
                           <button key={u.id} onClick={() => handleAddStudent(u.id)} className="flex items-center gap-2 w-full px-3 py-2 text-sm hover:bg-muted transition-colors">
@@ -472,92 +480,84 @@ export default function ClassManagement() {
                           </Button>
                         </Card>
                       ))}
-                      {students.length === 0 && <p className="text-sm text-muted-foreground text-center py-4">Nenhum aluno vinculado.</p>}
+                      {students.length === 0 && <EmptyState icon="person_off" title="Nenhum aluno vinculado" size="sm" />}
                     </div>
                   </div>
                 </div>
               )}
-            </div>
-          </div>
-        </div>
-      )}
+        </Modal.Body>
+      </Modal.Root>
 
       {/* Confirm Dialog */}
-      {confirmAction && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center">
-          <div className="fixed inset-0 bg-black/50" onClick={() => setConfirmAction(null)} />
-          <div className="relative bg-card rounded-xl shadow-xl p-6 w-full max-w-sm mx-4" role="alertdialog" aria-modal="true">
-            <h3 className="text-lg font-bold text-foreground mb-2">Confirmar</h3>
-            <p className="text-sm text-muted-foreground mb-6">
-              {confirmAction.type === 'delete-course' && `Excluir o curso "${confirmAction.label}"? Essa ação não pode ser desfeita.`}
-              {confirmAction.type === 'remove-teacher' && `Remover ${confirmAction.label} como professor?`}
-              {confirmAction.type === 'remove-student' && `Remover ${confirmAction.label} da turma?`}
-            </p>
-            <div className="flex justify-end gap-3">
-              <Button variant="outline" onClick={() => setConfirmAction(null)}>Cancelar</Button>
-              <Button
-                variant="destructive"
-                onClick={() => {
-                  if (confirmAction.type === 'delete-course') handleDeleteCourse(confirmAction.id);
-                  else if (confirmAction.type === 'remove-teacher') handleRemoveTeacher(confirmAction.id);
-                  else if (confirmAction.type === 'remove-student') handleRemoveStudent(confirmAction.id);
-                }}
-              >
-                Confirmar
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Modal.Root open={!!confirmAction} onClose={() => setConfirmAction(null)} size="sm">
+        <Modal.Header title="Confirmar" onClose={() => setConfirmAction(null)} />
+        <Modal.Body>
+          <p className="text-sm text-muted-foreground">
+            {confirmAction?.type === 'delete-course' && `Excluir o curso "${confirmAction.label}"? Essa ação não pode ser desfeita.`}
+            {confirmAction?.type === 'remove-teacher' && `Remover ${confirmAction?.label} como professor?`}
+            {confirmAction?.type === 'remove-student' && `Remover ${confirmAction?.label} da turma?`}
+          </p>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="outline" onClick={() => setConfirmAction(null)}>Cancelar</Button>
+          <Button
+            variant="destructive"
+            onClick={() => {
+              if (confirmAction?.type === 'delete-course') handleDeleteCourse(confirmAction.id);
+              else if (confirmAction?.type === 'remove-teacher') handleRemoveTeacher(confirmAction.id);
+              else if (confirmAction?.type === 'remove-student') handleRemoveStudent(confirmAction.id);
+            }}
+          >
+            Confirmar
+          </Button>
+        </Modal.Footer>
+      </Modal.Root>
 
       {/* Create Discipline Modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="fixed inset-0 bg-black/50" onClick={() => setShowCreateModal(false)} />
-          <div className="relative bg-card rounded-xl shadow-xl p-6 w-full max-w-md mx-4" role="dialog" aria-modal="true">
-            <h3 className="text-lg font-display font-bold text-foreground mb-4">Nova Disciplina</h3>
-            <form onSubmit={handleCreate} className="flex flex-col gap-4">
-              <Input
-                label="Nome *"
-                placeholder="Ex: Gestão de Agronegócios"
-                value={createForm.name}
-                onChange={(e) => setCreateForm((f) => ({ ...f, name: e.target.value }))}
-                required
-                autoFocus
-              />
-              <Input
-                label="Código *"
-                placeholder="Ex: GA101"
-                value={createForm.code}
-                onChange={(e) => setCreateForm((f) => ({ ...f, code: e.target.value }))}
-                required
-              />
-              <div className="w-full">
-                <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-gray-400">Semestre</label>
-                <select
-                  value={createForm.semester}
-                  onChange={(e) => setCreateForm((f) => ({ ...f, semester: e.target.value }))}
-                  className="w-full rounded-lg border border-harven-border bg-harven-bg px-4 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                >
-                  <option value="">Selecione...</option>
-                  {SEMESTER_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
-              </div>
-              <Input
-                label="Descrição"
-                placeholder="Breve descrição"
-                value={createForm.description}
-                onChange={(e) => setCreateForm((f) => ({ ...f, description: e.target.value }))}
-              />
-              <p className="text-xs text-muted-foreground">Após criar, você poderá atribuir professores e alunos na tela de edição.</p>
-              <div className="flex justify-end gap-3 pt-2">
-                <Button type="button" variant="outline" onClick={() => setShowCreateModal(false)}>Cancelar</Button>
-                <Button type="submit" disabled={saving}>{saving ? 'Criando...' : 'Criar Disciplina'}</Button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <Modal.Root open={showCreateModal} onClose={() => setShowCreateModal(false)} size="md">
+        <Modal.Header title="Nova Disciplina" onClose={() => setShowCreateModal(false)} />
+        <Modal.Body>
+          <form id="create-discipline-form" onSubmit={handleCreate} className="flex flex-col gap-4">
+            <Input
+              label="Nome *"
+              placeholder="Ex: Gestão de Agronegócios"
+              value={createForm.name}
+              onChange={(e) => setCreateForm((f) => ({ ...f, name: e.target.value }))}
+              required
+              autoFocus
+            />
+            <Input
+              label="Código *"
+              placeholder="Ex: GA101"
+              value={createForm.code}
+              onChange={(e) => setCreateForm((f) => ({ ...f, code: e.target.value }))}
+              required
+            />
+            <div className="w-full">
+              <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-wider text-gray-400">Semestre</label>
+              <select
+                value={createForm.semester}
+                onChange={(e) => setCreateForm((f) => ({ ...f, semester: e.target.value }))}
+                className="w-full rounded-lg border border-harven-border bg-harven-bg px-4 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              >
+                <option value="">Selecione...</option>
+                {SEMESTER_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <Input
+              label="Descrição"
+              placeholder="Breve descrição"
+              value={createForm.description}
+              onChange={(e) => setCreateForm((f) => ({ ...f, description: e.target.value }))}
+            />
+            <p className="text-xs text-muted-foreground">Após criar, você poderá atribuir professores e alunos na tela de edição.</p>
+          </form>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button type="button" variant="outline" onClick={() => setShowCreateModal(false)}>Cancelar</Button>
+          <Button type="submit" form="create-discipline-form" disabled={saving}>{saving ? 'Criando...' : 'Criar Disciplina'}</Button>
+        </Modal.Footer>
+      </Modal.Root>
     </div>
   );
 }

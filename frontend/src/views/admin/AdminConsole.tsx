@@ -11,6 +11,11 @@ import { Input } from '../../components/ui/Input';
 import { Badge } from '../../components/ui/Badge';
 import { Select } from '../../components/ui/Select';
 import { Skeleton, SkeletonCard } from '../../components/ui/Skeleton';
+import { StatCard } from '../../components/ui/StatCard';
+import { EmptyState } from '../../components/ui/EmptyState';
+import { Modal } from '../../components/ui/Modal';
+import { Textarea } from '../../components/ui/Textarea';
+import { PageHeader } from '../../components/ui/PageHeader';
 
 interface DashStats {
   total_users: number;
@@ -120,10 +125,10 @@ export default function AdminConsole() {
   };
 
   const statCards = [
-    { icon: 'group', label: 'Usuários', value: stats.total_users, color: 'text-blue-500' },
-    { icon: 'school', label: 'Disciplinas', value: stats.total_disciplines, color: 'text-green-500' },
-    { icon: 'menu_book', label: 'Cursos', value: stats.total_courses, color: 'text-harven-gold' },
-    { icon: 'sensors', label: 'Sessões Ativas', value: stats.active_sessions, color: 'text-purple-500' },
+    { icon: 'group', label: 'Usuários', value: stats.total_users },
+    { icon: 'school', label: 'Disciplinas', value: stats.total_disciplines },
+    { icon: 'menu_book', label: 'Cursos', value: stats.total_courses },
+    { icon: 'sensors', label: 'Sessões Ativas', value: stats.active_sessions },
   ];
 
   if (loading) {
@@ -139,31 +144,22 @@ export default function AdminConsole() {
   return (
     <div className="max-w-7xl mx-auto p-8 flex flex-col gap-8 animate-in fade-in duration-500">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-display font-bold text-foreground">Painel Administrativo</h1>
-          <p className="text-sm text-muted-foreground mt-1">Visão geral da plataforma</p>
-        </div>
-        <Button onClick={() => setShowActionModal(true)}>
-          <span className="material-symbols-outlined text-[18px] mr-2">campaign</span>
-          Ação Global
-        </Button>
-      </div>
+      <PageHeader
+        constrained={false}
+        title="Painel Administrativo"
+        subtitle="Visão geral da plataforma"
+        actions={
+          <Button onClick={() => setShowActionModal(true)}>
+            <span className="material-symbols-outlined text-[18px] mr-2">campaign</span>
+            Ação Global
+          </Button>
+        }
+      />
 
       {/* Stat Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {statCards.map((s) => (
-          <Card key={s.label}>
-            <CardContent className="flex items-center gap-4">
-              <div className="h-12 w-12 rounded-lg bg-muted flex items-center justify-center">
-                <span className={`material-symbols-outlined text-[24px] ${s.color}`}>{s.icon}</span>
-              </div>
-              <div>
-                <p className="text-2xl font-bold text-foreground">{s.value}</p>
-                <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">{s.label}</p>
-              </div>
-            </CardContent>
-          </Card>
+        {statCards.map((s, i) => (
+          <StatCard key={s.label} icon={s.icon} value={s.value} label={s.label} variant={i === 0 ? 'highlight' : 'default'} />
         ))}
       </div>
 
@@ -235,7 +231,7 @@ export default function AdminConsole() {
             </thead>
             <tbody>
               {logs.length === 0 ? (
-                <tr><td colSpan={4} className="px-4 py-6 text-center text-muted-foreground">Nenhum log registrado.</td></tr>
+                <tr><td colSpan={4}><EmptyState icon="description" title="Nenhum log registrado" description="Logs aparecerão aqui conforme o sistema opera" size="sm" /></td></tr>
               ) : (
                 logs.map((log) => (
                   <tr key={log.id} className="border-b border-border last:border-0 hover:bg-muted/50">
@@ -258,50 +254,44 @@ export default function AdminConsole() {
       </Card>
 
       {/* Global Action Modal */}
-      {showActionModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="fixed inset-0 bg-black/50" onClick={() => setShowActionModal(false)} />
-          <div className="relative bg-card rounded-xl shadow-xl p-6 w-full max-w-md mx-4" role="dialog" aria-modal="true">
-            <h3 className="text-lg font-display font-bold text-foreground mb-4">Ação Global</h3>
-            <div className="flex flex-col gap-4">
-              <Select
-                label="Tipo"
-                value={actionType}
-                onChange={(e) => setActionType(e.target.value as 'announcement' | 'maintenance')}
-              >
-                <option value="announcement">Comunicado</option>
-                <option value="maintenance">Manutenção</option>
-              </Select>
-              <Select
-                label="Destinatários"
-                value={actionTarget}
-                onChange={(e) => setActionTarget(e.target.value)}
-              >
-                <option value="all">Todos</option>
-                <option value="students">Alunos</option>
-                <option value="instructors">Professores</option>
-                <option value="admins">Administradores</option>
-              </Select>
-              <div className="space-y-1.5">
-                <label className="block text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Mensagem</label>
-                <textarea
-                  rows={4}
-                  value={actionMessage}
-                  onChange={(e) => setActionMessage(e.target.value)}
-                  className="w-full bg-harven-bg border-none rounded-lg text-sm text-foreground placeholder-gray-400 focus:ring-1 focus:ring-primary px-4 py-2 resize-none"
-                  placeholder="Escreva a mensagem..."
-                />
-              </div>
-            </div>
-            <div className="flex justify-end gap-3 mt-6">
-              <Button variant="outline" onClick={() => setShowActionModal(false)}>Cancelar</Button>
-              <Button onClick={handleSendAction} disabled={sending || !actionMessage.trim()}>
-                {sending ? 'Enviando...' : 'Enviar'}
-              </Button>
-            </div>
+      <Modal.Root open={showActionModal} onClose={() => setShowActionModal(false)} size="md">
+        <Modal.Header title="Ação Global" onClose={() => setShowActionModal(false)} />
+        <Modal.Body>
+          <div className="flex flex-col gap-4">
+            <Select
+              label="Tipo"
+              value={actionType}
+              onChange={(e) => setActionType(e.target.value as 'announcement' | 'maintenance')}
+            >
+              <option value="announcement">Comunicado</option>
+              <option value="maintenance">Manutenção</option>
+            </Select>
+            <Select
+              label="Destinatários"
+              value={actionTarget}
+              onChange={(e) => setActionTarget(e.target.value)}
+            >
+              <option value="all">Todos</option>
+              <option value="students">Alunos</option>
+              <option value="instructors">Professores</option>
+              <option value="admins">Administradores</option>
+            </Select>
+            <Textarea
+              label="Mensagem"
+              rows={4}
+              value={actionMessage}
+              onChange={(e) => setActionMessage(e.target.value)}
+              placeholder="Escreva a mensagem..."
+            />
           </div>
-        </div>
-      )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="outline" onClick={() => setShowActionModal(false)}>Cancelar</Button>
+          <Button onClick={handleSendAction} disabled={sending || !actionMessage.trim()}>
+            {sending ? 'Enviando...' : 'Enviar'}
+          </Button>
+        </Modal.Footer>
+      </Modal.Root>
     </div>
   );
 }

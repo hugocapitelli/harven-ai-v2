@@ -5,6 +5,11 @@ import { toast } from 'sonner';
 import { coursesApi, usersApi } from '../../services/api';
 import { unwrapList } from '../../lib/utils';
 import { cn } from '../../lib/utils';
+import { EmptyState } from '../../components/ui/EmptyState';
+import { SearchInput } from '../../components/ui/SearchInput';
+import { PageHeader } from '../../components/ui/PageHeader';
+import { Modal } from '../../components/ui/Modal';
+import { Button } from '../../components/ui/Button';
 import type { UserRole } from '../../types';
 
 interface CourseListProps { userRole: UserRole }
@@ -91,15 +96,19 @@ export default function CourseList({ userRole }: CourseListProps) {
   return (
     <div className="max-w-7xl mx-auto p-8 space-y-8 animate-in fade-in duration-500">
       <div className="flex flex-col md:flex-row justify-between items-end gap-6">
-        <div>
-          <h2 className="text-3xl font-display font-bold text-foreground">Meus Estudos</h2>
-          <p className="text-muted-foreground mt-1">Explore seu catalogo e continue aprendendo.</p>
-        </div>
+        <PageHeader
+          title="Meus Estudos"
+          subtitle="Explore seu catálogo e continue aprendendo."
+          constrained={false}
+          className="mb-0"
+        />
         <div className="flex items-end gap-3 w-full md:w-auto">
-          <div className="relative flex-1 md:w-64">
-            <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-[18px]">search</span>
-            <input value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Buscar materiais..." className="w-full bg-harven-bg border-none rounded-lg pl-10 pr-4 py-2 text-sm focus:ring-1 focus:ring-primary" />
-          </div>
+          <SearchInput
+            value={searchTerm}
+            onChange={setSearchTerm}
+            placeholder="Buscar materiais..."
+            className="flex-1 md:w-64"
+          />
           <select value={selectedCategory} onChange={e => setSelectedCategory(e.target.value)} className="bg-harven-bg border-none rounded-lg px-4 py-2 text-sm focus:ring-1 focus:ring-primary">
             {categories.map(c => <option key={c}>{c}</option>)}
           </select>
@@ -113,6 +122,16 @@ export default function CourseList({ userRole }: CourseListProps) {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+        {filtered.length === 0 && (
+          <div className="col-span-full">
+            <EmptyState
+              icon="school"
+              title={searchTerm ? 'Nenhum curso encontrado.' : 'Nenhum curso disponível ainda.'}
+              description={searchTerm ? 'Tente outro termo de busca.' : 'Os cursos aparecerão aqui quando disponíveis.'}
+              size="lg"
+            />
+          </div>
+        )}
         {filtered.map(course => {
           const progress = Number(course.progress ?? 0);
           return (
@@ -138,41 +157,41 @@ export default function CourseList({ userRole }: CourseListProps) {
         {/* Course creation is admin-only and happens in /admin/classes (ClassManagement) */}
       </div>
 
-      {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-          <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
-            <h3 className="text-xl font-bold mb-4">Novo Curso</h3>
-            <form onSubmit={handleCreate} className="space-y-4">
+      <Modal.Root open={showCreateModal} onClose={() => setShowCreateModal(false)} size="md">
+        <Modal.Header title="Novo Curso" onClose={() => setShowCreateModal(false)} />
+        <Modal.Body>
+          <form id="create-course-form" onSubmit={handleCreate} className="space-y-4">
+            <div>
+              <label className="text-[10px] font-bold uppercase text-gray-400">Titulo</label>
+              <input value={newCourse.title} onChange={e => setNewCourse({...newCourse, title: e.target.value})} className="w-full bg-harven-bg border-none rounded-lg px-4 py-2 text-sm focus:ring-1 focus:ring-primary mt-1" required />
+            </div>
+            {userRole === 'ADMIN' && (
               <div>
-                <label className="text-[10px] font-bold uppercase text-gray-400">Titulo</label>
-                <input value={newCourse.title} onChange={e => setNewCourse({...newCourse, title: e.target.value})} className="w-full bg-harven-bg border-none rounded-lg px-4 py-2 text-sm focus:ring-1 focus:ring-primary mt-1" required />
+                <label className="text-[10px] font-bold uppercase text-gray-400">Atribuir ao Instrutor</label>
+                <select
+                  value={newCourse.instructor_id}
+                  onChange={e => setNewCourse({...newCourse, instructor_id: e.target.value})}
+                  className="w-full bg-harven-bg border-none rounded-lg px-4 py-2 text-sm focus:ring-1 focus:ring-primary mt-1"
+                >
+                  <option value="">Selecione um instrutor (opcional)</option>
+                  {instructors.map(i => (
+                    <option key={i.id} value={i.id}>{i.name}</option>
+                  ))}
+                </select>
+                {instructors.length === 0 && (
+                  <p className="text-[10px] text-gray-400 mt-1">Nenhum instrutor cadastrado. Crie um em Usuarios.</p>
+                )}
               </div>
-              {userRole === 'ADMIN' && (
-                <div>
-                  <label className="text-[10px] font-bold uppercase text-gray-400">Atribuir ao Instrutor</label>
-                  <select
-                    value={newCourse.instructor_id}
-                    onChange={e => setNewCourse({...newCourse, instructor_id: e.target.value})}
-                    className="w-full bg-harven-bg border-none rounded-lg px-4 py-2 text-sm focus:ring-1 focus:ring-primary mt-1"
-                  >
-                    <option value="">Selecione um instrutor (opcional)</option>
-                    {instructors.map(i => (
-                      <option key={i.id} value={i.id}>{i.name}</option>
-                    ))}
-                  </select>
-                  {instructors.length === 0 && (
-                    <p className="text-[10px] text-gray-400 mt-1">Nenhum instrutor cadastrado. Crie um em Usuarios.</p>
-                  )}
-                </div>
-              )}
-              <div className="flex gap-2 pt-4">
-                <button type="button" onClick={() => setShowCreateModal(false)} className="flex-1 py-2 rounded-lg border border-harven-border text-sm font-bold hover:bg-gray-50">Cancelar</button>
-                <button type="submit" disabled={isCreating} className="flex-1 py-2 rounded-lg bg-primary text-harven-dark text-sm font-bold disabled:opacity-50">{isCreating ? 'Criando...' : 'Criar'}</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+            )}
+          </form>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="outline" onClick={() => setShowCreateModal(false)}>Cancelar</Button>
+          <Button type="submit" form="create-course-form" disabled={isCreating}>
+            {isCreating ? 'Criando...' : 'Criar'}
+          </Button>
+        </Modal.Footer>
+      </Modal.Root>
     </div>
   );
 }

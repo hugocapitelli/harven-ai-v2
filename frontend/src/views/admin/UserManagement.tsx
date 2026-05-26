@@ -10,6 +10,10 @@ import { Select } from '../../components/ui/Select';
 import { Badge } from '../../components/ui/Badge';
 import { Avatar } from '../../components/ui/Avatar';
 import { Skeleton } from '../../components/ui/Skeleton';
+import { EmptyState } from '../../components/ui/EmptyState';
+import { Modal } from '../../components/ui/Modal';
+import { SearchInput } from '../../components/ui/SearchInput';
+import { PageHeader } from '../../components/ui/PageHeader';
 import type { User, UserRole } from '../../types';
 
 interface ApiUser extends User {
@@ -145,30 +149,30 @@ export default function UserManagement() {
 
   return (
     <div className="max-w-7xl mx-auto p-8 flex flex-col gap-6 animate-in fade-in duration-500">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-display font-bold text-foreground">Gestão de Usuários</h1>
-          <p className="text-sm text-muted-foreground mt-1">{loading ? '...' : `${filtered.length} usuário(s)`}</p>
-        </div>
-        <div className="flex gap-2">
-          <input ref={csvRef} type="file" accept=".csv" className="hidden" onChange={handleCsvImport} />
-          <Button variant="outline" onClick={() => csvRef.current?.click()}>
-            <span className="material-symbols-outlined text-[16px] mr-1">upload_file</span> CSV
-          </Button>
-          <Button onClick={() => { setForm(EMPTY_FORM); setShowCreateModal(true); }}>
-            <span className="material-symbols-outlined text-[16px] mr-1">person_add</span> Novo Usuário
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        constrained={false}
+        title="Gestão de Usuários"
+        subtitle={loading ? '...' : `${filtered.length} usuário(s)`}
+        actions={
+          <>
+            <input ref={csvRef} type="file" accept=".csv" className="hidden" onChange={handleCsvImport} />
+            <Button variant="outline" onClick={() => csvRef.current?.click()}>
+              <span className="material-symbols-outlined text-[16px] mr-1">upload_file</span> CSV
+            </Button>
+            <Button onClick={() => { setForm(EMPTY_FORM); setShowCreateModal(true); }}>
+              <span className="material-symbols-outlined text-[16px] mr-1">person_add</span> Novo Usuário
+            </Button>
+          </>
+        }
+      />
 
       {/* Filters */}
       <div className="flex items-center gap-3">
-        <Input
-          icon="search"
+        <SearchInput
           placeholder="Buscar por nome, email ou RA..."
           value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          containerClassName="flex-1 max-w-md"
+          onChange={setSearch}
+          className="flex-1 max-w-md"
         />
         <div className="flex border border-border rounded-lg overflow-hidden">
           {['all', 'STUDENT', 'INSTRUCTOR', 'ADMIN'].map((r) => (
@@ -203,7 +207,7 @@ export default function UserManagement() {
               </thead>
               <tbody>
                 {filtered.length === 0 ? (
-                  <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">Nenhum usuário encontrado.</td></tr>
+                  <tr><td colSpan={5}><EmptyState icon="person_off" title="Nenhum usuário encontrado" description="Tente ajustar os filtros ou criar um novo usuário" size="sm" /></td></tr>
                 ) : (
                   filtered.map((u) => (
                     <tr key={u.id} className="border-b border-border last:border-0 hover:bg-muted/50 transition-colors">
@@ -254,48 +258,46 @@ export default function UserManagement() {
       </Card>
 
       {/* Create / Edit Modal */}
-      {(showCreateModal || editingUser) && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="fixed inset-0 bg-black/50" onClick={() => { setShowCreateModal(false); setEditingUser(null); }} />
-          <div className="relative bg-card rounded-xl shadow-xl p-6 w-full max-w-md mx-4" role="dialog" aria-modal="true">
-            <h3 className="text-lg font-display font-bold text-foreground mb-4">
-              {editingUser ? 'Editar Usuário' : 'Novo Usuário'}
-            </h3>
-            <div className="flex flex-col gap-4">
-              <Input label="Nome" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} autoFocus />
-              <Input label="RA" value={form.ra} onChange={(e) => setForm((f) => ({ ...f, ra: e.target.value }))} />
-              <Input label="Email" type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />
-              {!editingUser && (
-                <Input
-                  label="Senha temporária"
-                  type="password"
-                  value={form.password}
-                  onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
-                />
-              )}
-              <Select label="Role" value={form.role} onChange={(e) => setForm((f) => ({ ...f, role: e.target.value as UserRole }))}>
-                <option value="STUDENT">Aluno</option>
-                <option value="INSTRUCTOR">Professor</option>
-                <option value="ADMIN">Admin</option>
-              </Select>
-              {form.role === 'INSTRUCTOR' && (
-                <Input
-                  label="Título"
-                  placeholder="Ex.: Dr., Prof., Me."
-                  value={form.title}
-                  onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
-                />
-              )}
-            </div>
-            <div className="flex justify-end gap-3 mt-6">
-              <Button variant="outline" onClick={() => { setShowCreateModal(false); setEditingUser(null); }}>Cancelar</Button>
-              <Button onClick={editingUser ? handleEdit : handleCreate} disabled={saving}>
-                {saving ? 'Salvando...' : editingUser ? 'Atualizar' : 'Criar'}
-              </Button>
-            </div>
+      <Modal.Root open={showCreateModal || !!editingUser} onClose={() => { setShowCreateModal(false); setEditingUser(null); }} size="md">
+        <Modal.Header
+          title={editingUser ? 'Editar Usuário' : 'Novo Usuário'}
+          onClose={() => { setShowCreateModal(false); setEditingUser(null); }}
+        />
+        <Modal.Body>
+          <div className="flex flex-col gap-4">
+            <Input label="Nome" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} autoFocus />
+            <Input label="RA" value={form.ra} onChange={(e) => setForm((f) => ({ ...f, ra: e.target.value }))} />
+            <Input label="Email" type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />
+            {!editingUser && (
+              <Input
+                label="Senha temporária"
+                type="password"
+                value={form.password}
+                onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
+              />
+            )}
+            <Select label="Role" value={form.role} onChange={(e) => setForm((f) => ({ ...f, role: e.target.value as UserRole }))}>
+              <option value="STUDENT">Aluno</option>
+              <option value="INSTRUCTOR">Professor</option>
+              <option value="ADMIN">Admin</option>
+            </Select>
+            {form.role === 'INSTRUCTOR' && (
+              <Input
+                label="Título"
+                placeholder="Ex.: Dr., Prof., Me."
+                value={form.title}
+                onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+              />
+            )}
           </div>
-        </div>
-      )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="outline" onClick={() => { setShowCreateModal(false); setEditingUser(null); }}>Cancelar</Button>
+          <Button onClick={editingUser ? handleEdit : handleCreate} disabled={saving}>
+            {saving ? 'Salvando...' : editingUser ? 'Atualizar' : 'Criar'}
+          </Button>
+        </Modal.Footer>
+      </Modal.Root>
     </div>
   );
 }

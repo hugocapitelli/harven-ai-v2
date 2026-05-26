@@ -4,6 +4,10 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { coursesApi, chaptersApi, contentsApi } from '../../services/api';
 import { cn } from '../../lib/utils';
+import { EmptyState } from '../../components/ui/EmptyState';
+import { Modal } from '../../components/ui/Modal';
+import { PageHeader } from '../../components/ui/PageHeader';
+import { Button } from '../../components/ui/Button';
 import type { UserRole, Chapter, Content } from '../../types';
 
 interface CourseDetailsProps { userRole: UserRole }
@@ -109,26 +113,21 @@ export default function CourseDetails({ userRole }: CourseDetailsProps) {
 
   return (
     <div className="max-w-7xl mx-auto p-8 flex flex-col gap-8 animate-in fade-in duration-500">
-      {/* Header Banner */}
-      <div className="relative rounded-xl overflow-hidden bg-accent text-accent-foreground p-8">
-        {(course.image || course.image_url) && (
-          <img src={String(course.image || course.image_url)} alt="" className="absolute inset-0 w-full h-full object-cover opacity-20" />
-        )}
-        <div className="relative z-10">
-          <div className="flex items-center justify-between mb-4">
-            <button onClick={() => navigate(-1)} className="flex items-center gap-1 text-accent-foreground/70 hover:text-accent-foreground text-sm">
-              <span className="material-symbols-outlined text-[16px]">arrow_back</span> Voltar
-            </button>
-            {isInstructor && (
-              <button onClick={() => navigate(`/courses/${courseId}/edit`)} className="text-accent-foreground/50 hover:text-primary transition-colors">
-                <span className="material-symbols-outlined">settings</span>
-              </button>
-            )}
-          </div>
-          <h1 className="text-3xl font-display font-bold">{String(course.title)}</h1>
-          <p className="text-sm opacity-70 mt-1">Instrutor &bull; {String(course.status || 'Ativo')}</p>
-        </div>
-      </div>
+      <PageHeader
+        title={String(course.title)}
+        subtitle={`Instrutor · ${String(course.status || 'Ativo')}`}
+        backAction={{ onClick: () => navigate(-1) }}
+        breadcrumbs={[
+          { label: 'Cursos', onClick: () => navigate('/courses') },
+          { label: String(course.title) },
+        ]}
+        actions={isInstructor ? (
+          <Button variant="ghost" size="icon" onClick={() => navigate(`/courses/${courseId}/edit`)} aria-label="Configurações do curso">
+            <span className="material-symbols-outlined">settings</span>
+          </Button>
+        ) : undefined}
+        constrained={false}
+      />
 
       <div className="flex flex-col gap-8">
         {/* Tabs */}
@@ -190,24 +189,33 @@ export default function CourseDetails({ userRole }: CourseDetailsProps) {
             </div>
           )}
           {activeTab === 'about' && <div className="bg-white p-8 rounded-xl border border-harven-border"><h3 className="text-xl font-display font-bold mb-4">Sobre o Curso</h3><p className="text-gray-600 leading-relaxed">{String(course.description || 'Sem descricao.')}</p></div>}
-          {activeTab === 'resources' && <div className="bg-white p-8 rounded-xl border border-harven-border text-center"><span className="material-symbols-outlined text-5xl text-gray-300 mb-3">folder_open</span><p className="text-gray-500 font-medium">Nenhum recurso disponivel</p></div>}
-          {activeTab === 'discussion' && <div className="bg-white p-8 rounded-xl border border-harven-border text-center"><span className="material-symbols-outlined text-5xl text-gray-300 mb-3">forum</span><p className="text-gray-500 font-medium">Em breve</p></div>}
+          {activeTab === 'resources' && (
+            <div className="bg-white rounded-xl border border-harven-border">
+              <EmptyState icon="folder_open" title="Nenhum recurso disponível" size="lg" />
+            </div>
+          )}
+          {activeTab === 'discussion' && (
+            <div className="bg-white rounded-xl border border-harven-border">
+              <EmptyState icon="forum" title="Em breve" description="A área de discussões estará disponível em breve." size="lg" />
+            </div>
+          )}
         </div>
       </div>
 
       {/* Delete Confirm */}
-      {deleteTarget && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setDeleteTarget(null)}>
-          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6" onClick={e => e.stopPropagation()}>
-            <h3 className="text-lg font-bold mb-2">Excluir {deleteTarget.type === 'content' ? 'Conteudo' : 'Modulo'}</h3>
-            <p className="text-sm text-gray-500 mb-6">Tem certeza? Esta acao nao pode ser desfeita.</p>
-            <div className="flex gap-2">
-              <button onClick={() => setDeleteTarget(null)} className="flex-1 py-2 rounded-lg border text-sm font-bold">Cancelar</button>
-              <button onClick={confirmDelete} className="flex-1 py-2 rounded-lg bg-red-500 text-white text-sm font-bold">Excluir</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <Modal.Root open={!!deleteTarget} onClose={() => setDeleteTarget(null)} size="sm">
+        <Modal.Header
+          title={`Excluir ${deleteTarget?.type === 'content' ? 'Conteúdo' : 'Módulo'}`}
+          onClose={() => setDeleteTarget(null)}
+        />
+        <Modal.Body>
+          <p className="text-sm text-muted-foreground">Tem certeza? Esta ação não pode ser desfeita.</p>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancelar</Button>
+          <Button variant="destructive" onClick={confirmDelete}>Excluir</Button>
+        </Modal.Footer>
+      </Modal.Root>
     </div>
   );
 }

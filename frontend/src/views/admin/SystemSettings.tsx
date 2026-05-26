@@ -11,6 +11,10 @@ import { Select } from '../../components/ui/Select';
 import { Badge } from '../../components/ui/Badge';
 import { Tabs } from '../../components/ui/Tabs';
 import { Skeleton, SkeletonText } from '../../components/ui/Skeleton';
+import { Toggle } from '../../components/ui/Toggle';
+import { EmptyState } from '../../components/ui/EmptyState';
+import { StatCard } from '../../components/ui/StatCard';
+import { PageHeader } from '../../components/ui/PageHeader';
 import type { SystemSettings as SettingsType } from '../../types';
 
 interface Backup {
@@ -43,22 +47,6 @@ const TABS = [
   { id: 'logs', label: 'Logs', icon: 'description' },
 ];
 
-function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
-  return (
-    <label className="flex items-center justify-between py-2 cursor-pointer">
-      <span className="text-sm text-foreground">{label}</span>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        onClick={() => onChange(!checked)}
-        className={`relative h-6 w-11 rounded-full transition-colors ${checked ? 'bg-primary' : 'bg-muted'}`}
-      >
-        <span className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-5' : ''}`} />
-      </button>
-    </label>
-  );
-}
 
 export default function SystemSettings() {
   const [searchParams] = useSearchParams();
@@ -168,14 +156,17 @@ export default function SystemSettings() {
   return (
     <div className="max-w-7xl mx-auto p-8 flex flex-col gap-6 animate-in fade-in duration-500">
       {/* Sticky Save Header */}
-      <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm -mx-8 px-8 py-4 border-b border-border flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-display font-bold text-foreground">Configurações do Sistema</h1>
-          {isDirty && <p className="text-xs text-harven-gold font-medium mt-0.5">Alterações não salvas</p>}
-        </div>
-        <Button onClick={handleSave} disabled={saving || !isDirty}>
-          {saving ? 'Salvando...' : 'Salvar Alterações'}
-        </Button>
+      <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm -mx-8 px-8 py-4 border-b border-border">
+        <PageHeader
+          constrained={false}
+          title="Configurações do Sistema"
+          subtitle={isDirty ? 'Alterações não salvas' : undefined}
+          actions={
+            <Button onClick={handleSave} disabled={saving || !isDirty}>
+              {saving ? 'Salvando...' : 'Salvar Alterações'}
+            </Button>
+          }
+        />
       </div>
 
       <Tabs items={TABS} activeTab={activeTab} onChange={setActiveTab} ariaLabel="Seções de configuração" />
@@ -302,7 +293,7 @@ export default function SystemSettings() {
               </thead>
               <tbody>
                 {backups.length === 0 ? (
-                  <tr><td colSpan={4} className="px-4 py-8 text-center text-muted-foreground">Nenhum backup disponível.</td></tr>
+                  <tr><td colSpan={4}><EmptyState icon="backup" title="Nenhum backup disponível" description="Crie o primeiro backup clicando em 'Criar Backup'" size="sm" /></td></tr>
                 ) : (
                   backups.map((b) => (
                     <tr key={b.id} className="border-b border-border last:border-0 hover:bg-muted/50">
@@ -335,20 +326,12 @@ export default function SystemSettings() {
         <div className="flex flex-col gap-6">
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
             {[
-              { icon: 'timer', label: 'Uptime', value: perf.uptime ?? '—', color: 'text-green-500' },
-              { icon: 'memory', label: 'RAM', value: perf.ram_usage != null ? `${perf.ram_usage}%` : '—', color: 'text-blue-500' },
-              { icon: 'developer_board', label: 'CPU', value: perf.cpu_usage != null ? `${perf.cpu_usage}%` : '—', color: 'text-orange-500' },
-              { icon: 'storage', label: 'Disco', value: perf.disk_usage != null ? `${perf.disk_usage}%` : '—', color: 'text-purple-500' },
+              { icon: 'timer', label: 'Uptime', value: perf.uptime ?? '—' },
+              { icon: 'memory', label: 'RAM', value: perf.ram_usage != null ? `${perf.ram_usage}%` : '—' },
+              { icon: 'developer_board', label: 'CPU', value: perf.cpu_usage != null ? `${perf.cpu_usage}%` : '—' },
+              { icon: 'storage', label: 'Disco', value: perf.disk_usage != null ? `${perf.disk_usage}%` : '—' },
             ].map((m) => (
-              <Card key={m.label}>
-                <CardContent className="flex items-center gap-3">
-                  <span className={`material-symbols-outlined text-[28px] ${m.color}`}>{m.icon}</span>
-                  <div>
-                    <p className="text-xl font-bold text-foreground">{m.value}</p>
-                    <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">{m.label}</p>
-                  </div>
-                </CardContent>
-              </Card>
+              <StatCard key={m.label} icon={m.icon} value={m.value} label={m.label} />
             ))}
           </div>
           <Card>
@@ -394,7 +377,7 @@ export default function SystemSettings() {
               </thead>
               <tbody>
                 {logs.length === 0 ? (
-                  <tr><td colSpan={4} className="px-4 py-8 text-center text-muted-foreground">Nenhum log encontrado.</td></tr>
+                  <tr><td colSpan={4}><EmptyState icon="description" title="Nenhum log encontrado" description="Logs aparecerão aqui conforme o sistema opera" size="sm" /></td></tr>
                 ) : (
                   logs.map((log) => (
                     <tr key={log.id} className="border-b border-border last:border-0 hover:bg-muted/50">
