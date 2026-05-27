@@ -218,7 +218,9 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
         setEditBody(contentData?.body ?? contentData?.extracted_text ?? '');
         // Pre-populate TTS player if audio was previously generated
         if (contentData?.audio_url) {
-          setTtsUrls((prev) => ({ ...prev, summary: contentData.audio_url }));
+          const apiBase = import.meta.env.VITE_API_URL || '';
+          const fullUrl = contentData.audio_url.startsWith('/') ? `${apiBase}${contentData.audio_url}` : contentData.audio_url;
+          setTtsUrls((prev) => ({ ...prev, summary: fullUrl }));
         }
         const rawQ = Array.isArray(questionsData) ? questionsData : [];
         setQuestions(rawQ.map((item: Record<string, unknown>) => ({
@@ -974,7 +976,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                                 {url ? (
                                   <div className="rounded-lg border border-harven-border p-2">
                                     <p className="mb-1 text-xs font-bold">{meta.label}</p>
-                                    <audio src={`${import.meta.env.VITE_API_URL || ''}${url}`} controls className="w-full h-8" />
+                                    <audio src={url.startsWith('http') ? url : `${import.meta.env.VITE_API_URL || ''}${url}`} controls className="w-full h-8" />
                                   </div>
                                 ) : (
                                   <button
