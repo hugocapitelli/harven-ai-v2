@@ -308,18 +308,24 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
+def _cors_headers(request: Request) -> dict:
+    origin = request.headers.get("origin", "")
+    if origin in _cors_origins:
+        return {"Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true"}
+    return {}
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Ensure CORS headers on all HTTP errors (401, 502, etc.)."""
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=_cors_headers(request))
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Catch-all so CORS headers are always present even on 500 errors."""
     logger.error(f"Unhandled error: {exc}", exc_info=True)
-    origin = request.headers.get("origin", "")
-    headers = {}
-    if origin in _cors_origins:
-        headers = {
-            "Access-Control-Allow-Origin": origin,
-            "Access-Control-Allow-Credentials": "true",
-        }
-    return JSONResponse(status_code=500, content={"detail": "Erro interno do servidor"}, headers=headers)
+    return JSONResponse(status_code=500, content={"detail": "Erro interno do servidor"}, headers=_cors_headers(request))
 
 
 app.add_middleware(RequestSizeLimitMiddleware)
