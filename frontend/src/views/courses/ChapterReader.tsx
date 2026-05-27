@@ -460,17 +460,28 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
     if (!contentId) return;
     setGeneratingTts(style);
     try {
-      const result = await ttsApi.generateSummary(contentId, style);
-      const rawUrl = result?.audio_url ?? result?.url ?? result?.data?.audio_url;
-      if (rawUrl) {
-        // Prefix with API base URL if relative path (files are on backend, not frontend)
-        const apiBase = import.meta.env.VITE_API_URL || '';
-        const fullUrl = rawUrl.startsWith('/') ? `${apiBase}${rawUrl}` : rawUrl;
-        setTtsUrls((prev) => ({ ...prev, [style]: fullUrl }));
-        toast.success(`${TTS_LABEL[style].label} gerado`);
-      } else {
-        toast.error('Audio indisponivel');
+      const startResult = await ttsApi.generateSummary(contentId, style);
+      const jobId = startResult?.job_id;
+      if (!jobId) { toast.error('Erro ao iniciar geracao'); return; }
+
+      // Poll for completion
+      const apiBase = import.meta.env.VITE_API_URL || '';
+      for (let i = 0; i < 30; i++) { // max 90s (30 x 3s)
+        await new Promise((r) => setTimeout(r, 3000));
+        const status = await ttsApi.pollJob(jobId);
+        if (status?.status === 'done') {
+          const rawUrl = status.audio_url;
+          const fullUrl = rawUrl?.startsWith('/') ? `${apiBase}${rawUrl}` : rawUrl;
+          setTtsUrls((prev) => ({ ...prev, [style]: fullUrl }));
+          toast.success(`${TTS_LABEL[style].label} gerado`);
+          return;
+        }
+        if (status?.status === 'error') {
+          toast.error(status.detail || 'Erro na geracao de audio');
+          return;
+        }
       }
+      toast.error('Timeout — tente novamente');
     } catch {
       toast.error('Erro ao gerar audio');
     } finally {

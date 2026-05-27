@@ -185,6 +185,7 @@ export const ttsApi = {
   listVoices:      ()                                                => api.get('/api/ai/tts/voices').then(d),
   generate:        (text: string, voice = 'alloy')                   => api.post('/api/ai/tts/generate', null, { params: { text, voice } }).then(d),
   generateSummary: (contentId: string, audioType: string)            => api.post('/api/ai/audio/generate-from-content', { content_id: contentId, audio_type: audioType }).then(d),
+  pollJob:         (jobId: string)                                   => api.get(`/api/ai/audio/status/${jobId}`).then(d),
 };
 
 // ---------------------------------------------------------------------------

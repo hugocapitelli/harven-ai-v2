@@ -2,6 +2,7 @@
 import logging
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -518,45 +519,17 @@ class AudioGenerateRequest(BaseModel):
     voice: str = Field("21m00Tcm4TlvDq8ikWAM", max_length=50)
 
 
-@router.post("/api/ai/audio/generate-from-content", tags=["AI - TTS"])
-async def audio_generate_from_content(
-    body: AudioGenerateRequest,
-    current_user: dict = Depends(get_current_user),
-    storage: StorageService = Depends(get_storage_service),
-    client: Client = Depends(get_supabase),
-):
-    """Generate audio from content body. Modes: podcast (full text), summary, explanation."""
-    if not ELEVENLABS_API_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail="Audio indisponivel: ELEVENLABS_API_KEY nao configurada.",
-        )
+# In-memory job store for async TTS generation
+_tts_jobs: dict[str, dict] = {}
 
-    svc = get_ai_service()
 
-    # Load content from DB
-    from repositories import ContentRepository
-    content_repo = ContentRepository(client)
-    content_record = content_repo.get_by_id(body.content_id)
-    if not content_record:
-        raise HTTPException(status_code=404, detail="Conteudo nao encontrado")
-
-    content_text = content_record.get("body") or ""
-    if not content_text.strip():
-        raise HTTPException(status_code=400, detail="Conteudo sem texto. Envie um documento com texto extraivel.")
-
-    voice_id = body.voice if body.voice in ELEVENLABS_VOICES else "21m00Tcm4TlvDq8ikWAM"
-
-    # Prepare text based on audio_type (summary/explanation use OpenAI for text generation)
-    # Run blocking calls in thread pool to avoid async timeout issues
-    import asyncio
-    from concurrent.futures import ThreadPoolExecutor
-    _tts_executor = ThreadPoolExecutor(max_workers=2)
-
-    def _generate_tts_sync():
+def _run_tts_job(job_id: str, content_id: str, content_text: str, audio_type: str, voice_id: str, upload_dir: str, supabase_url: str, supabase_key: str):
+    """Background TTS generation — runs in a thread, updates _tts_jobs."""
+    try:
+        svc = get_ai_service()
         tts_input = content_text
 
-        if body.audio_type == "summary" and svc.client:
+        if audio_type == "summary" and svc.client:
             result = svc.client.chat.completions.create(
                 model=svc.model,
                 messages=[
@@ -566,7 +539,7 @@ async def audio_generate_from_content(
                 max_tokens=800,
             )
             tts_input = result.choices[0].message.content or content_text
-        elif body.audio_type == "explanation" and svc.client:
+        elif audio_type == "explanation" and svc.client:
             result = svc.client.chat.completions.create(
                 model=svc.model,
                 messages=[
@@ -577,7 +550,6 @@ async def audio_generate_from_content(
             )
             tts_input = result.choices[0].message.content or content_text
 
-        # Truncate for ElevenLabs
         tts_input = tts_input[:5000]
 
         from elevenlabs.client import ElevenLabs as EL
@@ -588,49 +560,89 @@ async def audio_generate_from_content(
             model_id="eleven_multilingual_v2",
             output_format="mp3_44100_128",
         )
-        audio_data = b"".join(audio_generator)
-        return audio_data, tts_input
+        audio_bytes = b"".join(audio_generator)
 
-    try:
-        loop = asyncio.get_event_loop()
-        audio_bytes, final_text = await loop.run_in_executor(_tts_executor, _generate_tts_sync)
-    except Exception as e:
-        logger.error(f"Audio generation failed: {e}", exc_info=True)
-        raise HTTPException(status_code=502, detail=f"Falha na geracao de audio: {str(e)[:200]}")
-
-    subdir = "tts"
-    dest_dir = storage.base_dir / subdir
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{uuid4().hex}.mp3"
-    dest_path = dest_dir / filename
-
-    try:
+        subdir = "tts"
+        dest_dir = Path(upload_dir) / subdir
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"{uuid4().hex}.mp3"
+        dest_path = dest_dir / filename
         with open(dest_path, "wb") as f:
             f.write(audio_bytes)
+
+        audio_url = f"/uploads/{subdir}/{filename}"
+        word_count = len(tts_input.split())
+        duration_minutes = max(1, round(word_count / 150))
+
+        # Persist to DB
+        try:
+            from supabase import create_client
+            sb = create_client(supabase_url, supabase_key)
+            sb.table("contents").update({"audio_url": audio_url}).eq("id", content_id).execute()
+        except Exception as e:
+            logger.warning(f"Failed to persist audio_url: {e}")
+
+        _tts_jobs[job_id] = {
+            "status": "done",
+            "audio_url": audio_url,
+            "duration_estimate": f"~{duration_minutes} min",
+            "audio_type": audio_type,
+            "voice": voice_id,
+            "provider": "elevenlabs",
+            "size_bytes": len(audio_bytes),
+        }
     except Exception as e:
-        logger.error(f"Audio file write failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Falha ao salvar audio gerado.")
+        logger.error(f"TTS job {job_id} failed: {e}", exc_info=True)
+        _tts_jobs[job_id] = {"status": "error", "detail": str(e)[:200]}
 
-    audio_url = f"/uploads/{subdir}/{filename}"
-    # Rough estimate: ~150 words/minute
-    word_count = len(final_text.split())
-    duration_minutes = max(1, round(word_count / 150))
-    duration_estimate = f"~{duration_minutes} min"
 
-    # Persist audio URL to content record so students can access it
-    try:
-        client.table("contents").update({"audio_url": audio_url}).eq("id", body.content_id).execute()
-    except Exception as e:
-        logger.warning(f"Failed to persist audio_url to content: {e}")
+@router.post("/api/ai/audio/generate-from-content", tags=["AI - TTS"])
+async def audio_generate_from_content(
+    body: AudioGenerateRequest,
+    current_user: dict = Depends(get_current_user),
+    storage: StorageService = Depends(get_storage_service),
+    client: Client = Depends(get_supabase),
+):
+    """Start async audio generation. Returns job_id for polling."""
+    if not ELEVENLABS_API_KEY:
+        raise HTTPException(status_code=503, detail="Audio indisponivel: ELEVENLABS_API_KEY nao configurada.")
 
-    return {
-        "audio_url": audio_url,
-        "duration_estimate": duration_estimate,
-        "audio_type": body.audio_type,
-        "voice": voice_id,
-        "provider": "elevenlabs",
-        "size_bytes": len(audio_bytes),
-    }
+    from repositories import ContentRepository
+    content_repo = ContentRepository(client)
+    content_record = content_repo.get_by_id(body.content_id)
+    if not content_record:
+        raise HTTPException(status_code=404, detail="Conteudo nao encontrado")
+
+    content_text = content_record.get("body") or ""
+    if not content_text.strip():
+        raise HTTPException(status_code=400, detail="Conteudo sem texto.")
+
+    voice_id = body.voice if body.voice in ELEVENLABS_VOICES else "21m00Tcm4TlvDq8ikWAM"
+    job_id = uuid4().hex
+    _tts_jobs[job_id] = {"status": "processing"}
+
+    import threading
+    t = threading.Thread(
+        target=_run_tts_job,
+        args=(job_id, body.content_id, content_text, body.audio_type, voice_id,
+              str(storage.base_dir), settings.SUPABASE_URL, settings.SUPABASE_KEY),
+        daemon=True,
+    )
+    t.start()
+
+    return {"job_id": job_id, "status": "processing"}
+
+
+@router.get("/api/ai/audio/status/{job_id}", tags=["AI - TTS"])
+async def audio_job_status(job_id: str, current_user: dict = Depends(get_current_user)):
+    """Poll TTS job status. Returns processing/done/error."""
+    job = _tts_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job nao encontrado")
+    # Clean up completed jobs after returning result
+    if job["status"] in ("done", "error"):
+        _tts_jobs.pop(job_id, None)
+    return job
 
 
 class ReprocessContentRequest(BaseModel):
