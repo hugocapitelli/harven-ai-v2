@@ -621,11 +621,12 @@ async def audio_generate_from_content(
     job_id = uuid4().hex
     _tts_jobs[job_id] = {"status": "processing"}
 
+    cfg = get_settings()
     import threading
     t = threading.Thread(
         target=_run_tts_job,
         args=(job_id, body.content_id, content_text, body.audio_type, voice_id,
-              str(storage.base_dir), settings.SUPABASE_URL, settings.SUPABASE_KEY),
+              str(storage.base_dir), cfg.SUPABASE_URL, cfg.SUPABASE_KEY),
         daemon=True,
     )
     t.start()
