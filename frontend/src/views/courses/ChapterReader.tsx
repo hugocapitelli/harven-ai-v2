@@ -975,7 +975,20 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                               <div key={style}>
                                 {url ? (
                                   <div className="rounded-lg border border-harven-border p-2">
-                                    <p className="mb-1 text-xs font-bold">{meta.label}</p>
+                                    <div className="mb-1 flex items-center justify-between">
+                                      <p className="text-xs font-bold">{meta.label}</p>
+                                      {!isStudentExperience && (
+                                        <button
+                                          type="button"
+                                          disabled={Boolean(generatingTts)}
+                                          onClick={() => { setTtsUrls((prev) => { const next = { ...prev }; delete next[style]; return next; }); handleGenerateTts(style); }}
+                                          className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+                                        >
+                                          <span className="material-symbols-outlined text-sm">refresh</span>
+                                          Regerar
+                                        </button>
+                                      )}
+                                    </div>
                                     <audio src={url.startsWith('http') ? url : `${import.meta.env.VITE_API_URL || ''}${url}`} controls className="w-full h-8" />
                                   </div>
                                 ) : (
