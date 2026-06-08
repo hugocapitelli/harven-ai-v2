@@ -185,6 +185,13 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
   const [chatLoading, setChatLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [selectedQuestion, setSelectedQuestion] = useState<string | null>(null);
+  // TPP-6: pacing/finalization are now the SERVER's source of truth (TPP-5). We
+  // store the last ``session_status`` returned by the socratic route instead of
+  // deriving the count locally. ``null`` until the first turn resolves.
+  const [sessionStatus, setSessionStatus] = useState<{
+    interactions_remaining: number;
+    should_finalize: boolean;
+  } | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // TTS
@@ -311,8 +318,39 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
 
   // ---- Chat handlers ----
 
-  const interactionsUsed = chatMessages.filter((m) => m.role === 'user').length;
-  const remainingInteractions = MAX_INTERACTIONS - interactionsUsed;
+  // TPP-6: SERVER is the source of truth for pacing/finalization. Prefer the last
+  // ``session_status`` from the socratic route (TPP-5). The local user-message
+  // count is only an optimistic fallback BEFORE the first server reply arrives, so
+  // the badge isn't blank on open — it is never the authority once the server speaks.
+  const localUsed = chatMessages.filter((m) => m.role === 'user').length;
+  const remainingInteractions =
+    sessionStatus != null
+      ? sessionStatus.interactions_remaining
+      : Math.max(0, MAX_INTERACTIONS - localUsed);
+  const sessionFinalized = sessionStatus?.should_finalize === true;
+
+  // Pull the server ``session_status`` out of a socratic response, tolerating the
+  // same nesting variants ``extractAiText`` handles.
+  const extractSessionStatus = (
+    r: unknown,
+  ): { interactions_remaining: number; should_finalize: boolean } | null => {
+    if (r && typeof r === 'object') {
+      const o = r as Record<string, unknown>;
+      const ss = o.session_status;
+      if (ss && typeof ss === 'object') {
+        const s = ss as Record<string, unknown>;
+        const remaining = s.interactions_remaining;
+        const finalize = s.should_finalize;
+        if (typeof remaining === 'number') {
+          return {
+            interactions_remaining: remaining,
+            should_finalize: finalize === true,
+          };
+        }
+      }
+    }
+    return null;
+  };
 
   const extractAiText = (r: unknown): string => {
     if (typeof r === 'string') return r;
@@ -333,6 +371,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
   const startChat = async (questionText: string) => {
     if (!contentId || !chapterId || !courseId) return;
     setChatMessages([]);
+    setSessionStatus(null); // TPP-6: reset server pacing for the new session
     setSelectedQuestion(questionText);
     setChatOpen(true);
     setChatLoading(true);
@@ -345,14 +384,17 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
       const sid = session?.id ?? session?.session_id;
       setSessionId(sid);
 
-      // AI starts the dialogue — student doesn't send the question as a message
+      // AI starts the dialogue — student doesn't send the question as a message.
+      // TPP-6: do NOT hardcode interactions_remaining — the server derives pacing
+      // from the persisted message count (TPP-5).
       const aiResponse = await aiApi.socraticDialogue({
         student_message: `Quero explorar a seguinte questão: ${questionText}`,
         chapter_content: content?.body || content?.extracted_text || '',
         initial_question: { text: questionText },
         session_id: sid,
-        interactions_remaining: 20,
       });
+      // TPP-6: adopt the server's pacing/finalization as the source of truth.
+      setSessionStatus(extractSessionStatus(aiResponse));
       setChatMessages([
         {
           id: '1',
@@ -380,7 +422,8 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
   };
 
   const sendMessage = async () => {
-    if (!chatInput.trim() || !sessionId || remainingInteractions <= 0) return;
+    if (!chatInput.trim() || !sessionId || remainingInteractions <= 0 || sessionFinalized)
+      return;
     const text = chatInput.trim();
     const userMsg: ChatMessage = {
       id: String(Date.now()),
@@ -388,18 +431,26 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
       content: text,
       created_at: new Date().toISOString(),
     };
+    // Optimistic UI: show the student's bubble immediately. The SERVER persists the
+    // turn (TPP-4) and owns the count — we never call addMessage here anymore.
     setChatMessages((prev) => [...prev, userMsg]);
     setChatInput('');
     setChatLoading(true);
     try {
-      await chatSessionsApi.addMessage(sessionId, { role: 'user', content: text });
+      // TPP-6: the student turn is persisted EXCLUSIVELY server-side inside the
+      // socratic route (TPP-4). The previous chatSessionsApi.addMessage('user')
+      // call was a SECOND persistence of the same turn → removed to stop the
+      // double-count. Pacing (interactions_remaining) is also derived server-side
+      // (TPP-5), so it is no longer sent.
       const aiResponse = await aiApi.socraticDialogue({
         student_message: text,
         chapter_content: content?.body || content?.extracted_text || '',
         initial_question: { text: selectedQuestion || '' },
         session_id: sessionId,
-        conversation_history: chatMessages.map(m => ({ role: m.role, content: m.content })),
+        conversation_history: chatMessages.map((m) => ({ role: m.role, content: m.content })),
       });
+      // TPP-6: adopt the server pacing/finalization from this turn.
+      setSessionStatus(extractSessionStatus(aiResponse));
       const aiMsg: ChatMessage = {
         id: String(Date.now() + 1),
         role: 'assistant',
@@ -1139,9 +1190,14 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
             </div>
 
             <div className="p-4 border-t border-harven-border">
-              {remainingInteractions <= 0 ? (
+              {sessionFinalized || remainingInteractions <= 0 ? (
+                // TPP-6: the server signalled the end of the session (should_finalize)
+                // — the closing synthesis is the last assistant bubble above; disable
+                // further input. No new turns once the server finalizes.
                 <div className="rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive text-center">
-                  Limite de interacoes atingido nesta sessao.
+                  {sessionFinalized
+                    ? 'Sessao concluida. Veja a sintese de fechamento acima.'
+                    : 'Limite de interacoes atingido nesta sessao.'}
                 </div>
               ) : (
                 <div className="flex gap-2">

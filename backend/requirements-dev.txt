@@ -1,0 +1,14 @@
+# Test-only dependencies for the EPIC-SEC security suite.
+# Kept separate from requirements.txt so the production Dockerfile (which installs
+# requirements.txt) does NOT ship pytest into the runtime image.
+#
+# Install locally with:  pip install -r requirements.txt -r requirements-dev.txt
+-r requirements.txt
+
+pytest==8.3.4
+# ASYNC-AI-3: pytest-asyncio powers the async concurrency-regression suite
+# (test_concurrency / test_ai_service_methods / test_tts_job). asyncio_mode=auto is
+# configured in pyproject.toml so `async def test_*` run without per-test markers.
+pytest-asyncio==0.24.0
+# httpx is already pinned in requirements.txt (==0.28.1) and is what
+# fastapi.testclient.TestClient uses under the hood; no extra pin needed here.

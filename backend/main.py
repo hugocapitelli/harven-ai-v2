@@ -40,6 +40,7 @@ from supabase import Client
 from config import get_settings
 from database import get_supabase
 from auth import verify_password, create_access_token, get_current_user, require_role, hash_password
+from authz import require_self_or_role
 from repositories import (
     UserRepository,
     DisciplineRepository,
@@ -283,10 +284,31 @@ def _ensure_grade_overrides_table():
         logger.warning("grade_overrides table not found — creating via RPC or skipping (create manually in Supabase Dashboard)")
 
 
+def _seed_jwt_secret_on_startup():
+    """SEC-ROT-2: idempotently seed the DB-backed JWT secret at boot.
+
+    Runs inside lifespan (DB available). On NULL it seeds from the bootstrap env;
+    if already present it is a no-op. Tolerant of DB failure — we log and proceed
+    so the boot is not killed; sign/verify will then fall back fail-closed to the
+    bootstrap secret (never a weak default) per jwt_secret_provider.
+    """
+    try:
+        from database import get_supabase
+        from jwt_secret_provider import seed_jwt_secret
+        seed_jwt_secret(get_supabase())
+        logger.info("JWT secret provider seeded/verified from DB")
+    except Exception:
+        logger.warning(
+            "JWT secret DB seed skipped (DB unavailable?) — sign/verify will use "
+            "the fail-closed bootstrap fallback until the DB is reachable."
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Harven AI Platform v2.0.0 started")
     _ensure_grade_overrides_table()
+    _seed_jwt_secret_on_startup()
     yield
     logger.info("Shutting down...")
 
@@ -432,6 +454,9 @@ async def request_password_reset(request: Request, body: PasswordResetRequest, c
     """Request a password reset token. Always returns 200 to prevent email enumeration."""
     _cleanup_expired_tokens()
 
+    # Identical response for existing and non-existing emails — anti-enumeration.
+    response = {"message": "Se o email existir, um link de redefinicao sera enviado."}
+
     # Look up user by email
     res = client.table("users").select("id, email").eq("email", body.email).maybe_single().execute()
     if res.data:
@@ -440,13 +465,18 @@ async def request_password_reset(request: Request, body: PasswordResetRequest, c
             "user_id": res.data["id"],
             "expires_at": datetime.now(timezone.utc) + timedelta(hours=_RESET_TOKEN_EXPIRY_HOURS),
         }
-        logger.info(f"Password reset token generated for user {res.data['id']}: {token}")
-        # TODO: Send email with reset link when email service is configured
-        # For now, return the token directly (TEMPORARY — remove in production with email)
-        return {"message": "Se o email existir, um link de redefinicao sera enviado.", "token": token}
+        # Never log the token — it grants account takeover within the expiry window.
+        logger.info(f"Password reset token generated for user {res.data['id']}")
+        # TODO: Send email with reset link when email service is configured.
+        # Dev-only escape hatch: expose the token to the manual QA flow. Never in
+        # production — RESET_TOKEN_DEBUG is ignored when ENVIRONMENT=production.
+        settings = get_settings()
+        if settings.RESET_TOKEN_DEBUG and settings.ENVIRONMENT.lower() != "production":
+            logger.info(f"[RESET_TOKEN_DEBUG] token for user {res.data['id']}: {token}")
+            return {**response, "token": token}
 
-    # Always return success to prevent email enumeration
-    return {"message": "Se o email existir, um link de redefinicao sera enviado."}
+    # Same dict (same keys, same message, same status) regardless of email existence.
+    return response
 
 
 @app.post("/auth/reset-password", tags=["Auth"])
@@ -618,6 +648,13 @@ async def upload_avatar(
     current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-ADMIN-2: authorize before any side-effect. Only the target user
+    # themselves or an ADMIN may set this avatar; ownership derives from the
+    # authenticated token (current_user["id"]), never from a body field. A
+    # cross-user actor is rejected with 403 here, before storage.save_file or
+    # user_repo.update — so no orphan file and no mutation of the victim's row.
+    require_self_or_role(user_id, current_user, "ADMIN")
+
     if file.content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=400, detail="Tipo de imagem nao permitido")
 

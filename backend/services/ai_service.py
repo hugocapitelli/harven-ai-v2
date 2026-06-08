@@ -1,6 +1,7 @@
 """AI Service — 6 agents with OpenAI, token tracking and mock mode."""
 import json
 import logging
+import os
 import re
 import time
 from datetime import date, datetime, timezone
@@ -9,12 +10,40 @@ from uuid import uuid4
 
 from typing import TYPE_CHECKING
 
+from fastapi.concurrency import run_in_threadpool
+
 if TYPE_CHECKING:
     pass  # No DB type needed — token tracking uses in-memory cache
 
 from config import get_settings
+from repositories.chat_repo import ChatRepository
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Socratic pacing (TPP-5)
+# ---------------------------------------------------------------------------
+# Hard cap on student turns per socratic session. ``interactions_remaining`` and
+# the finalize flag are derived from the PERSISTED ``role='user'`` message count
+# of the session (server-side source of truth), never from a client-supplied
+# value. The closing synthesis fires on the final permitted turn.
+MAX_INTERACTIONS = 20
+
+# ---------------------------------------------------------------------------
+# Editor→Tester quality gate (TPP-7)
+# ---------------------------------------------------------------------------
+# Server-side feature flag (default OFF). When OFF, ``socratic_dialogue`` is
+# byte-for-byte the legacy single-call behavior. When ON, the tutor reply is run
+# through Editor → Tester before being shown to the student; a REJECTED verdict
+# triggers exactly one regeneration. Any gate failure degrades gracefully to the
+# best available reply and is logged — it never blocks the student nor 5xx's.
+AI_GATE_FLAG_ENV = "AI_GATE_EDITOR_TESTER_ENABLED"
+
+
+def _editor_tester_gate_enabled() -> bool:
+    """Read the gate flag from the environment (default OFF). Read per-call so the
+    flag is monkeypatchable in tests and flippable without a restart."""
+    return os.getenv(AI_GATE_FLAG_ENV, "false").strip().lower() in ("1", "true", "yes", "on")
 
 # ---------------------------------------------------------------------------
 # Exception
@@ -174,8 +203,33 @@ MODEL_PRICING = {
 _user_token_cache: Dict[str, Dict[str, int]] = {}
 
 
+# Explicit network timeout (seconds) for every OpenAI call. Without it the
+# AsyncOpenAI client can hang the request indefinitely on a stalled upstream;
+# a bounded timeout lets the handler surface 502/504 instead of leaking a
+# coroutine that never completes. Applied to both the async (event-loop) client
+# and the dedicated sync client used by the TTS background thread.
+OPENAI_TIMEOUT_SECONDS = 60.0
+
+
 class AIService:
-    def __init__(self):
+    def __init__(self, client: Any = None, sync_client: Any = None):
+        """AIService.
+
+        ASYNC-AI-1: the OpenAI client on the event-loop path is now ``AsyncOpenAI``
+        so ``_call_openai`` can ``await`` it and never block the single uvicorn
+        event loop (bug #1).
+
+        ASYNC-AI-3: ``client`` / ``sync_client`` are optional injection points so a
+        test fake (e.g. ``FakeAsyncOpenAI``) can be substituted without touching the
+        network. When ``client`` is provided, mock_mode is forced off and the real
+        OpenAI constructors are never called.
+
+        ASYNC-AI-1: ``sync_client`` is a *separate*, synchronous ``OpenAI`` client
+        used EXCLUSIVELY outside the event loop — by ``_run_tts_job`` which runs in a
+        ``threading.Thread`` and must call ``chat.completions.create`` synchronously.
+        Sharing ``self.client`` (now async) with that thread would silently break the
+        summary/explanation audio path (calling a coroutine as if it were blocking).
+        """
         settings = get_settings()
         self.api_key = settings.OPENAI_API_KEY or ""
         self.model = settings.OPENAI_MODEL
@@ -183,15 +237,33 @@ class AIService:
             "sk-test", "sk-sua-chave-openai", "sk-your-openai-key", "",
         )
         self.client = None
+        # Dedicated synchronous client for off-event-loop callers (TTS thread).
+        # NEVER awaited; NEVER used inside an async handler.
+        self.sync_client = None
         self.daily_token_limit = 500_000
+
+        # ASYNC-AI-3: explicit injection wins over real construction (headless tests).
+        if client is not None:
+            self.client = client
+            self.sync_client = sync_client
+            self.mock_mode = False
+            return
 
         if not self.mock_mode:
             try:
-                from openai import OpenAI
-                self.client = OpenAI(api_key=self.api_key)
+                from openai import AsyncOpenAI, OpenAI
+                self.client = AsyncOpenAI(
+                    api_key=self.api_key, timeout=OPENAI_TIMEOUT_SECONDS
+                )
+                # Sync sibling for the background TTS thread only.
+                self.sync_client = sync_client or OpenAI(
+                    api_key=self.api_key, timeout=OPENAI_TIMEOUT_SECONDS
+                )
             except Exception as e:
                 logger.warning(f"OpenAI client init failed, entering mock mode: {e}")
                 self.mock_mode = True
+                self.client = None
+                self.sync_client = None
 
     @property
     def enabled(self) -> bool:
@@ -224,7 +296,7 @@ class AIService:
     # Internal OpenAI call
     # ------------------------------------------------------------------
 
-    def _call_openai(
+    async def _call_openai(
         self,
         system_prompt: str,
         user_message: str,
@@ -233,6 +305,8 @@ class AIService:
         max_tokens: int = 1500,
         json_mode: bool = False,
     ) -> Dict[str, Any]:
+        # ASYNC-AI-1: now async — uses ``AsyncOpenAI`` so the call is awaited and
+        # the event loop stays free for concurrent requests during a slow LLM turn.
         if self.mock_mode or not self.client:
             raise AIServiceError("MOCK_MODE")
 
@@ -251,7 +325,7 @@ class AIService:
             kwargs["response_format"] = {"type": "json_object"}
 
         t0 = time.time()
-        response = self.client.chat.completions.create(**kwargs)
+        response = await self.client.chat.completions.create(**kwargs)
         elapsed = int((time.time() - t0) * 1000)
 
         choice = response.choices[0]
@@ -293,7 +367,7 @@ class AIService:
         )
 
         try:
-            result = self._call_openai(CREATOR_PROMPT, user_msg, json_mode=True)
+            result = await self._call_openai(CREATOR_PROMPT, user_msg, json_mode=True)
             self.track_token_usage(user_id, result["tokens"]["total"], db)
 
             raw_content = result["content"]
@@ -364,11 +438,41 @@ class AIService:
     # 2. Socrates — dialogue
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _normalize_initial_question(initial_question: Any) -> Dict[str, str]:
+        """Accept either an ``InitialQuestion`` model or a plain dict (TPP-4).
+
+        The route passes ``model_dump()`` (a dict); service-level/legacy callers
+        and tests pass dicts directly. ``text`` is the only field that matters for
+        the prompt; ``expected_answer`` is optional.
+        """
+        if initial_question is None:
+            return {}
+        if hasattr(initial_question, "model_dump"):
+            return initial_question.model_dump()
+        if isinstance(initial_question, dict):
+            return initial_question
+        # Duck-typed object with attributes.
+        return {
+            "text": getattr(initial_question, "text", "") or "",
+            "expected_answer": getattr(initial_question, "expected_answer", None),
+        }
+
+    def _derive_pacing(self, used: int) -> Dict[str, int]:
+        """Server-side pacing from the persisted ``used`` student-turn count (TPP-5).
+
+        ``remaining = MAX - used`` (clamped >= 0); ``should_finalize`` once the
+        current turn is the last permitted one (``used >= MAX - 1``).
+        """
+        remaining = max(0, MAX_INTERACTIONS - used)
+        should_finalize = used >= (MAX_INTERACTIONS - 1)
+        return {"remaining": remaining, "should_finalize": should_finalize}
+
     async def socratic_dialogue(
         self,
         student_message: str,
         chapter_content: str,
-        initial_question: Dict[str, str],
+        initial_question: Any,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         interactions_remaining: int = 3,
         session_id: Optional[str] = None,
@@ -377,52 +481,189 @@ class AIService:
     ) -> Dict[str, Any]:
         self.check_token_budget(user_id, db)
 
+        iq = self._normalize_initial_question(initial_question)
+        is_init = student_message == "__INIT__"
+
+        # --- TPP-4: persist the student turn server-side (backend = source of
+        # truth). Only when a real session + db are present; the __INIT__ pseudo
+        # message is NOT a real student turn and is never persisted. ---
+        repo = None
+        if session_id and db is not None:
+            try:
+                repo = ChatRepository(db)
+                if not is_init:
+                    await run_in_threadpool(
+                        repo.persist_turn,
+                        session_id,
+                        {"role": "user", "content": student_message, "agent_type": None,
+                         "metadata": None},
+                    )
+            except Exception as exc:  # pragma: no cover - persistence is best-effort
+                logger.warning("socratic_dialogue: student-turn persist failed (%s): %s",
+                               session_id, exc)
+                repo = repo  # keep repo for the read below if it still works
+
+        # --- TPP-5: derive pacing from the PERSISTED user-message count when a
+        # session exists; otherwise fall back to the client-supplied value
+        # (ephemeral/no-session path, e.g. the concurrency suite). ---
+        if repo is not None and session_id:
+            try:
+                used = await run_in_threadpool(repo.count_user_messages, session_id)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("socratic_dialogue: count_user_messages failed (%s): %s",
+                               session_id, exc)
+                used = max(0, MAX_INTERACTIONS - interactions_remaining)
+            pacing = self._derive_pacing(used)
+            remaining = pacing["remaining"]
+            should_finalize = pacing["should_finalize"]
+        else:
+            # No persisted session: degrade to the legacy contract deterministically.
+            remaining = max(0, interactions_remaining - 1)
+            should_finalize = interactions_remaining <= 1
+
         context = (
-            f"Pergunta em discussao: {initial_question.get('text', '')}\n"
-            f"Resposta esperada: {initial_question.get('expected_answer', 'nao especificada')}\n"
-            f"Interacoes restantes: {interactions_remaining}\n\n"
+            f"Pergunta em discussao: {iq.get('text', '')}\n"
+            f"Resposta esperada: {iq.get('expected_answer') or 'nao especificada'}\n"
+            f"Interacoes restantes: {remaining}\n\n"
             f"Conteudo de referencia:\n{chapter_content[:4000]}"
         )
 
-        is_init = student_message == "__INIT__"
         user_msg = (
             "Apresente-se brevemente e faca a primeira pergunta socratica."
             if is_init
             else student_message
         )
-
         history = conversation_history or []
 
         try:
-            result = self._call_openai(
-                SOCRATES_PROMPT,
-                f"CONTEXTO:\n{context}\n\nMENSAGEM DO ALUNO:\n{user_msg}",
-                history=history,
-                temperature=0.8,
+            content, analytics = await self._generate_socratic_reply(
+                context=context, user_msg=user_msg, history=history,
+                user_id=user_id, db=db,
             )
-            self.track_token_usage(user_id, result["tokens"]["total"], db)
-            content = result["content"]
-            return {
-                "response": {
-                    "content": content,
-                    "has_question": "?" in content,
-                    "is_final_interaction": interactions_remaining <= 1,
-                },
-                "session_status": {
-                    "interactions_remaining": max(0, interactions_remaining - 1),
-                    "should_finalize": interactions_remaining <= 1,
-                },
-                "analytics": {
-                    "response_length": len(content),
-                    "processing_time_ms": result["elapsed_ms"],
-                    "model_used": result["model"],
-                    "tokens_used": result["tokens"],
-                },
-            }
         except AIServiceError as e:
             if "MOCK_MODE" in str(e):
-                return self._mock_socratic(student_message, interactions_remaining, is_init)
-            raise
+                # Mock path: keep the persisted-pacing semantics. ``remaining`` is the
+                # post-turn count; treat ``should_finalize`` as the closing trigger.
+                mock = self._mock_socratic(
+                    student_message,
+                    1 if should_finalize else max(2, remaining),
+                    is_init,
+                )
+                content = mock["response"]["content"]
+                analytics = mock["analytics"]
+            else:
+                raise
+
+        # --- TPP-7: optional Editor→Tester quality gate (default OFF). On any gate
+        # failure we keep the best available reply (never block / never 5xx). ---
+        if _editor_tester_gate_enabled():
+            content = await self._run_editor_tester_gate(
+                socrates_content=content, context=context, user_msg=user_msg,
+                history=history, user_id=user_id, db=db,
+            )
+
+        # --- TPP-4: persist the tutor turn server-side. ---
+        if repo is not None and session_id:
+            try:
+                await run_in_threadpool(
+                    repo.persist_turn,
+                    session_id,
+                    {"role": "assistant", "content": content, "agent_type": "socrates",
+                     "metadata": None},
+                )
+            except Exception as exc:  # pragma: no cover - persistence is best-effort
+                logger.warning("socratic_dialogue: assistant-turn persist failed (%s): %s",
+                               session_id, exc)
+
+        return {
+            "response": {
+                "content": content,
+                "has_question": "?" in content,
+                "is_final_interaction": should_finalize,
+            },
+            "session_status": {
+                "interactions_remaining": remaining,
+                "should_finalize": should_finalize,
+            },
+            "analytics": analytics,
+        }
+
+    async def _generate_socratic_reply(
+        self, *, context: str, user_msg: str, history: List[Dict[str, str]],
+        user_id: Optional[str], db,
+    ) -> tuple:
+        """One Socrates pass. Returns ``(content, analytics_dict)``. Raises
+        ``AIServiceError('MOCK_MODE')`` when no client is configured."""
+        result = await self._call_openai(
+            SOCRATES_PROMPT,
+            f"CONTEXTO:\n{context}\n\nMENSAGEM DO ALUNO:\n{user_msg}",
+            history=history,
+            temperature=0.8,
+        )
+        self.track_token_usage(user_id, result["tokens"]["total"], db)
+        content = result["content"]
+        analytics = {
+            "response_length": len(content),
+            "processing_time_ms": result["elapsed_ms"],
+            "model_used": result["model"],
+            "tokens_used": result["tokens"],
+        }
+        return content, analytics
+
+    async def _run_editor_tester_gate(
+        self, *, socrates_content: str, context: str, user_msg: str,
+        history: List[Dict[str, str]], user_id: Optional[str], db,
+    ) -> str:
+        """Editor → Tester pedagogical gate (TPP-7).
+
+        APPROVED/NEEDS_REVISION -> return the EDITED text. REJECTED -> regenerate
+        the whole pass (Socrates → Editor → Tester) exactly ONCE, then return the
+        best available reply regardless of the second verdict. Any exception in the
+        gate degrades to the (raw or edited) reply and is logged — the student is
+        never blocked, and the handler never sees a 5xx from the gate.
+        """
+        best = socrates_content
+        try:
+            edited = await self._edit_safe(socrates_content)
+            best = edited
+            verdict = await self._validate_safe(edited)
+
+            if verdict == "REJECTED":
+                # Regenerate ONCE: new Socrates pass -> Editor -> (best effort).
+                try:
+                    regen, _ = await self._generate_socratic_reply(
+                        context=context, user_msg=user_msg, history=history,
+                        user_id=user_id, db=db,
+                    )
+                    best = await self._edit_safe(regen)
+                    # A second validate is informational only — we do NOT retry again.
+                    await self._validate_safe(best)
+                except AIServiceError as e:
+                    if "MOCK_MODE" in str(e):
+                        return best
+                    logger.warning("TPP-7 regeneration failed: %s", e)
+                    return best
+            return best
+        except AIServiceError as e:
+            if "MOCK_MODE" in str(e):
+                # No client: gate is a no-op, original reply stands.
+                return best
+            logger.warning("TPP-7 gate error (returning best available reply): %s", e)
+            return best
+        except Exception as e:  # pragma: no cover - defensive: never block the student
+            logger.warning("TPP-7 gate unexpected error (returning best reply): %s", e)
+            return best
+
+    async def _edit_safe(self, text: str) -> str:
+        """Editor pass returning the edited text; falls back to the input on failure."""
+        out = await self.edit_response(orientador_response=text)
+        return out.get("edited_text", text) or text
+
+    async def _validate_safe(self, text: str) -> str:
+        """Tester pass returning the verdict string. Never raises for non-MOCK
+        errors (validate_response already fails-open to NEEDS_REVISION — TPP-7/#32)."""
+        out = await self.validate_response(edited_response=text)
+        return str(out.get("verdict", "NEEDS_REVISION")).upper()
 
     def _mock_socratic(self, msg: str, remaining: int, is_init: bool) -> Dict[str, Any]:
         if is_init:
@@ -477,7 +718,7 @@ class AIService:
         sentences = [s.strip() for s in re.split(r"[.!?]+", text) if s.strip()]
 
         try:
-            result = self._call_openai(
+            result = await self._call_openai(
                 ANALYST_PROMPT,
                 f"Analise o texto do aluno:\n\n{text}",
                 json_mode=True,
@@ -576,7 +817,7 @@ class AIService:
         context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         try:
-            result = self._call_openai(
+            result = await self._call_openai(
                 EDITOR_PROMPT,
                 f"Texto do orientador para editar:\n\n{orientador_response}",
                 temperature=0.5,
@@ -613,7 +854,7 @@ class AIService:
         context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         try:
-            result = self._call_openai(
+            result = await self._call_openai(
                 TESTER_PROMPT,
                 f"Valide a resposta editada:\n\n{edited_response}",
                 json_mode=True,
@@ -621,16 +862,24 @@ class AIService:
             return json.loads(result["content"])
         except AIServiceError as e:
             if "MOCK_MODE" in str(e):
+                # Legitimate canned fallback when no client is configured.
                 criteria = {}
                 for c in ("pedagogical", "structural", "clarity", "engagement", "originality", "inclusivity"):
                     criteria[c] = {"pass": True, "score": 0.85}
                 return {"verdict": "APPROVED", "score": 0.85, "criteria": criteria}
-            raise
-        except (json.JSONDecodeError, Exception):
-            criteria = {}
-            for c in ("pedagogical", "structural", "clarity", "engagement", "originality", "inclusivity"):
-                criteria[c] = {"pass": True, "score": 0.80}
-            return {"verdict": "APPROVED", "score": 0.80, "criteria": criteria}
+            # Transport/runtime failure of a REAL call — fail OPEN but HONEST
+            # (TPP-7 / #32): never fabricate APPROVED. The gate treats a non-APPROVED
+            # verdict as "don't block the student", so the edited reply still ships,
+            # but we don't lie about the validation having passed.
+            logger.warning("validate_response transport error — verdict UNKNOWN: %s", e)
+            return {"verdict": "UNKNOWN", "score": None, "criteria": {}, "error": "validation_unavailable"}
+        except json.JSONDecodeError as e:
+            # The Tester answered but with unparseable JSON. Same honest fail-open.
+            logger.warning("validate_response JSON parse error — verdict NEEDS_REVISION: %s", e)
+            return {"verdict": "NEEDS_REVISION", "score": None, "criteria": {}, "error": "unparseable_verdict"}
+        except Exception as e:
+            logger.warning("validate_response unexpected error — verdict UNKNOWN: %s", e)
+            return {"verdict": "UNKNOWN", "score": None, "criteria": {}, "error": "validation_unavailable"}
 
     # ------------------------------------------------------------------
     # 6. Organizer — session management

@@ -1,0 +1,10 @@
+[tool.pytest.ini_options]
+# Run pytest from `backend/`; tests live under `tests/` (incl. tests/security/).
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+# Keep output quiet by default; -v on demand.
+addopts = "-q"
+# ASYNC-AI-3: run `async def test_*` without a per-test @pytest.mark.asyncio marker.
+asyncio_mode = "auto"

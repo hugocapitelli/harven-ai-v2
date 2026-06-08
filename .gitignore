@@ -38,3 +38,9 @@ Thumbs.db
 
 # Docker
 docker-compose.override.yml
+
+# Supabase CLI temp state (machine-local, not source)
+supabase/.temp/
+
+# Claude Code agent memory (local)
+.claude/

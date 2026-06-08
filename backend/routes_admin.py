@@ -20,8 +20,15 @@ from pydantic import BaseModel, Field
 from supabase import Client
 
 from auth import get_current_user, require_role
+from authz import (
+    assert_owner_or_role,
+    assert_teacher_owns_discipline,
+    require_self_or_role,
+)
 from config import get_settings
 from database import get_supabase
+from gamification_points import points_for
+from repositories.discipline_repo import DisciplineRepository
 
 router = APIRouter()
 logger = logging.getLogger("harven")
@@ -618,29 +625,31 @@ async def force_logout(
 ):
     """
     Rotate the JWT secret so every existing token becomes invalid.
-    The new secret is written to .env and the settings cache is cleared.
+
+    SEC-ROT-3: the secret is rotated **in the database** (system_settings) and the
+    provider cache is invalidated immediately, so verification picks up the new
+    secret on the next request — no restart, no filesystem write. The previous
+    behaviour (rewriting .env) was inert in production because docker-compose env
+    vars outrank the .env file in pydantic-settings precedence (bug #22).
     """
+    from datetime import datetime, timezone
+
+    from jwt_secret_provider import invalidate_jwt_secret_cache
+
     new_secret = secrets.token_urlsafe(48)
 
-    # Update .env file
-    env_path = os.path.join(os.path.dirname(__file__), ".env")
-    lines: list[str] = []
-    replaced = False
-    if os.path.isfile(env_path):
-        with open(env_path) as f:
-            lines = f.readlines()
-        for i, line in enumerate(lines):
-            if line.startswith("JWT_SECRET_KEY="):
-                lines[i] = f"JWT_SECRET_KEY={new_secret}\n"
-                replaced = True
-    if not replaced:
-        lines.append(f"JWT_SECRET_KEY={new_secret}\n")
-    with open(env_path, "w") as f:
-        f.writelines(lines)
+    # Rotate the active signing secret in the DB (durable source of truth).
+    row = _get_or_create_settings(client)
+    client.table("system_settings").update(
+        {
+            "jwt_secret": new_secret,
+            "jwt_secret_rotated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    ).eq("id", row["id"]).execute()
 
-    # Clear cached settings so next request picks up the new key
-    from config import get_settings as _gs
-    _gs.cache_clear()
+    # Drop the provider cache so the new secret takes effect immediately
+    # (do not wait for the TTL). All pre-rotation tokens now fail verification.
+    invalidate_jwt_secret_cache()
 
     _log(client, f"Force logout executado por {admin['name']}", author=admin["name"], log_type="security")
     return {"message": "Todos os tokens foram invalidados. Usuarios deverao fazer login novamente."}
@@ -666,9 +675,11 @@ async def clear_cache(
 @router.get("/notifications/{user_id}/count", tags=["Notifications"], summary="Contagem de nao lidas")
 async def notification_count(
     user_id: str,
-    _user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # IDOR gate (SEC-ADMIN-3): only the owner of {user_id}, or an ADMIN, may read.
+    require_self_or_role(user_id, current_user, "ADMIN")
     res = (
         client.table("notifications")
         .select("id", count="exact")
@@ -685,9 +696,11 @@ async def list_notifications(
     user_id: str,
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
-    _user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # IDOR gate (SEC-ADMIN-3): only the owner of {user_id}, or an ADMIN, may read.
+    require_self_or_role(user_id, current_user, "ADMIN")
     res = (
         client.table("notifications")
         .select("*", count="exact")
@@ -722,9 +735,11 @@ async def list_notifications(
 @router.post("/notifications", tags=["Notifications"], summary="Criar notificacao", status_code=201)
 async def create_notification(
     body: NotificationCreate,
-    _user: dict = Depends(get_current_user),
+    _admin: dict = Depends(require_role("ADMIN")),
     client: Client = Depends(get_supabase),
 ):
+    # Creation is an ADMIN/system operation (SEC-ADMIN-3). Only here is
+    # ``body.user_id`` a legitimate target — never in a student-facing route.
     new_id = str(uuid4())
     res = client.table("notifications").insert(
         {
@@ -749,12 +764,14 @@ async def create_notification(
 @router.put("/notifications/{notification_id}/read", tags=["Notifications"], summary="Marcar como lida")
 async def mark_read(
     notification_id: str,
-    _user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
-    res = (client.table("notifications").select("id").eq("id", notification_id).maybe_single().execute() or type("_R", (), {"data": None})())
+    # Existence first (404), then ownership of the loaded row (403) — SEC-ADMIN-3.
+    res = (client.table("notifications").select("id, user_id").eq("id", notification_id).maybe_single().execute() or type("_R", (), {"data": None})())
     if not res.data:
         raise HTTPException(status_code=404, detail="Notificacao nao encontrada")
+    assert_owner_or_role(res.data.get("user_id"), current_user, "ADMIN")
     client.table("notifications").update({"is_read": True}).eq("id", notification_id).execute()
     return {"id": notification_id, "read": True}
 
@@ -762,9 +779,12 @@ async def mark_read(
 @router.put("/notifications/{user_id}/read-all", tags=["Notifications"], summary="Marcar todas como lidas")
 async def mark_all_read(
     user_id: str,
-    _user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # IDOR gate (SEC-ADMIN-3): only the owner of {user_id}, or an ADMIN, may
+    # suppress this feed — checked before any update touches another user's rows.
+    require_self_or_role(user_id, current_user, "ADMIN")
     # Supabase doesn't return an update count directly; update all matching rows
     client.table("notifications").update({"is_read": True}).eq("user_id", user_id).eq("is_read", False).execute()
     # Count remaining unread to confirm (should be 0)
@@ -776,12 +796,14 @@ async def mark_all_read(
 @router.delete("/notifications/{notification_id}", tags=["Notifications"], summary="Excluir notificacao")
 async def delete_notification(
     notification_id: str,
-    _user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
-    res = (client.table("notifications").select("id").eq("id", notification_id).maybe_single().execute() or type("_R", (), {"data": None})())
+    # Existence first (404), then ownership of the loaded row (403) — SEC-ADMIN-3.
+    res = (client.table("notifications").select("id, user_id").eq("id", notification_id).maybe_single().execute() or type("_R", (), {"data": None})())
     if not res.data:
         raise HTTPException(status_code=404, detail="Notificacao nao encontrada")
+    assert_owner_or_role(res.data.get("user_id"), current_user, "ADMIN")
     client.table("notifications").delete().eq("id", notification_id).execute()
     return {"deleted": True}
 
@@ -878,14 +900,19 @@ async def dashboard_stats(
 @router.get("/classes/{class_id}/stats", tags=["Dashboard"], summary="Estatisticas de turma")
 async def class_stats(
     class_id: str,
-    _user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_role("ADMIN", "TEACHER")),
     client: Client = Depends(get_supabase),
 ):
     """class_id maps to a Discipline id."""
+    # Role gate (require_role) rejects STUDENT with 403 before any read.
+    # Existence (404) is preserved for authorized callers, then the teacher
+    # discipline-scoping gate runs (ADMIN bypasses) — SEC-SCOPE-1.
     disc_res = (client.table("disciplines").select("id, name").eq("id", class_id).maybe_single().execute() or type("_R", (), {"data": None})())
     disc = disc_res.data
     if not disc:
         raise HTTPException(status_code=404, detail="Turma nao encontrada")
+
+    assert_teacher_owns_discipline(class_id, current_user, DisciplineRepository(client))
 
     student_res = client.table("discipline_students").select("id", count="exact").eq("discipline_id", class_id).execute()
     student_count = student_res.count or 0
@@ -918,13 +945,16 @@ async def class_stats(
 )
 async def discipline_students_stats(
     discipline_id: str,
-    _user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_role("ADMIN", "TEACHER")),
     client: Client = Depends(get_supabase),
 ):
+    # Role gate (403 for STUDENT) -> existence (404) -> teacher scoping (403) -> read.
     disc_res = (client.table("disciplines").select("id, name").eq("id", discipline_id).maybe_single().execute() or type("_R", (), {"data": None})())
     disc = disc_res.data
     if not disc:
         raise HTTPException(status_code=404, detail="Disciplina nao encontrada")
+
+    assert_teacher_owns_discipline(discipline_id, current_user, DisciplineRepository(client))
 
     # Get student IDs for this discipline
     ds_res = client.table("discipline_students").select("student_id").eq("discipline_id", discipline_id).execute()
@@ -975,12 +1005,31 @@ async def discipline_students_stats(
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+def _effective_write_target(path_user_id: str, current_user: dict) -> str:
+    """Resolve the user_id a gamification write should land on (SEC-ADMIN-4).
+
+    Self-service is the rule: a non-privileged actor always writes to their own
+    authenticated id (``current_user["id"]``) — the ``path_user_id`` is never
+    trusted to redirect a self-service write. ADMIN/TEACHER may legitimately
+    operate on behalf of another user, so for them the (already authorized)
+    ``path_user_id`` is honoured. Callers MUST run ``assert_owner_or_role`` first.
+    """
+    role = str((current_user or {}).get("role") or "").strip().upper()
+    actor_id = str((current_user or {}).get("id") or "")
+    if role in {"ADMIN", "TEACHER"} and str(path_user_id) != actor_id:
+        return str(path_user_id)
+    return actor_id
+
+
 @router.get("/users/{user_id}/stats", tags=["Gamification"], summary="Stats do usuario")
 async def user_stats(
     user_id: str,
-    _user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-READ-1: read IDOR fix — owner (path == token) reads their own stats;
+    # only ADMIN/TEACHER may read another user's. Everyone else -> 403, no read.
+    require_self_or_role(user_id, current_user, "ADMIN", "TEACHER")
     try:
         res = (client.table("user_stats").select("*").eq("user_id", user_id).maybe_single().execute() or type("_R", (), {"data": None})())
         row = res.data if res else None
@@ -1017,9 +1066,12 @@ async def user_activities(
     user_id: str,
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
-    _user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-READ-1: read IDOR fix — owner reads their own activities; only
+    # ADMIN/TEACHER may read another user's. Everyone else -> 403, no read.
+    require_self_or_role(user_id, current_user, "ADMIN", "TEACHER")
     res = (
         client.table("user_activities")
         .select("*", count="exact")
@@ -1054,39 +1106,45 @@ async def user_activities(
 async def create_activity(
     user_id: str,
     body: ActivityCreate,
-    _user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-ADMIN-4: self-service write — owner (path == token) passes; only
+    # ADMIN/TEACHER may write for another user_id; everyone else -> 403, no write.
+    assert_owner_or_role(user_id, current_user, "ADMIN", "TEACHER")
+    target_user_id = _effective_write_target(user_id, current_user)
+    # Points are server-decided (whitelist) — body.points is ignored.
+    award = points_for(body.activity_type)
     try:
         new_id = str(uuid4())
         res = client.table("user_activities").insert(
             {
                 "id": new_id,
-                "user_id": user_id,
+                "user_id": target_user_id,
                 "activity_type": body.activity_type,
                 "description": body.description,
-                "points": body.points,
+                "points": award,
                 "metadata": body.metadata,
             }
         ).execute()
         row = res.data[0] if res.data else {}
 
         # Update user stats (upsert)
-        stats_res = (client.table("user_stats").select("*").eq("user_id", user_id).maybe_single().execute() or type("_R", (), {"data": None})())
+        stats_res = (client.table("user_stats").select("*").eq("user_id", target_user_id).maybe_single().execute() or type("_R", (), {"data": None})())
         if stats_res.data:
             current_points = stats_res.data.get("total_points", 0) or 0
             client.table("user_stats").update(
-                {"total_points": current_points + body.points}
-            ).eq("user_id", user_id).execute()
+                {"total_points": current_points + award}
+            ).eq("user_id", target_user_id).execute()
         else:
             client.table("user_stats").insert(
-                {"id": str(uuid4()), "user_id": user_id, "total_points": body.points}
+                {"id": str(uuid4()), "user_id": target_user_id, "total_points": award}
             ).execute()
 
         return {
             "id": row.get("id", new_id),
             "activity_type": row.get("activity_type", body.activity_type),
-            "points": row.get("points", body.points),
+            "points": row.get("points", award),
             "created_at": row.get("created_at"),
         }
     except Exception as e:
@@ -1103,9 +1161,12 @@ async def create_activity(
 @router.get("/users/{user_id}/achievements", tags=["Gamification"], summary="Conquistas do usuario")
 async def user_achievements(
     user_id: str,
-    _user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-READ-1: read IDOR fix — owner reads their own achievements; only
+    # ADMIN/TEACHER may read another user's. Everyone else -> 403, no read.
+    require_self_or_role(user_id, current_user, "ADMIN", "TEACHER")
     res = (
         client.table("user_achievements")
         .select("*")
@@ -1140,14 +1201,18 @@ async def user_achievements(
 async def unlock_achievement(
     user_id: str,
     achievement_id: str,
-    _user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-ADMIN-4: authorize BEFORE dedup/insert. Owner or ADMIN/TEACHER only.
+    assert_owner_or_role(user_id, current_user, "ADMIN", "TEACHER")
+    target_user_id = _effective_write_target(user_id, current_user)
+
     # Prevent duplicates
     existing_res = (
         client.table("user_achievements")
         .select("*")
-        .eq("user_id", user_id)
+        .eq("user_id", target_user_id)
         .eq("id", achievement_id)
         .maybe_single()
         .execute()
@@ -1163,7 +1228,7 @@ async def unlock_achievement(
     res = client.table("user_achievements").insert(
         {
             "id": achievement_id,
-            "user_id": user_id,
+            "user_id": target_user_id,
             "name": achievement_id,
             "unlocked_at": now,
         }
@@ -1179,9 +1244,12 @@ async def unlock_achievement(
 @router.get("/users/{user_id}/certificates", tags=["Gamification"], summary="Certificados do usuario")
 async def user_certificates(
     user_id: str,
-    _user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-READ-1: read IDOR fix — owner reads their own certificates; only
+    # ADMIN/TEACHER may read another user's. Everyone else -> 403, no read.
+    require_self_or_role(user_id, current_user, "ADMIN", "TEACHER")
     res = (
         client.table("certificates")
         .select("*")
@@ -1207,14 +1275,39 @@ async def user_certificates(
 async def issue_certificate(
     user_id: str,
     body: CertificateCreate,
-    _user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-ADMIN-4: authorize first (owner or ADMIN/TEACHER), then resolve target.
+    assert_owner_or_role(user_id, current_user, "ADMIN", "TEACHER")
+    target_user_id = _effective_write_target(user_id, current_user)
+
+    # Academic integrity: a non-privileged actor may only self-issue a certificate
+    # once the course is fully completed (progress_percent >= 100, server-checked).
+    # ADMIN/TEACHER may issue administratively, regardless of progress.
+    role = str((current_user or {}).get("role") or "").strip().upper()
+    if role not in {"ADMIN", "TEACHER"}:
+        prog_res = (
+            client.table("course_progress")
+            .select("progress_percent")
+            .eq("user_id", target_user_id)
+            .eq("course_id", body.course_id)
+            .maybe_single()
+            .execute()
+            or type("_R", (), {"data": None})()
+        )
+        prog = prog_res.data or {}
+        if float(prog.get("progress_percent") or 0) < 100:
+            raise HTTPException(
+                status_code=403,
+                detail="Certificado indisponivel: curso nao concluido (100% necessario).",
+            )
+
     # Prevent duplicate
     existing_res = (
         client.table("certificates")
         .select("*")
-        .eq("user_id", user_id)
+        .eq("user_id", target_user_id)
         .eq("course_id", body.course_id)
         .maybe_single()
         .execute()
@@ -1232,7 +1325,7 @@ async def issue_certificate(
     res = client.table("certificates").insert(
         {
             "id": new_id,
-            "user_id": user_id,
+            "user_id": target_user_id,
             "course_id": body.course_id,
             "certificate_number": cert_number,
             "issued_at": now,
@@ -1254,9 +1347,12 @@ async def issue_certificate(
 async def user_course_progress(
     user_id: str,
     course_id: str,
-    _user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-READ-1: read IDOR fix — owner reads their own course progress; only
+    # ADMIN/TEACHER may read another user's. Everyone else -> 403, no read.
+    require_self_or_role(user_id, current_user, "ADMIN", "TEACHER")
     try:
         res = (
             client.table("course_progress")
@@ -1303,9 +1399,12 @@ async def complete_content(
     user_id: str,
     course_id: str,
     content_id: str,
-    _user: dict = Depends(get_current_user),
+    current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-ADMIN-4: authorize (owner or ADMIN/TEACHER), then resolve write target.
+    assert_owner_or_role(user_id, current_user, "ADMIN", "TEACHER")
+    target_user_id = _effective_write_target(user_id, current_user)
     try:
         # Verify content exists
         content_res = (client.table("contents").select("id, title").eq("id", content_id).maybe_single().execute() or type("_R", (), {"data": None})())
@@ -1326,7 +1425,7 @@ async def complete_content(
         progress_res = (
             client.table("course_progress")
             .select("*")
-            .eq("user_id", user_id)
+            .eq("user_id", target_user_id)
             .eq("course_id", course_id)
             .maybe_single()
             .execute()
@@ -1340,7 +1439,7 @@ async def complete_content(
             client.table("course_progress").insert(
                 {
                     "id": new_id,
-                    "user_id": user_id,
+                    "user_id": target_user_id,
                     "course_id": course_id,
                     "completed_contents": new_completed,
                     "total_contents": total_contents,
@@ -1359,14 +1458,14 @@ async def complete_content(
                 }
             ).eq("id", progress["id"]).execute()
 
-        # Log activity
+        # Log activity — points from the central server-side whitelist (no hardcode).
         client.table("user_activities").insert(
             {
                 "id": str(uuid4()),
-                "user_id": user_id,
+                "user_id": target_user_id,
                 "activity_type": "content_completed",
                 "description": f"Conteudo {content.get('title', '')} completo",
-                "points": 10,
+                "points": points_for("content_completed"),
             }
         ).execute()
 
@@ -1502,9 +1601,11 @@ async def complete_course(
 async def create_review(
     session_id: str,
     body: SessionReviewCreate,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_role("TEACHER", "ADMIN")),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-ADMIN-5: only TEACHER/ADMIN may author a review. reviewer_id is always
+    # derived from the authenticated token below — never from the body.
     session_res = (client.table("chat_sessions").select("id, user_id").eq("id", session_id).maybe_single().execute() or type("_R", (), {"data": None})())
     session = session_res.data
     if not session:
@@ -1552,9 +1653,17 @@ async def create_review(
 @router.get("/chat-sessions/{session_id}/review", tags=["Session Review"], summary="Ver review")
 async def get_review(
     session_id: str,
-    _user: dict = Depends(get_current_user),
+    user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-ADMIN-5: the session owner reads their own review; TEACHER/ADMIN read any.
+    # Authorize against the loaded session BEFORE returning the private review.
+    session_res = (client.table("chat_sessions").select("id, user_id").eq("id", session_id).maybe_single().execute() or type("_R", (), {"data": None})())
+    session = session_res.data
+    if not session:
+        raise HTTPException(status_code=404, detail="Sessao nao encontrada")
+    assert_owner_or_role(session.get("user_id"), user, "TEACHER", "ADMIN")
+
     res = (client.table("session_reviews").select("*").eq("session_id", session_id).maybe_single().execute() or type("_R", (), {"data": None})())
     row = res.data
     if not row:
@@ -1581,9 +1690,10 @@ async def get_review(
 async def update_review(
     session_id: str,
     body: SessionReviewCreate,
-    _user: dict = Depends(get_current_user),
+    _user: dict = Depends(require_role("TEACHER", "ADMIN")),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-ADMIN-5: only TEACHER/ADMIN may mutate rating/feedback (gate via require_role).
     res = (client.table("session_reviews").select("*").eq("session_id", session_id).maybe_single().execute() or type("_R", (), {"data": None})())
     row = res.data
     if not row:
@@ -1614,6 +1724,15 @@ async def reply_review(
     user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-ADMIN-5: only the session owner may reply. Load the session and gate
+    # ownership BEFORE any update/notification — a cross actor causes no write and
+    # no spurious notification (which would otherwise be attributed to the attacker).
+    session_res = (client.table("chat_sessions").select("id, user_id").eq("id", session_id).maybe_single().execute() or type("_R", (), {"data": None})())
+    session = session_res.data
+    if not session:
+        raise HTTPException(status_code=404, detail="Sessao nao encontrada")
+    assert_owner_or_role(session.get("user_id"), user, "ADMIN")
+
     res = (client.table("session_reviews").select("*").eq("session_id", session_id).maybe_single().execute() or type("_R", (), {"data": None})())
     row = res.data
     if not row:
@@ -1653,9 +1772,13 @@ async def discipline_sessions(
     status_filter: Optional[str] = Query(None, alias="status"),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
-    _user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_role("ADMIN", "TEACHER")),
     client: Client = Depends(get_supabase),
 ):
+    # Role gate (403 STUDENT) + teacher discipline-scoping (403 non-owner) BEFORE
+    # any read of peer tutoring sessions — SEC-SCOPE-1. ADMIN bypasses scoping.
+    assert_teacher_owns_discipline(discipline_id, current_user, DisciplineRepository(client))
+
     # Get course IDs for this discipline
     courses_res = client.table("courses").select("id").eq("discipline_id", discipline_id).execute()
     course_ids = [c["id"] for c in (courses_res.data or [])]
@@ -1743,9 +1866,13 @@ class GradeOverride(BaseModel):
 )
 async def discipline_gradebook(
     discipline_id: str,
-    _user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
+    current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-SCOPE-2: scope TEACHER/INSTRUCTOR to their own disciplines; ADMIN bypasses.
+    # Gate runs BEFORE any gradebook read so an unlinked teacher reads nothing.
+    assert_teacher_owns_discipline(discipline_id, current_user, DisciplineRepository(client))
+
     # Verify discipline
     disc_res = (
         client.table("disciplines")
@@ -1887,9 +2014,14 @@ async def set_student_grade(
     discipline_id: str,
     student_id: str,
     body: GradeOverride,
-    _user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
+    current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-SCOPE-2: scope TEACHER/INSTRUCTOR to their own disciplines; ADMIN bypasses.
+    # 403 fires BEFORE any read or write to grade_overrides — no partial mutation,
+    # identity derived from current_user, never from the body.
+    assert_teacher_owns_discipline(discipline_id, current_user, DisciplineRepository(client))
+
     # Verify discipline exists
     disc_res = (
         client.table("disciplines")

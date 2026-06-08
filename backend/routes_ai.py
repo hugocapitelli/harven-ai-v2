@@ -1,25 +1,32 @@
 """Routes — AI, Chat Sessions, Integrations, LTI, Uploads."""
+import json
 import logging
 import os
+import secrets
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, File
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 from supabase import Client
 
 from auth import create_access_token, get_current_user, require_role
+from authz import assert_owner_or_role, load_session_or_404, require_self_or_role
 from config import get_settings
 from database import get_supabase
+from repositories.chat_repo import ChatRepository
+from schemas.chat import ChatSessionCreate
 from services.ai_service import AIService, AIServiceError, sanitize_ai_error
 from services.integration_service import (
     IntegrationService,
     LTIValidationError,
     generate_lti_config_xml,
     validate_lti_launch,
+    verify_moodle_webhook_signature,
 )
 from services.storage_service import StorageService
 
@@ -79,11 +86,26 @@ class QuestionGenerationRequest(BaseModel):
     max_questions: Optional[int] = Field(5, ge=1, le=20)
 
 
+class InitialQuestion(BaseModel):
+    """Typed contract for the socratic seed question (TPP-4, bug #41).
+
+    ``text`` is REQUIRED: an empty/missing question now yields a 422 validation
+    error instead of a silently degraded prompt ("Pergunta em discussao:" blank).
+    ``expected_answer`` stays optional (a friendly default is used when absent).
+    """
+    text: str = Field(..., min_length=1, max_length=5000)
+    expected_answer: Optional[str] = Field(None, max_length=5000)
+
+
 class SocraticDialogueRequest(BaseModel):
     student_message: str = Field(..., min_length=1, max_length=5000)
     chapter_content: str = Field(..., max_length=50000)
-    initial_question: dict
+    initial_question: InitialQuestion
     conversation_history: Optional[List[dict]] = []
+    # TPP-5: pacing is DERIVED server-side from the persisted message count when a
+    # ``session_id`` is present. This field is retained only for contract
+    # backwards-compat (older clients still send it); it is NOT trusted to drive
+    # ``should_finalize`` / ``interactions_remaining`` once a session exists.
     interactions_remaining: Optional[int] = Field(3, ge=0, le=20)
     session_id: Optional[str] = None
     chapter_id: Optional[str] = None
@@ -111,11 +133,9 @@ class OrganizeSessionRequest(BaseModel):
     metadata: Optional[dict] = None
 
 
-class ChatSessionCreate(BaseModel):
-    user_id: Optional[str] = None
-    content_id: str
-    chapter_id: Optional[str] = None
-    course_id: Optional[str] = None
+# ChatSessionCreate is imported from schemas.chat (single source of truth, TPP-2):
+# the previous duplicate definition here caused contract drift. ``user_id`` lives
+# on that model only for backwards-compat and is never trusted for authorization.
 
 
 class ChatMessageCreate(BaseModel):
@@ -145,7 +165,7 @@ async def ai_status():
 @router.post("/api/ai/creator/generate", tags=["AI"])
 async def ai_creator_generate(
     req: QuestionGenerationRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
     client: Client = Depends(get_supabase),
 ):
     try:
@@ -185,7 +205,7 @@ async def ai_creator_generate(
 @router.post("/api/ai/creator/suggest-chapters", tags=["AI"])
 async def ai_suggest_chapters(
     req: QuestionGenerationRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
     client: Client = Depends(get_supabase),
 ):
     """Analyze uploaded content and suggest chapter splits based on headings."""
@@ -219,6 +239,9 @@ async def ai_suggest_chapters(
 @router.post("/api/ai/socrates/dialogue", tags=["AI"])
 async def ai_socrates_dialogue(
     req: SocraticDialogueRequest,
+    # carve-out: tutor do aluno — NÃO gatear (SEC-SCOPE-3). STUDENT must reach this
+    # endpoint (200); gating it by role would break the Socratic tutor for ALL
+    # students. Keep get_current_user (any authenticated user), never require_role.
     current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
@@ -226,8 +249,11 @@ async def ai_socrates_dialogue(
         return await get_ai_service().socratic_dialogue(
             student_message=req.student_message,
             chapter_content=req.chapter_content,
-            initial_question=req.initial_question,
+            # InitialQuestion (TPP-4) -> dict for the service's typed accessors.
+            initial_question=req.initial_question.model_dump(),
             conversation_history=req.conversation_history,
+            # TPP-5: still passed for the no-session fallback path, but ignored as a
+            # source of truth when ``session_id`` resolves to a persisted transcript.
             interactions_remaining=req.interactions_remaining or 3,
             session_id=req.session_id,
             user_id=current_user["id"],
@@ -243,7 +269,7 @@ async def ai_socrates_dialogue(
 @router.post("/api/ai/analyst/detect", tags=["AI"])
 async def ai_analyst_detect(
     req: AIDetectionRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
 ):
     try:
         return await get_ai_service().detect_ai_content(
@@ -261,7 +287,7 @@ async def ai_analyst_detect(
 @router.post("/api/ai/editor/edit", tags=["AI"])
 async def ai_editor_edit(
     req: EditResponseRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
 ):
     try:
         return await get_ai_service().edit_response(
@@ -278,7 +304,7 @@ async def ai_editor_edit(
 @router.post("/api/ai/tester/validate", tags=["AI"])
 async def ai_tester_validate(
     req: ValidateResponseRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
 ):
     try:
         return await get_ai_service().validate_response(
@@ -295,7 +321,8 @@ async def ai_tester_validate(
 @router.post("/api/ai/organizer/session", tags=["AI"])
 async def ai_organizer_session(
     req: OrganizeSessionRequest,
-    current_user: dict = Depends(get_current_user),
+    # SEC-SCOPE-3: AI authoring/organizer is role-gated (STUDENT -> 403).
+    current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
     client: Client = Depends(get_supabase),
 ):
     try:
@@ -305,12 +332,17 @@ async def ai_organizer_session(
         if req.action == "get_session_status":
             session_id = payload.get("session_id")
             if session_id:
-                # Load session status from DB
-                sess_result = client.table("chat_sessions").select(
-                    "id, status, total_messages, created_at"
-                ).eq("id", session_id).maybe_single().execute()
-                if sess_result and sess_result.data:
-                    payload["status"] = sess_result.data.get("status", "active")
+                # SEC-CHAT-4: ownership gate BEFORE reading status/message counts.
+                # Resolve the session from the DB and assert the caller owns it (or
+                # is a privileged role). A cross-user/non-owner actor gets 403/404
+                # and NO status nor total_messages is leaked. ``session_id`` from the
+                # body is only used to *load* the row — never to authorize.
+                session = load_session_or_404(client, session_id)
+                assert_owner_or_role(
+                    session.get("user_id"), current_user, "ADMIN", "TEACHER", "INSTRUCTOR"
+                )
+
+                payload["status"] = session.get("status", "active")
 
                 # Count actual messages from chat_messages table
                 msg_count_result = client.table("chat_messages").select(
@@ -324,6 +356,10 @@ async def ai_organizer_session(
             payload=payload,
             metadata=req.metadata,
         )
+    except HTTPException:
+        # Authorization decisions (403/404 from the ownership gate) must keep
+        # their status code — never be masked as a 500 by the generic handler.
+        raise
     except AIServiceError as e:
         raise HTTPException(status_code=503, detail=sanitize_ai_error(e))
     except Exception as e:
@@ -334,31 +370,48 @@ async def ai_organizer_session(
 @router.post("/api/ai/organizer/prepare-export", tags=["AI"])
 async def ai_organizer_prepare_export(
     session_data: dict,
-    current_user: dict = Depends(get_current_user),
+    # SEC-SCOPE-3: AI authoring/organizer is role-gated (STUDENT -> 403).
+    current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
     client: Client = Depends(get_supabase),
 ):
     try:
         enriched = dict(session_data)
 
-        # If session_id provided, load session + messages from DB
+        # SEC-CHAT-1 / SEC-CHAT-4: ownership gate runs BEFORE any enrichment.
+        # Resolve the session strictly by ``session_id`` (a path/body identity is
+        # only used to LOAD the row, never to authorize), assert the caller owns it
+        # (or holds a privileged role), and ONLY THEN load chat_messages + users
+        # (PII: name/email). A non-owner gets 403/404 and zero queries against
+        # chat_messages / users fire — no transcript, name or email can leak.
         session_id = enriched.get("session_id")
+        session_row: Optional[dict] = None
         if session_id and not enriched.get("messages"):
-            sess_result = client.table("chat_sessions").select("*").eq(
-                "id", session_id
-            ).maybe_single().execute()
-            if sess_result and sess_result.data:
-                sess = sess_result.data
-                for k, v in sess.items():
-                    enriched.setdefault(k, v)
-                enriched.setdefault("session_id", sess.get("id"))
+            session_row = load_session_or_404(client, session_id)
+            assert_owner_or_role(
+                session_row.get("user_id"), current_user, "ADMIN", "TEACHER", "INSTRUCTOR"
+            )
 
-                msgs_result = client.table("chat_messages").select("*").eq(
-                    "session_id", session_id
-                ).order("created_at").execute()
-                enriched["messages"] = msgs_result.data or []
+            for k, v in session_row.items():
+                enriched.setdefault(k, v)
+            enriched.setdefault("session_id", session_row.get("id"))
 
-        # Populate actor from user_id
-        user_id = enriched.get("user_id") or current_user.get("id")
+            msgs_result = client.table("chat_messages").select("*").eq(
+                "session_id", session_id
+            ).order("created_at").execute()
+            enriched["messages"] = msgs_result.data or []
+
+        # SEC-CHAT-4: the export actor (user_name/user_email) is derived strictly
+        # from the OWNER of the loaded session (``session_row["user_id"]``), never
+        # from a client-supplied ``body.user_id``. When no session was loaded (raw
+        # payload export), fall back to the authenticated user — still never the body.
+        if session_row is not None:
+            actor_user_id = session_row.get("user_id")
+        else:
+            actor_user_id = current_user.get("id")
+        # Drop any forged body.user_id so it cannot influence the actor downstream.
+        enriched["user_id"] = actor_user_id
+
+        user_id = actor_user_id
         if user_id and (not enriched.get("user_name") or not enriched.get("user_email")):
             user_result = client.table("users").select("name, email").eq(
                 "id", user_id
@@ -400,6 +453,9 @@ async def ai_organizer_prepare_export(
         enriched.setdefault("content_title", "Unknown Content")
 
         return get_ai_service().prepare_moodle_export(enriched)
+    except HTTPException:
+        # Ownership decisions (403/404) must surface unchanged — never as a 500.
+        raise
     except Exception as e:
         logger.error(f"Export error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Erro interno do servidor")
@@ -410,6 +466,9 @@ async def ai_estimate_cost(
     prompt_tokens: int = Query(0, ge=0),
     completion_tokens: int = Query(0, ge=0),
     model: str = Query(""),
+    # SEC-SCOPE-3: estimate-cost previously had NO auth; now requires a role so it
+    # no longer leaks pricing/model config to anonymous/STUDENT callers.
+    current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
 ):
     svc = get_ai_service()
     return {
@@ -475,7 +534,12 @@ async def tts_generate(
 
     voice_id = body.voice if body.voice in ELEVENLABS_VOICES else "21m00Tcm4TlvDq8ikWAM"
 
-    try:
+    # ASYNC-AI-2: the ElevenLabs SDK has no stable async client, and the blocking
+    # part is BOTH the network ``convert()`` AND draining the returned generator with
+    # ``b"".join(...)`` (that drain is where bytes are streamed off the socket). Both
+    # MUST run inside a single threadpool closure — joining outside the threadpool
+    # would put the real network blocking right back on the event loop.
+    def _synthesize() -> bytes:
         from elevenlabs.client import ElevenLabs
         el_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
         audio_generator = el_client.text_to_speech.convert(
@@ -484,7 +548,10 @@ async def tts_generate(
             model_id="eleven_multilingual_v2",
             output_format="mp3_44100_128",
         )
-        audio_bytes = b"".join(audio_generator)
+        return b"".join(audio_generator)
+
+    try:
+        audio_bytes = await run_in_threadpool(_synthesize)
     except Exception as e:
         logger.error(f"TTS generate failed: {e}", exc_info=True)
         raise HTTPException(status_code=502, detail=f"Falha na chamada ElevenLabs TTS: {sanitize_ai_error(e)}")
@@ -529,8 +596,15 @@ def _run_tts_job(job_id: str, content_id: str, content_text: str, audio_type: st
         svc = get_ai_service()
         tts_input = content_text
 
-        if audio_type == "summary" and svc.client:
-            result = svc.client.chat.completions.create(
+        # ASYNC-AI-1: this job runs in a threading.Thread (OFF the event loop).
+        # ``svc.client`` is now ``AsyncOpenAI`` and MUST NOT be called here (calling a
+        # coroutine synchronously would silently break summary/explanation audio).
+        # Use the dedicated SYNCHRONOUS client (``svc.sync_client``) instead — this is
+        # QA verification item #1 (no async/coroutine exception leaks into the thread).
+        sync_client = svc.sync_client
+
+        if audio_type == "summary" and sync_client:
+            result = sync_client.chat.completions.create(
                 model=svc.model,
                 messages=[
                     {"role": "system", "content": "Voce e um assistente educacional. Resuma o conteudo abaixo de forma clara e concisa, em portugues, mantendo os conceitos-chave. Maximo 3 paragrafos."},
@@ -539,8 +613,8 @@ def _run_tts_job(job_id: str, content_id: str, content_text: str, audio_type: st
                 max_tokens=800,
             )
             tts_input = result.choices[0].message.content or content_text
-        elif audio_type == "explanation" and svc.client:
-            result = svc.client.chat.completions.create(
+        elif audio_type == "explanation" and sync_client:
+            result = sync_client.chat.completions.create(
                 model=svc.model,
                 messages=[
                     {"role": "system", "content": "Voce e um professor didatico. Transforme o conteudo abaixo em uma explicacao clara e acessivel, como se estivesse explicando para um aluno. Use linguagem natural e exemplos quando possivel. Em portugues. Maximo 4 paragrafos."},
@@ -673,7 +747,10 @@ async def reprocess_content(
         raise HTTPException(status_code=503, detail="Servico de IA indisponivel")
 
     try:
-        result = svc.client.chat.completions.create(
+        # ASYNC-AI-1: ``svc.client`` is now AsyncOpenAI; this is an async handler on
+        # the event loop, so the call must be awaited (was a blocking sync call that
+        # froze the loop for the whole reformatting turn).
+        result = await svc.client.chat.completions.create(
             model=svc.model,
             messages=[
                 {
@@ -750,8 +827,12 @@ async def ai_transcribe(
     upload_name = file.filename or "audio.webm"
     mime_type = file.content_type or "application/octet-stream"
 
+    # ASYNC-AI-2: ``svc.client`` is now AsyncOpenAI (ASYNC-AI-1), so Whisper runs
+    # awaited — the long upload+inference no longer blocks the single event loop.
+    # The timeout configured on the async client (ASYNC-AI-1) maps an upstream
+    # stall to an exception which is caught below and surfaced as 502/504.
     try:
-        result = svc.client.audio.transcriptions.create(
+        result = await svc.client.audio.transcriptions.create(
             model="whisper-1",
             file=(upload_name, content, mime_type),
         )
@@ -772,6 +853,60 @@ async def ai_transcribe(
 # ===================================================================
 
 
+def _create_chat_session_row(client: Client, uid: str, content_id: str) -> dict:
+    """Insert a fresh, distinct active session (used for the completed→new-attempt
+    path, where a duplicate row is the intended product behavior — SEC-CHAT-3)."""
+    new_session = {
+        "user_id": uid,
+        "content_id": content_id,
+        "status": "active",
+        "total_messages": 0,
+    }
+    insert_result = client.table("chat_sessions").insert(new_session).execute()
+    return insert_result.data[0] if insert_result.data else new_session
+
+
+def _upsert_chat_session_row(client: Client, uid: str, content_id: str) -> dict:
+    """Race-free create-or-get for (uid, content_id) (TPP-2, bug #7).
+
+    Prefers the ``upsert_chat_session`` RPC (DB ``ON CONFLICT`` — two concurrent
+    callers resolve to the same row, never two, never a 500). Degrades to a guarded
+    insert when the RPC is unavailable (un-migrated DB / in-memory fake): re-reads
+    on a conflict so the surviving row is still returned rather than surfacing a
+    duplicate-key error to the user.
+    """
+    rpc = getattr(client, "rpc", None)
+    if callable(rpc):
+        try:
+            res = rpc(
+                "upsert_chat_session",
+                {"p_user_id": uid, "p_content_id": content_id},
+            ).execute()
+            row = getattr(res, "data", None)
+            if isinstance(row, list):
+                row = row[0] if row else None
+            if row:
+                return row
+        except Exception as exc:
+            logger.warning(
+                "upsert_chat_session RPC failed for (%s, %s): %s; falling back",
+                uid, content_id, exc,
+            )
+
+    # Fallback: insert, and if a concurrent insert won the race, re-read the
+    # surviving row instead of propagating the unique-violation as a 500.
+    try:
+        return _create_chat_session_row(client, uid, content_id)
+    except Exception:
+        existing = client.table("chat_sessions").select("*").eq(
+            "user_id", uid
+        ).eq("content_id", content_id).maybe_single().execute()
+        row = getattr(existing, "data", None)
+        if row:
+            return row
+        raise
+
+
 @router.post("/chat-sessions", tags=["Chat Sessions"])
 async def create_or_get_chat_session(
     data: ChatSessionCreate,
@@ -779,7 +914,14 @@ async def create_or_get_chat_session(
     current_user: dict = Depends(get_current_user),
 ):
     try:
-        uid = data.user_id or current_user["id"]
+        # SEC-AUTHZ-0 (bug #2) + TPP-2: the owner is ALWAYS the authenticated user.
+        # A client-supplied ``data.user_id`` is never trusted — if present and
+        # pointing elsewhere, ``assert_owner_or_role`` rejects the spoof (a STUDENT
+        # cannot create/own a session for another user_id) and it never reaches any
+        # SELECT/INSERT/UPSERT below.
+        uid = current_user["id"]
+        if data.user_id is not None:
+            assert_owner_or_role(data.user_id, current_user, "ADMIN", "TEACHER", "INSTRUCTOR")
 
         result = client.table("chat_sessions").select("*").eq(
             "user_id", uid
@@ -790,21 +932,33 @@ async def create_or_get_chat_session(
         existing = result.data if result else None
 
         if existing:
-            if existing.get("status") in ("abandoned", "completed"):
+            # SEC-CHAT-3: only ``abandoned`` sessions may be reactivated. A
+            # ``completed`` session is NEVER forced back to ``active`` — doing so
+            # would wipe the completion marker and merge the prior transcript into a
+            # new attempt. ``completed`` falls through to create a fresh session for
+            # the new attempt; ``active`` is simply resumed as-is.
+            if existing.get("status") == "abandoned":
                 updated = client.table("chat_sessions").update(
                     {"status": "active"}
                 ).eq("id", existing["id"]).execute()
                 return updated.data[0] if updated.data else existing
-            return existing
+            if existing.get("status") != "completed":
+                return existing
+            # status == "completed": fall through to create a new, distinct session.
+            # (The partial unique index allows this because the completed row stays;
+            # a deliberate "new attempt after completion" is a product decision —
+            # SEC-CHAT-3 — handled here at the app layer.)
+            return _create_chat_session_row(client, uid, data.content_id)
 
-        new_session = {
-            "user_id": uid,
-            "content_id": data.content_id,
-            "status": "active",
-            "total_messages": 0,
-        }
-        insert_result = client.table("chat_sessions").insert(new_session).execute()
-        return insert_result.data[0] if insert_result.data else new_session
+        # TPP-2: no existing session → race-free create-or-get. Two concurrent
+        # double-submits for the same (user_id, content_id) both resolve to the SAME
+        # row via the ``upsert_chat_session`` RPC (ON CONFLICT in the DB), so neither
+        # creates a duplicate nor hits the permanent-500 maybe_single() failure (#7).
+        return _upsert_chat_session_row(client, uid, data.content_id)
+    except HTTPException:
+        # Authorization decisions (e.g. the 403 spoof rejection above) must keep
+        # their status code — never be masked as a 500 by the generic handler.
+        raise
     except Exception as e:
         logger.error(f"create_or_get_chat_session error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Erro interno do servidor")
@@ -816,19 +970,18 @@ async def get_chat_session(
     client: Client = Depends(get_supabase),
     current_user: dict = Depends(get_current_user),
 ):
-    result = client.table("chat_sessions").select("*").eq(
-        "id", session_id
-    ).maybe_single().execute()
+    # SEC-CHAT-1: load the session, then assert ownership BEFORE reading messages.
+    # A cross-user STUDENT gets 403/404 and no chat_messages query fires.
+    session = load_session_or_404(client, session_id)
+    assert_owner_or_role(
+        session.get("user_id"), current_user, "ADMIN", "TEACHER", "INSTRUCTOR"
+    )
 
-    session = result.data
-    if not session:
-        raise HTTPException(status_code=404, detail="Sessao nao encontrada")
-
-    messages_result = client.table("chat_messages").select("*").eq(
-        "session_id", session_id
-    ).order("created_at").execute()
-
-    session["messages"] = messages_result.data or []
+    # TPP-3: read via the repo so transcript order uses the stable
+    # (created_at, sequence, id) tiebreaker — no microsecond reordering.
+    session["messages"] = await run_in_threadpool(
+        ChatRepository(client).get_session_messages, session_id
+    )
     return session
 
 
@@ -838,10 +991,19 @@ async def get_session_messages(
     client: Client = Depends(get_supabase),
     current_user: dict = Depends(get_current_user),
 ):
-    result = client.table("chat_messages").select("*").eq(
-        "session_id", session_id
-    ).order("created_at").execute()
-    return result.data or []
+    # SEC-CHAT-1: resolve the parent session and assert ownership BEFORE returning
+    # any messages. A cross-user actor gets 403/404 with zero message rows leaked.
+    session = load_session_or_404(client, session_id)
+    assert_owner_or_role(
+        session.get("user_id"), current_user, "ADMIN", "TEACHER", "INSTRUCTOR"
+    )
+
+    # TPP-3/TPP-4: stable-ordered transcript (created_at, sequence, id). After TPP-4
+    # this returns BOTH the student (role='user') and tutor (role='assistant')
+    # turns persisted server-side, so a reload shows the full socratic dialogue.
+    return await run_in_threadpool(
+        ChatRepository(client).get_session_messages, session_id
+    )
 
 
 @router.post("/chat-sessions/{session_id}/messages", tags=["Chat Sessions"])
@@ -851,17 +1013,16 @@ async def add_session_message(
     client: Client = Depends(get_supabase),
     current_user: dict = Depends(get_current_user),
 ):
-    # Verify session exists
-    session_result = client.table("chat_sessions").select("id, total_messages").eq(
-        "id", session_id
-    ).maybe_single().execute()
-
-    session = session_result.data
-    if not session:
-        raise HTTPException(status_code=404, detail="Sessao nao encontrada")
+    # SEC-CHAT-2: load the session WITH its owner (``user_id``) and gate ownership
+    # BEFORE building/inserting the message. A non-owner STUDENT enumerating a
+    # session_id gets 403 and NO message is inserted (the check precedes the insert);
+    # a privileged role (TEACHER/ADMIN/INSTRUCTOR) may still add. Missing -> 404.
+    session = load_session_or_404(client, session_id)
+    assert_owner_or_role(
+        session.get("user_id"), current_user, "ADMIN", "TEACHER", "INSTRUCTOR"
+    )
 
     new_message = {
-        "session_id": session_id,
         "role": data.role,
         "content": data.content,
         "agent_type": data.agent_type,
@@ -869,14 +1030,15 @@ async def add_session_message(
     }
 
     try:
-        msg_result = client.table("chat_messages").insert(new_message).execute()
-
-        new_count = (session.get("total_messages") or 0) + 1
-        client.table("chat_sessions").update(
-            {"total_messages": new_count}
-        ).eq("id", session_id).execute()
-
-        return msg_result.data[0] if msg_result.data else new_message
+        # TPP-3: single write path. ``persist_turn`` inserts the message AND bumps
+        # ``total_messages`` atomically (RPC), so the counter never drifts and there
+        # is no inline read-modify-write to lose an update (#40). Wrapped in a
+        # threadpool to keep the sync Supabase client off the event loop (ASYNC-AI-1).
+        return await run_in_threadpool(
+            ChatRepository(client).persist_turn, session_id, new_message
+        )
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(status_code=500, detail="Erro ao salvar mensagem")
 
@@ -905,6 +1067,12 @@ async def get_user_chat_sessions(
     client: Client = Depends(get_supabase),
     current_user: dict = Depends(get_current_user),
 ):
+    # SEC-CHAT-1: the path ``user_id`` is the *target*, never the trusted identity.
+    # A STUDENT may only list their own sessions; TEACHER/ADMIN/INSTRUCTOR may list
+    # any user's. The decision runs BEFORE the query, so a cross-user STUDENT gets
+    # 403 with no rows returned.
+    require_self_or_role(user_id, current_user, "ADMIN", "TEACHER", "INSTRUCTOR")
+
     result = client.table("chat_sessions").select("*").eq(
         "user_id", user_id
     ).order("created_at", desc=True).execute()
@@ -917,12 +1085,18 @@ async def complete_chat_session(
     client: Client = Depends(get_supabase),
     current_user: dict = Depends(get_current_user),
 ):
-    result = client.table("chat_sessions").select("id").eq(
-        "id", session_id
-    ).maybe_single().execute()
+    # SEC-CHAT-3: load the session WITH owner + status, then gate ownership BEFORE
+    # any write. A cross-user actor gets 403 (404 if missing) and the status is left
+    # untouched — identity is always current_user, never body/path.
+    session = load_session_or_404(client, session_id)
+    assert_owner_or_role(
+        session.get("user_id"), current_user, "ADMIN", "TEACHER", "INSTRUCTOR"
+    )
 
-    if not result.data:
-        raise HTTPException(status_code=404, detail="Sessao nao encontrada")
+    # Idempotency: a 2nd complete on an already-completed session is a 200 no-op —
+    # no redundant write is issued.
+    if session.get("status") == "completed":
+        return session
 
     updated = client.table("chat_sessions").update(
         {"status": "completed"}
@@ -937,22 +1111,23 @@ async def export_session_moodle(
     client: Client = Depends(get_supabase),
     current_user: dict = Depends(get_current_user),
 ):
-    session_result = client.table("chat_sessions").select("*").eq(
-        "id", session_id
-    ).maybe_single().execute()
+    # SEC-CHAT-1 / SEC-CHAT-4: ownership gate runs BEFORE loading messages and the
+    # user PII (name/email). A non-owner gets 403/404 and zero chat_messages/users
+    # queries fire — no transcript, name or email of a stranger's session can leak.
+    session = load_session_or_404(client, session_id)
+    assert_owner_or_role(
+        session.get("user_id"), current_user, "ADMIN", "TEACHER", "INSTRUCTOR"
+    )
 
-    session = session_result.data
-    if not session:
-        raise HTTPException(status_code=404, detail="Sessao nao encontrada")
-
-    messages_result = client.table("chat_messages").select("*").eq(
-        "session_id", session_id
-    ).order("created_at").execute()
-
-    session["messages"] = messages_result.data or []
+    # TPP-4: export the FULL transcript (both user and assistant turns, stable
+    # order) now that the socratic questions are persisted server-side.
+    session["messages"] = await run_in_threadpool(
+        ChatRepository(client).get_session_messages, session_id
+    )
     session["session_id"] = session["id"]
 
-    # Fetch user info for export
+    # Fetch user info for export — the actor is the OWNER of the loaded session
+    # (session["user_id"]), never a body/path-supplied identity.
     user_result = client.table("users").select("name, email").eq(
         "id", session.get("user_id", "")
     ).maybe_single().execute()
@@ -982,6 +1157,10 @@ async def integration_test_connection(
 @router.get("/integrations/status", tags=["Integrations"])
 async def integration_status(
     svc: IntegrationService = Depends(get_integration_service),
+    # SEC-SCOPE-4: was fully unauthenticated; now ADMIN-only, mirroring the sibling
+    # integration_logs gate. require_role resolves BEFORE svc.get_status(), so no
+    # JACAD/Moodle probe fires for anonymous/STUDENT callers.
+    current_user: dict = Depends(require_role("ADMIN")),
 ):
     return await svc.get_status()
 
@@ -1117,15 +1296,80 @@ async def moodle_ratings(
     return await svc.get_moodle_ratings(filters)
 
 
+# Header the Moodle plugin sends the HMAC-SHA256 of the raw body in.
+MOODLE_WEBHOOK_SIGNATURE_HEADER = "X-Moodle-Signature"
+
+
+def _resolve_moodle_webhook_secret(client: Client) -> str:
+    """Resolve the Moodle webhook shared secret (SEC-SCOPE-5).
+
+    Precedence:
+      1. ``MOODLE_WEBHOOK_SECRET`` env var (operator override / deploy-time).
+      2. ``system_settings.moodle_webhook_secret`` (admin-managed, sensitive field).
+
+    Returns an empty string when no secret is configured anywhere; the caller
+    applies the fail-closed (prod) / warn (dev) policy.
+    """
+    env_secret = os.getenv("MOODLE_WEBHOOK_SECRET", "")
+    if env_secret:
+        return env_secret
+    try:
+        res = (
+            client.table("system_settings")
+            .select("moodle_webhook_secret")
+            .limit(1)
+            .maybe_single()
+            .execute()
+        )
+        data = getattr(res, "data", None) if res is not None else None
+        if data:
+            return data.get("moodle_webhook_secret") or ""
+    except Exception as e:  # pragma: no cover - defensive: never leak DB errors here
+        logger.warning(f"Failed to read moodle_webhook_secret from system_settings: {e}")
+    return ""
+
+
 @router.post("/integrations/moodle/webhook", tags=["Integrations - Moodle"])
 async def moodle_webhook(
     request: Request,
     svc: IntegrationService = Depends(get_integration_service),
+    client: Client = Depends(get_supabase),
 ):
+    # SEC-SCOPE-5: authenticate the webhook via HMAC over the RAW body BEFORE any
+    # dispatch (so it covers rating_submitted and any future event_type). No body
+    # field is trusted for authorization — only the signature over the raw bytes.
+    raw_body = await request.body()
+    signature = request.headers.get(MOODLE_WEBHOOK_SIGNATURE_HEADER)
+    secret = _resolve_moodle_webhook_secret(client)
+
+    settings = get_settings()
+    is_production = settings.ENVIRONMENT.lower() == "production"
+
+    if not secret:
+        if is_production:
+            # Fail-closed: never accept an unauthenticated webhook in production.
+            logger.warning("Moodle webhook rejected: no moodle_webhook_secret configured (production).")
+            raise HTTPException(status_code=401, detail="Webhook nao autenticado")
+        # Non-production: warn but allow the dev path so local testing is not blocked.
+        logger.warning(
+            "Moodle webhook secret not configured; accepting request in non-production "
+            "(ENVIRONMENT=%s). Configure MOODLE_WEBHOOK_SECRET / system_settings to "
+            "enforce HMAC.",
+            settings.ENVIRONMENT,
+        )
+    else:
+        # Verify HMAC over the exact raw body using constant-time comparison.
+        if not verify_moodle_webhook_signature(raw_body, signature, secret):
+            logger.warning("Moodle webhook rejected: invalid or missing HMAC signature.")
+            raise HTTPException(status_code=401, detail="Assinatura invalida")
+
     try:
-        body = await request.json()
-    except Exception:
+        body = json.loads(raw_body) if raw_body else {}
+        if not isinstance(body, dict):
+            raise ValueError("payload is not an object")
+    except (ValueError, json.JSONDecodeError):
         raise HTTPException(status_code=400, detail="Payload invalido")
+
     event_type = body.get("event_type", "unknown")
     return await svc.handle_moodle_webhook(event_type, body)
 
@@ -1168,15 +1412,21 @@ async def lti_launch(
         result = (client.table("users").select("*").eq("email", launch_data.email).maybe_single().execute() or type("_R", (), {"data": None})())
         user = result.data
 
-    auto_create = os.getenv("LTI_AUTO_CREATE_USERS", "true").lower() == "true"
+    # SEC-SCOPE-6: auto-create is opt-in (default false) and never grants ADMIN.
+    auto_create = os.getenv("LTI_AUTO_CREATE_USERS", "false").lower() == "true"
     if not user and auto_create:
         from auth import hash_password
         new_user = {
             "ra": launch_data.ra or f"lti-{launch_data.user_id}",
             "name": launch_data.name or "LTI User",
             "email": launch_data.email,
+            # launch_data.role is already capped to STUDENT/TEACHER by
+            # _map_lti_roles (administrator can never reach here).
             "role": launch_data.role,
-            "password_hash": hash_password(launch_data.ra or launch_data.user_id),
+            # SEC-SCOPE-6: never derive the password from a known/loggable id
+            # (RA/user_id). Use a random, unusable secret so a created LTI account
+            # cannot be logged into directly via /auth/login.
+            "password_hash": hash_password(secrets.token_urlsafe(32)),
             "moodle_user_id": launch_data.user_id,
         }
         insert_result = client.table("users").insert(new_user).execute()

@@ -10,6 +10,7 @@ from supabase import Client
 
 from config import get_settings
 from database import get_supabase
+from jwt_secret_provider import get_active_jwt_secret
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
@@ -27,7 +28,11 @@ def create_access_token(user_id: str, role: str) -> str:
     settings = get_settings()
     expire = datetime.now(timezone.utc) + timedelta(hours=settings.JWT_EXPIRATION_HOURS)
     payload = {"sub": user_id, "role": role, "exp": expire, "iat": datetime.now(timezone.utc)}
-    return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+    # SEC-ROT-2: sign with the DB-backed active secret (fail-closed), not the
+    # static env var. Signature/claims/algorithm are unchanged; this function's
+    # signature is preserved so all ~96 call sites stay intact.
+    secret = get_active_jwt_secret(get_supabase())
+    return jwt.encode(payload, secret, algorithm=settings.JWT_ALGORITHM)
 
 
 def get_current_user(
@@ -37,7 +42,11 @@ def get_current_user(
     """Decode JWT and return user dict from Supabase."""
     settings = get_settings()
     try:
-        payload = jwt.decode(credentials.credentials, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        # SEC-ROT-2: verify with the DB-backed active secret. A token signed with
+        # a secret other than the current active one (e.g. before a rotation)
+        # fails signature verification → JWTError → 401, with no restart needed.
+        secret = get_active_jwt_secret(client)
+        payload = jwt.decode(credentials.credentials, secret, algorithms=[settings.JWT_ALGORITHM])
         user_id: str = payload.get("sub")
         if user_id is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalido")

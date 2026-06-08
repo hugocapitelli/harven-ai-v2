@@ -232,6 +232,30 @@ class MoodleClient:
 
 
 # ---------------------------------------------------------------------------
+# Moodle webhook HMAC verification (SEC-SCOPE-5)
+# ---------------------------------------------------------------------------
+
+def verify_moodle_webhook_signature(raw_body: bytes, signature: Optional[str], secret: str) -> bool:
+    """Constant-time HMAC-SHA256 check of the Moodle webhook signature.
+
+    The HMAC is computed over the **exact raw request body** (never a re-serialized
+    JSON), matching the convention the Moodle plugin must sign with. An empty
+    ``secret`` or a missing ``signature`` is treated as a verification failure —
+    callers enforce the fail-closed/dev-warning policy around this primitive.
+
+    Some Moodle plugins prefix the header with ``sha256=``; that prefix is stripped
+    before comparison so both conventions verify.
+    """
+    if not secret or not signature:
+        return False
+    candidate = signature.strip()
+    if candidate.lower().startswith("sha256="):
+        candidate = candidate.split("=", 1)[1].strip()
+    expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, candidate)
+
+
+# ---------------------------------------------------------------------------
 # IntegrationService
 # ---------------------------------------------------------------------------
 
@@ -577,15 +601,21 @@ class LTILaunchData:
     raw_params: Dict[str, str] = field(default_factory=dict)
 
 
+# SEC-SCOPE-6: the LTI launch must NEVER grant ADMIN from a client-supplied role.
+# ``administrator`` is intentionally absent — a forged ``roles=administrator`` resolves
+# to STUDENT. ADMIN is granted out-of-band only, never via LTI auto-provisioning.
 ROLE_MAP = {
     "instructor": "TEACHER",
     "contentdeveloper": "TEACHER",
     "teachingassistant": "TEACHER",
-    "administrator": "ADMIN",
     "learner": "STUDENT",
     "student": "STUDENT",
     "member": "STUDENT",
 }
+
+# The only roles an LTI launch may auto-provision. Anything outside this set
+# (including a forged ``administrator``) is downgraded to STUDENT by _map_lti_roles.
+LTI_PROVISIONABLE_ROLES = frozenset({"STUDENT", "TEACHER"})
 
 
 def _percent_encode(s: str) -> str:
@@ -593,13 +623,23 @@ def _percent_encode(s: str) -> str:
 
 
 def _map_lti_roles(roles_str: str) -> str:
+    """Resolve an LTI ``roles`` string to a server-decided role ceiling.
+
+    Defense in depth (SEC-SCOPE-6): the server is the source of truth for the role.
+    A client-supplied ``administrator`` (or any role outside the allowlist) can never
+    escalate — it falls back to STUDENT. Only ``instructor``/synonyms -> TEACHER and
+    ``learner``/synonyms -> STUDENT are honored.
+    """
     if not roles_str:
         return "STUDENT"
     for part in roles_str.split(","):
         part = part.strip().lower()
         key = part.rsplit("/", 1)[-1] if "/" in part else part
-        if key in ROLE_MAP:
-            return ROLE_MAP[key]
+        mapped = ROLE_MAP.get(key)
+        # Final safety net: only allowlisted roles are provisionable; everything
+        # else (e.g. a forged "administrator") is capped at STUDENT.
+        if mapped in LTI_PROVISIONABLE_ROLES:
+            return mapped
     return "STUDENT"
 
 

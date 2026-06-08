@@ -12,7 +12,12 @@ python-docx==1.1.2
 psutil==6.1.1
 python-dateutil==2.9.0
 pydantic-settings==2.7.0
+# Required by pydantic EmailStr (schemas/user.py) — runtime dep; without it the app
+# (and the test suite collection) fails with "email-validator is not installed".
+email-validator==2.2.0
 python-multipart==0.0.19
 python-dotenv==1.0.1
 sentry-sdk[fastapi]>=2.0.0
-elevenlabs>=1.0.0
+# ASYNC-AI-2: pinned to an exact version to eliminate API drift in
+# ``text_to_speech.convert`` (the TTS offload contract was validated against this).
+elevenlabs==2.48.0
