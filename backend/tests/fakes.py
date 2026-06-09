@@ -252,6 +252,32 @@ class FakeSupabaseClient:
             rows.append(row)
             self._record_mutation("chat_sessions", "insert", [copy.deepcopy(row)], [])
             return copy.deepcopy(row)
+        if name == "increment_token_usage":
+            # TKN-1's atomic upsert: one row per (user_id, usage_date); the daily
+            # counter is summed in-DB and the new total returned (mirrors
+            # INSERT ... ON CONFLICT DO UPDATE SET tokens_used = tokens_used +
+            # EXCLUDED.tokens_used RETURNING tokens_used).
+            uid = params.get("p_user_id")
+            udate = params.get("p_usage_date")
+            delta = params.get("p_tokens") or 0
+            rows = self._tables.setdefault("token_usage", [])
+            for r in rows:
+                if str(r.get("user_id")) == str(uid) and str(r.get("usage_date")) == str(udate):
+                    r["tokens_used"] = (r.get("tokens_used") or 0) + delta
+                    self._record_mutation(
+                        "token_usage", "update", [copy.deepcopy(r)],
+                        [("user_id", uid), ("usage_date", udate)],
+                    )
+                    return r["tokens_used"]
+            row = {
+                "id": self._next_id("token_usage"),
+                "user_id": uid,
+                "usage_date": udate,
+                "tokens_used": delta,
+            }
+            rows.append(row)
+            self._record_mutation("token_usage", "insert", [copy.deepcopy(row)], [])
+            return row["tokens_used"]
         raise NotImplementedError(f"FakeSupabaseClient: unknown rpc {name!r}")
 
     # ── seeding / inspection ────────────────────────────────────────

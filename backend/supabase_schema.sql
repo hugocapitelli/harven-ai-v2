@@ -305,6 +305,29 @@ CREATE TABLE IF NOT EXISTS token_usage (
     UNIQUE(user_id, usage_date)
 );
 
+-- TKN-1 (bug #12): persistent, concurrency-safe daily token budget data layer.
+-- Mirror of supabase/migrations/20260608a_token_usage_rpc.sql. Read index for
+-- get_today_usage + atomic upsert RPC (1 row per user/day, RETURNS new total).
+CREATE INDEX IF NOT EXISTS idx_token_usage_user_date
+    ON token_usage (user_id, usage_date);
+
+CREATE OR REPLACE FUNCTION increment_token_usage(
+    p_user_id TEXT,
+    p_usage_date DATE,
+    p_tokens INTEGER
+)
+RETURNS INTEGER
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    INSERT INTO token_usage (user_id, usage_date, tokens_used)
+    VALUES (p_user_id, p_usage_date, p_tokens)
+    ON CONFLICT (user_id, usage_date)
+    DO UPDATE SET tokens_used = token_usage.tokens_used + EXCLUDED.tokens_used
+    RETURNING tokens_used;
+$$;
+
 CREATE TABLE IF NOT EXISTS session_reviews (
     id TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
     session_id TEXT NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,

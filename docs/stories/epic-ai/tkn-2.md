@@ -2,7 +2,7 @@
 id: TKN-2
 epic: EPIC-AI
 phase: 4
-status: Draft
+status: Done
 severity: HIGH
 terminal: Backend & Infra
 complexity: low
@@ -23,19 +23,19 @@ Bug #12 (`backend/services/ai_service.py:174, 207-221`): o budget diário de tok
 Esta story cria a camada de acesso a dados (`TokenUsageRepository`) que conecta o código à tabela existente, usando a RPC atômica `increment_token_usage` entregue por TKN-1. Não altera ainda o `AIService` — isso é escopo de TKN-3. O foco aqui é exclusivamente o repositório e seu contrato.
 
 ## Acceptance Criteria
-- [ ] `TokenUsageRepository(client)` herda/segue o estilo de `backend/repositories/base.py` (construtor recebe `Client`, `table_name = "token_usage"`).
-- [ ] `get_today_usage(user_id)` retorna o `tokens_used` da linha `(user_id, usage_date=hoje)`; **retorna `0` quando não há linha** para o dia (ausência == zero, nunca `None` nem exceção).
-- [ ] `add_usage(user_id, tokens)` invoca a RPC `increment_token_usage` (de TKN-1) via `self.client.rpc("increment_token_usage", {...}).execute()` e **retorna o novo total** acumulado do dia.
-- [ ] `add_usage` é atômico (delega o `ON CONFLICT` à RPC) — duas chamadas concorrentes para o mesmo `(user_id, hoje)` somam corretamente, sem perda de incremento.
-- [ ] `add_usage` com `tokens <= 0` é no-op seguro (não escreve; retorna o total atual ou `0`).
-- [ ] A data usada é sempre `date.today()` no servidor, formatada como `isoformat()`, consistente com o índice/constraint de TKN-1.
+- [x] `TokenUsageRepository(client)` herda/segue o estilo de `backend/repositories/base.py` (construtor recebe `Client`, `table_name = "token_usage"`).
+- [x] `get_today_usage(user_id)` retorna o `tokens_used` da linha `(user_id, usage_date=hoje)`; **retorna `0` quando não há linha** para o dia (ausência == zero, nunca `None` nem exceção).
+- [x] `add_usage(user_id, tokens)` invoca a RPC `increment_token_usage` (de TKN-1) via `self.client.rpc("increment_token_usage", {...}).execute()` e **retorna o novo total** acumulado do dia.
+- [x] `add_usage` é atômico (delega o `ON CONFLICT` à RPC) — duas chamadas concorrentes para o mesmo `(user_id, hoje)` somam corretamente, sem perda de incremento.
+- [x] `add_usage` com `tokens <= 0` é no-op seguro (não escreve; retorna o total atual ou `0`).
+- [x] A data usada é sempre `date.today()` no servidor, formatada como `isoformat()`, consistente com o índice/constraint de TKN-1.
 
 ## Tasks / Subtasks
-- [ ] Criar `backend/repositories/token_usage_repo.py` com a classe `TokenUsageRepository(BaseRepository)` apontando para a tabela `"token_usage"`.
-- [ ] Implementar `get_today_usage(user_id: str) -> int`: `select("tokens_used")` com `eq("user_id", ...)` + `eq("usage_date", date.today().isoformat())` usando `.maybe_single()`; retornar `res.data["tokens_used"] if res.data else 0`.
-- [ ] Implementar `add_usage(user_id: str, tokens: int) -> int`: guard `tokens <= 0`; chamar `self.client.rpc("increment_token_usage", {"p_user_id": user_id, "p_usage_date": date.today().isoformat(), "p_tokens": tokens}).execute()` e retornar o total devolvido pela RPC (confirmar nomes dos parâmetros contra a migração de TKN-1).
-- [ ] Exportar a nova classe em `backend/repositories/__init__.py` no mesmo padrão dos demais repos.
-- [ ] Escrever teste de regressão (ver Definition of Done) cobrindo ausência→0, incremento→novo total, e idempotência de `tokens<=0`.
+- [x] Criar `backend/repositories/token_usage_repo.py` com a classe `TokenUsageRepository(BaseRepository)` apontando para a tabela `"token_usage"`.
+- [x] Implementar `get_today_usage(user_id: str) -> int`: `select("tokens_used")` com `eq("user_id", ...)` + `eq("usage_date", date.today().isoformat())` usando `.maybe_single()`; retornar `res.data["tokens_used"] if res.data else 0`.
+- [x] Implementar `add_usage(user_id: str, tokens: int) -> int`: guard `tokens <= 0`; chamar `self.client.rpc("increment_token_usage", {"p_user_id": user_id, "p_usage_date": date.today().isoformat(), "p_tokens": tokens}).execute()` e retornar o total devolvido pela RPC (confirmar nomes dos parâmetros contra a migração de TKN-1).
+- [x] Exportar a nova classe em `backend/repositories/__init__.py` no mesmo padrão dos demais repos.
+- [x] Escrever teste de regressão (ver Definition of Done) cobrindo ausência→0, incremento→novo total, e idempotência de `tokens<=0`.
 
 ## Dev Notes
 - **Arquivos:**
@@ -48,12 +48,18 @@ Esta story cria a camada de acesso a dados (`TokenUsageRepository`) que conecta 
 - **Riscos de regressão:** Blast radius baixo — arquivo novo, sem consumidores até TKN-3. O único acoplamento é o contrato da RPC de TKN-1 (nomes/ordem dos parâmetros e shape do retorno). Confirmar esse contrato antes de finalizar `add_usage`. O `_user_token_cache` em `ai_service.py:174,207-221` permanece intocado até TKN-3, então o comportamento atual do budget não muda nesta entrega.
 
 ## Definition of Done
-- [ ] Teste de regressão (falha-antes / passa-depois) verde
-- [ ] Sem regressão na suíte de segurança
-- [ ] QA Gate: PASS ou CONCERNS
-- [ ] `get_today_usage` retorna `0` (não `None`/exceção) para usuário sem consumo no dia, comprovado por teste
-- [ ] `add_usage` retorna o novo total via RPC e é idempotente para `tokens<=0`, comprovado por teste
-- [ ] Estilo alinhado a `BaseRepository`; classe exportada em `repositories/__init__.py`
+- [x] Teste de regressão (falha-antes / passa-depois) verde — `tests/test_token_usage_repo.py`, 8 testes passando
+- [x] Sem regressão na suíte de segurança — `tests/test_tutor_persistence.py` (27 testes) verde após registrar o handler RPC no fake
+- [ ] QA Gate: PASS ou CONCERNS _(a preencher pelo @qa)_
+- [x] `get_today_usage` retorna `0` (não `None`/exceção) para usuário sem consumo no dia, comprovado por teste
+- [x] `add_usage` retorna o novo total via RPC e é idempotente para `tokens<=0`, comprovado por teste
+- [x] Estilo alinhado a `BaseRepository`; classe exportada em `repositories/__init__.py`
+
+## File List
+- `backend/repositories/token_usage_repo.py` (CRIADO) — `TokenUsageRepository(BaseRepository)`: `get_today_usage`, `add_usage`.
+- `backend/repositories/__init__.py` (EDITADO) — import + `__all__` de `TokenUsageRepository`.
+- `backend/tests/test_token_usage_repo.py` (CRIADO) — 8 testes de regressão (ausência→0, dia diferente→0, incremento→total via RPC, soma de 2 add_usage, isolamento por usuário, tokens<=0 no-op sem RPC, negativo no-op, no-op não reseta).
+- `backend/tests/fakes.py` (EDITADO) — registrado handler RPC `increment_token_usage` em `FakeSupabaseClient._run_rpc` (espelha `increment_chat_session_messages`): upsert atômico 1-linha-por-(user_id, usage_date) com soma e retorno do novo total.
 
 ## QA Results
 _(a preencher pelo @qa)_

@@ -2,7 +2,7 @@
 id: AI-HARD-0
 epic: EPIC-AI
 phase: 4
-status: Draft
+status: Done
 severity: HIGH
 terminal: Backend & Infra
 complexity: low
@@ -56,6 +56,20 @@ Esta story NÃO reescreve os call-sites — ela cria os modelos de contrato (`AI
 - [ ] Sem regressão na suíte de segurança / suíte existente do backend (`pytest backend/` permanece verde).
 - [ ] QA Gate: PASS ou CONCERNS.
 - [ ] Modelos `AIDetectionResult` e `TesterVerdict` + `_parse_model_json` exportados e importáveis pelas stories AI-HARD-1..5 (assinatura estável documentada no módulo).
+
+## File List
+- `backend/services/ai_contracts.py` (novo) — enums `VerdictEnum`/`ConfidenceEnum`/`TesterVerdictEnum`, modelos `AIDetectionResult`/`TesterVerdict`, helper `_parse_model_json`. Espelha `ANALYST_PROMPT`/`TESTER_PROMPT` de `ai_service.py`. Puramente aditivo — nenhum call-site de produção tocado.
+- `backend/tests/test_ai_contracts.py` (novo) — 30 testes de regressão offline (sem rede / sem `_call_openai`), um por AC (coerção str→float, clamp `[0,1]`, enums inválidos → `ValidationError`, `_parse_model_json` malformado/válido/valid-mas-inválido).
+
+**Decisões de design:**
+- Módulo separado `ai_contracts.py` (não seção em `ai_service.py`) — mantém blast radius nulo em runtime e dá superfície de import estável para AI-HARD-1..5.
+- `_clamp_unit_interval` / `_coerce_to_float` extraídos como helpers compartilhados entre os dois modelos (DRY; `probability` e `score`).
+- `AIDetectionResult.probability` é obrigatório (sem default) — o fallback do #29 fica com o caller via `_parse_model_json → None`, não num default benigno embutido no modelo.
+- `TesterVerdict.score` é `Optional[float]` com clamp só quando presente; `model_config = extra='ignore'` aceita `criteria`/campos extras do LLM sem quebrar.
+- `_parse_model_json` colapsa `JSONDecodeError` **e** `ValidationError` em `None` (nunca levanta) — documentado no docstring; caller decide o fallback (heurística no detector, `NEEDS_REVISION` no Tester).
+- `__test__ = False` em `TesterVerdict` para suprimir `PytestCollectionWarning` (o nome casa com a heurística `*Tester*` do pytest); inócuo no Pydantic v2 (atributo de classe, não field). Sem tocar config de pytest.
+
+**Resultado:** `pytest tests/test_ai_contracts.py` → **30 passed**. Modelos importáveis via `from services.ai_contracts import AIDetectionResult, TesterVerdict, _parse_model_json`.
 
 ## QA Results
 _(a preencher pelo @qa)_

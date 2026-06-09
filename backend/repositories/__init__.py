@@ -9,6 +9,7 @@ from .chat_repo import ChatRepository
 from .admin_repo import AdminRepository
 from .gamification_repo import GamificationRepository
 from .notification_repo import NotificationRepository
+from .token_usage_repo import TokenUsageRepository
 
 __all__ = [
     "BaseRepository",
@@ -22,4 +23,5 @@ __all__ = [
     "AdminRepository",
     "GamificationRepository",
     "NotificationRepository",
+    "TokenUsageRepository",
 ]
