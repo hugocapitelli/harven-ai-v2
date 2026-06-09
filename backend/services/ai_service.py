@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 from config import get_settings
 from repositories.chat_repo import ChatRepository
+from services.ai_contracts import AIDetectionResult, TesterVerdict, _parse_model_json
 
 logger = logging.getLogger(__name__)
 
@@ -162,22 +163,22 @@ ORGANIZER_PROMPT = (
 # AI-indicator phrases for heuristic detection
 # ---------------------------------------------------------------------------
 
+# AI-HARD-3 (bug #29): neutral PT-BR connectors were removed because any
+# competent human writer of formal Portuguese uses them ("dessa forma",
+# "sendo assim", "nesse contexto", "em suma", "nesse sentido", "por
+# conseguinte", "em linhas gerais", "em termos gerais"). They produced false
+# positives. Only the phrases below survive — each is a *meta-discursive
+# announcement* clause that LLMs over-produce to signal emphasis/structure, far
+# rarer in genuine human academic prose. Combined with the density-weighting +
+# cap in ``_heuristic_ai_detection``, mere presence can no longer flag a student.
 AI_PHRASES = [
-    "e importante ressaltar",
-    "nesse sentido",
-    "diante do exposto",
-    "em suma",
-    "pode-se afirmar que",
-    "e fundamental destacar",
-    "vale ressaltar que",
-    "nesse contexto",
-    "em linhas gerais",
-    "cabe mencionar",
-    "e valido salientar",
-    "em termos gerais",
-    "por conseguinte",
-    "dessa forma",
-    "sendo assim",
+    "e importante ressaltar",   # boilerplate emphasis announcer (LLM-typical)
+    "diante do exposto",        # formulaic conclusion opener over-used by LLMs
+    "pode-se afirmar que",      # impersonal assertion frame, LLM signature
+    "e fundamental destacar",   # boilerplate emphasis announcer (LLM-typical)
+    "vale ressaltar que",       # boilerplate emphasis announcer (LLM-typical)
+    "cabe mencionar",           # boilerplate emphasis announcer (LLM-typical)
+    "e valido salientar",       # boilerplate emphasis announcer (LLM-typical)
 ]
 
 HUMAN_INDICATORS = [
@@ -717,19 +718,44 @@ class AIService:
         words = text.split()
         sentences = [s.strip() for s in re.split(r"[.!?]+", text) if s.strip()]
 
+        # AI-HARD-1 (bug #30) + AI-HARD-3 (#29): the LLM JSON is no longer read
+        # verbatim. It is routed through the ``AIDetectionResult`` contract
+        # (str->float coercion, clamp to [0,1], verdict/confidence enum
+        # validation). On ANY failure to obtain a *valid* probability — LLM
+        # error/mock, malformed JSON, missing/None ``probability``, out-of-enum
+        # verdict/confidence, uncoercible type — we fall back HARD to the
+        # heuristic. The benign ``0.3`` default is gone: a JSON that lacks
+        # ``probability`` no longer fabricates a near-clean verdict.
+        validated: Optional[AIDetectionResult] = None
         try:
             result = await self._call_openai(
                 ANALYST_PROMPT,
                 f"Analise o texto do aluno:\n\n{text}",
                 json_mode=True,
             )
-            parsed = json.loads(result["content"])
-            probability = parsed.get("probability", 0.3)
-            confidence = parsed.get("confidence", "medium")
-            verdict = parsed.get("verdict", "uncertain")
+            # _parse_model_json: bad JSON / contract violation -> None (the single
+            # decision point; never raises). raw is the LLM string itself.
+            validated = _parse_model_json(result["content"], AIDetectionResult)
+            # Surface ``indicators`` (ignored by the strict contract) for the UI.
+            try:
+                raw_parsed = json.loads(result["content"])
+            except (json.JSONDecodeError, TypeError):
+                raw_parsed = {}
         except Exception:
+            validated = None
+            raw_parsed = {}
+
+        if validated is not None:
+            # ``probability`` is a clamped float in [0,1]; ``verdict``/``confidence``
+            # are valid enum values. Comparisons/round below cannot TypeError.
+            probability = float(validated.probability)
+            confidence = validated.confidence.value
+            verdict = validated.verdict.value
+            parsed = {"indicators": raw_parsed.get("indicators", [])}
+        else:
+            # Hard fallback to the heuristic (NOT the old benign 0.3 default).
             detection = self._heuristic_ai_detection(text)
-            probability = detection["probability"]
+            probability = float(detection["probability"])
             confidence = detection["confidence"]
             verdict = detection["verdict"]
             parsed = detection
@@ -763,19 +789,48 @@ class AIService:
             ),
         }
 
+    # AI-HARD-3: density-weighting tuning constants for the AI-phrase signal.
+    #
+    # Old scheme: +0.08 per *presence*, uncapped — 5 matches reached 0.70 and 6
+    # tripped the >0.70 flag, so a formal essay was falsely flagged regardless of
+    # length. New scheme scores the *density* of cliché matches (matches relative
+    # to the number of words) and caps the aggregate contribution so that no set
+    # of presence matches can, on its own, push a legitimate essay over 0.70.
+    #
+    # ``_AI_PHRASE_CAP = 0.30`` + the 0.30 base = 0.60 ceiling from phrases alone,
+    # strictly below the 0.70 flag threshold. ``_AI_PHRASE_DENSITY_GAIN`` sets how
+    # fast density approaches the cap: density = matches / words, contribution =
+    # min(cap, density * gain). A short cliché-dense text saturates the cap; a
+    # long essay where the same matches are sparse stays well under it — so a
+    # dense text always scores strictly higher than a same-size text with fewer
+    # clichés, and higher than a longer text with the same match count.
+    _AI_PHRASE_CAP = 0.30
+    _AI_PHRASE_DENSITY_GAIN = 4.0
+
     def _heuristic_ai_detection(self, text: str) -> Dict[str, Any]:
         lower = text.lower()
         score = 0.3
         indicators = []
 
+        # --- AI-phrase signal: density-weighted with a hard cap -------------
+        word_count = max(len(text.split()), 1)
+        ai_matches = 0
         for phrase in AI_PHRASES:
             if phrase in lower:
-                score += 0.08
+                ai_matches += 1
                 indicators.append({
                     "type": "ai_phrase",
                     "description": f"Frase tipica de IA: '{phrase}'",
-                    "weight": 0.08,
+                    # Per-phrase weight is informational only; the score uses the
+                    # aggregate density contribution below, not this value.
+                    "weight": None,
                 })
+
+        # Contribution grows with cliché density (matches per word) and is
+        # bounded by ``_AI_PHRASE_CAP`` so presence alone cannot reach the flag.
+        ai_density = ai_matches / word_count
+        ai_contribution = min(self._AI_PHRASE_CAP, ai_density * self._AI_PHRASE_DENSITY_GAIN)
+        score += ai_contribution
 
         for marker in HUMAN_INDICATORS:
             if marker in lower:
@@ -859,27 +914,85 @@ class AIService:
                 f"Valide a resposta editada:\n\n{edited_response}",
                 json_mode=True,
             )
-            return json.loads(result["content"])
+            # AI-HARD-2 (bug #32): the LLM JSON is NO LONGER trusted verbatim. It is
+            # routed through the ``TesterVerdict`` contract (verdict enum, optional
+            # coerced/clamped score). ``_parse_model_json`` is the single decision
+            # point — it returns ``None`` on malformed JSON *or* a contract
+            # violation (missing/None ``verdict``, out-of-enum value), never raising.
+            # An ``APPROVED`` can therefore ONLY surface from a well-formed payload
+            # that actually carries that verdict. A syntactically valid JSON that
+            # lacks ``verdict`` (or violates the enum) yields ``None`` here and falls
+            # through to NEEDS_REVISION below — it can never fail open to APPROVED.
+            validated: Optional[TesterVerdict] = _parse_model_json(
+                result["content"], TesterVerdict
+            )
+            if validated is not None:
+                # Re-surface the rich LLM payload (e.g. ``criteria``, ignored by the
+                # strict contract) while letting the validated ``verdict``/``score``
+                # be the source of truth for the fields the gate keys on.
+                try:
+                    raw_parsed = json.loads(result["content"])
+                except (json.JSONDecodeError, TypeError):
+                    raw_parsed = {}
+                if not isinstance(raw_parsed, dict):
+                    raw_parsed = {}
+                raw_parsed["verdict"] = validated.verdict.value
+                raw_parsed["score"] = validated.score
+                return raw_parsed
+            # Well-formed-but-invalid payload (missing ``verdict`` / out-of-enum /
+            # malformed JSON the model answered with). Fail CLOSED to NEEDS_REVISION
+            # — never the fabricated APPROVED of old. Log at ERROR with the root
+            # cause so a silently-degrading Tester is observable.
+            logger.error(
+                "validate_response: Tester payload failed the TesterVerdict contract "
+                "(malformed JSON or missing/invalid 'verdict') — verdict NEEDS_REVISION (degraded)."
+            )
+            return {
+                "verdict": "NEEDS_REVISION",
+                "score": None,
+                "criteria": {},
+                "degraded": True,
+                "reason": "malformed_json",
+            }
         except AIServiceError as e:
-            if "MOCK_MODE" in str(e):
-                # Legitimate canned fallback when no client is configured.
+            if self.mock_mode and "MOCK_MODE" in str(e):
+                # Legitimate canned fallback when NO client is configured (startup
+                # mock mode, AI-HARD-0). ``mock: true`` lets the consumer tell a stub
+                # verdict apart from a real one. This branch is gated on
+                # ``self.mock_mode`` so a runtime quota/limit ``AIServiceError`` (raised
+                # by check_token_budget on a real client) does NOT masquerade as a
+                # benign mock APPROVED — it falls through to the transport path below.
                 criteria = {}
                 for c in ("pedagogical", "structural", "clarity", "engagement", "originality", "inclusivity"):
                     criteria[c] = {"pass": True, "score": 0.85}
-                return {"verdict": "APPROVED", "score": 0.85, "criteria": criteria}
-            # Transport/runtime failure of a REAL call — fail OPEN but HONEST
-            # (TPP-7 / #32): never fabricate APPROVED. The gate treats a non-APPROVED
-            # verdict as "don't block the student", so the edited reply still ships,
-            # but we don't lie about the validation having passed.
-            logger.warning("validate_response transport error — verdict UNKNOWN: %s", e)
-            return {"verdict": "UNKNOWN", "score": None, "criteria": {}, "error": "validation_unavailable"}
-        except json.JSONDecodeError as e:
-            # The Tester answered but with unparseable JSON. Same honest fail-open.
-            logger.warning("validate_response JSON parse error — verdict NEEDS_REVISION: %s", e)
-            return {"verdict": "NEEDS_REVISION", "score": None, "criteria": {}, "error": "unparseable_verdict"}
+                return {"verdict": "APPROVED", "score": 0.85, "criteria": criteria, "mock": True}
+            # Transport/runtime failure of a REAL call (non-mock ``AIServiceError`` —
+            # e.g. token budget exceeded). Fail CLOSED but HONEST (TPP-7 / #32): never
+            # fabricate APPROVED. The gate treats a non-APPROVED verdict as "don't
+            # block the student", so the edited reply still ships, but we don't lie
+            # about the validation having passed.
+            logger.error("validate_response transport error (AIServiceError) — verdict UNKNOWN (degraded): %s", e)
+            return {
+                "verdict": "UNKNOWN",
+                "score": None,
+                "criteria": {},
+                "error": "validation_unavailable",
+                "degraded": True,
+                "reason": "transport_error",
+            }
         except Exception as e:
-            logger.warning("validate_response unexpected error — verdict UNKNOWN: %s", e)
-            return {"verdict": "UNKNOWN", "score": None, "criteria": {}, "error": "validation_unavailable"}
+            # Any other transport/runtime failure (OpenAI/network/timeout/unexpected).
+            # Same honest fail-closed: UNKNOWN, never APPROVED, logged at ERROR with
+            # the root cause.
+            logger.error("validate_response transport error — verdict UNKNOWN (degraded): %s", e)
+            return {
+                "verdict": "UNKNOWN",
+                "score": None,
+                "criteria": {},
+                "error": "validation_unavailable",
+                "degraded": True,
+                "reason": "transport_error",
+            }
 
     # ------------------------------------------------------------------
     # 6. Organizer — session management

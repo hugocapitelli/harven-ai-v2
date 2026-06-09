@@ -19,6 +19,7 @@ from authz import assert_owner_or_role, load_session_or_404, require_self_or_rol
 from config import get_settings
 from database import get_supabase
 from repositories.chat_repo import ChatRepository
+from schemas.ai import AIDetectionResponse
 from schemas.chat import ChatSessionCreate
 from services.ai_service import AIService, AIServiceError, sanitize_ai_error
 from services.integration_service import (
@@ -266,7 +267,7 @@ async def ai_socrates_dialogue(
         raise HTTPException(status_code=500, detail="Erro interno do servidor")
 
 
-@router.post("/api/ai/analyst/detect", tags=["AI"])
+@router.post("/api/ai/analyst/detect", tags=["AI"], response_model=AIDetectionResponse)
 async def ai_analyst_detect(
     req: AIDetectionRequest,
     current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
