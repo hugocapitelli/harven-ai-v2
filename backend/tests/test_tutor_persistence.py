@@ -218,11 +218,15 @@ class TestTpp4BothTurnsPersisted:
         assert any(m["role"] == "assistant" for m in transcript), "socratic question lost on reload"
         assert any(m["role"] == "user" for m in transcript)
 
-    async def test_init_persists_only_assistant_opening(self):
+    async def test_opening_message_persists_both_turns(self):
+        # AI-HARD-5: the ``__INIT__`` sentinel was removed. The frontend now sends
+        # the real opening text ("Quero explorar a seguinte questao: ..."), which is
+        # a genuine student turn — so the opening persists BOTH the user message and
+        # the assistant reply (no special-cased assistant-only path anymore).
         fake_db = _fake_with_rpc()
         svc, _ = _svc("Ola! Vamos comecar. O que voce ja sabe? ")
         await svc.socratic_dialogue(
-            student_message="__INIT__",
+            student_message="Quero explorar a seguinte questao: o que e X?",
             chapter_content="c",
             initial_question={"text": "Q?"},
             interactions_remaining=20,
@@ -231,8 +235,10 @@ class TestTpp4BothTurnsPersisted:
             db=fake_db,
         )
         msgs = fake_db.rows("chat_messages")
-        # __INIT__ is not a real student turn — only the opening question persists.
-        assert [m["role"] for m in msgs] == ["assistant"]
+        # The opening is a real student turn → both roles persist.
+        assert sorted(m["role"] for m in msgs) == ["assistant", "user"]
+        usr = next(m for m in msgs if m["role"] == "user")
+        assert usr["content"] == "Quero explorar a seguinte questao: o que e X?"
 
     async def test_no_session_does_not_persist(self):
         """Concurrency/ephemeral contract preserved: no session_id → no DB writes."""

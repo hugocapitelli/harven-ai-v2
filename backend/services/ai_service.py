@@ -31,6 +31,34 @@ logger = logging.getLogger(__name__)
 MAX_INTERACTIONS = 20
 
 # ---------------------------------------------------------------------------
+# Socratic prompt fidelity (AI-HARD-5 — bugs #28/#57)
+# ---------------------------------------------------------------------------
+# Cap on the number of trailing conversation turns replayed to the model on each
+# socratic follow-up. The static context (SOCRATES_PROMPT + question + reference
+# content) lives ONCE in the system message; only the last ``MAX_HISTORY_TURNS``
+# turns of ``conversation_history`` are sent so input tokens per turn grow at
+# most linearly with K (not with the full transcript). Older turns are dropped
+# (a future story may summarize them). The student's current message is always
+# appended raw as ``{"role": "user", ...}`` — never re-wrapped — so its framing
+# matches the history turns. ``_call_openai`` stays generic; the trim is applied
+# by the ``socratic_dialogue`` caller so the detector/editor/tester paths are
+# untouched.
+MAX_HISTORY_TURNS = 10
+
+# ---------------------------------------------------------------------------
+# Socratic reference-context cap (AI-HARD-6 — bug #27)
+# ---------------------------------------------------------------------------
+# Upper bound (in characters) on the chapter reference content embedded in the
+# socratic system message. Raised from the legacy inline ``[:4000]`` to 15000 so
+# the tutor keeps factual grounding across long chapters — aligned with the
+# question-generation path (``generate_questions`` already uses
+# ``chapter_content[:15000]``). Chapters at or below the cap are sent whole (no
+# truncation). The slicing is centralized in ``_select_reference_context`` (a
+# retrieval seam) so this constant is the single source of the cap and no magic
+# number is reintroduced inline.
+REFERENCE_CONTEXT_MAX_CHARS = 15000
+
+# ---------------------------------------------------------------------------
 # Editor→Tester quality gate (TPP-7)
 # ---------------------------------------------------------------------------
 # Server-side feature flag (default OFF). When OFF, ``socratic_dialogue`` is
@@ -99,6 +127,18 @@ SOCRATES_PROMPT = (
     "## FORMATO\n"
     "Responda em texto corrido, linguagem acessivel.\n"
     "Termine SEMPRE com uma pergunta."
+)
+
+# AI-HARD-4 (bug #56): deterministic socratic fallback shown to the student when
+# the model returns empty/whitespace-only content on BOTH the first call and the
+# single retry. It is a genuine, non-empty socratic invitation that always ends
+# with a question — so the frontend never renders a blank tutor bubble and the
+# student always has something to respond to. Kept next to ``SOCRATES_PROMPT``
+# for reuse/test. It MUST stay non-empty and contain a "?" (``has_question``).
+SOCRATIC_FALLBACK_CONTENT = (
+    "Desculpe, tive uma dificuldade para formular minha proxima pergunta agora.\n\n"
+    "Para continuarmos: o que voce ja pensou ate aqui sobre esse tema, e qual "
+    "ponto ainda parece menos claro para voce?"
 )
 
 ANALYST_PROMPT = (
@@ -329,6 +369,22 @@ class AIService:
         response = await self.client.chat.completions.create(**kwargs)
         elapsed = int((time.time() - t0) * 1000)
 
+        # AI-HARD-4 (bug #55): a content-filter, an error envelope or an
+        # OpenAI-compatible gateway can answer with ``choices=[]`` (or None).
+        # Reading ``response.choices[0]`` would raise a bare ``IndexError`` that
+        # escapes every public method's ``except AIServiceError`` and propagates
+        # to the route as a 500 — with no socratic fallback. Normalize this
+        # protocol failure into an ``AIServiceError`` at the single inference
+        # point so all 5 consumers degrade through their existing handlers.
+        if not response.choices:
+            logger.warning(
+                "_call_openai: empty completion (choices=%r) from model %r — "
+                "raising AIServiceError so the caller can degrade.",
+                getattr(response, "choices", None),
+                getattr(response, "model", None),
+            )
+            raise AIServiceError("empty completion")
+
         choice = response.choices[0]
         usage = response.usage
 
@@ -469,6 +525,37 @@ class AIService:
         should_finalize = used >= (MAX_INTERACTIONS - 1)
         return {"remaining": remaining, "should_finalize": should_finalize}
 
+    def _select_reference_context(
+        self, chapter_content: str, student_message: Optional[str] = None
+    ) -> str:
+        """Select the chapter reference content embedded in the socratic prompt.
+
+        AI-HARD-6 (bug #27): this is the single seam that decides *which slice* of
+        the chapter the tutor sees. Today it returns the head of the chapter capped
+        at ``REFERENCE_CONTEXT_MAX_CHARS`` — chapters at or below the cap are
+        returned whole (no truncation), longer ones are truncated to the cap. The
+        cap lives in a named module constant (aligned with the ``[:15000]`` used by
+        ``generate_questions``) so no magic number is baked inline at the call site.
+
+        Extension point — retrieval: ``student_message`` is accepted now (and
+        currently unused) so a future story can swap the head-truncation for
+        relevance-aware retrieval (chunk + embed the chapter, retrieve the segments
+        most relevant to ``student_message``, and concatenate up to the cap)
+        WITHOUT touching ``socratic_dialogue`` or any other call site. The contract
+        of this seam — ``(chapter_content, student_message=...) -> str`` capped at
+        ``REFERENCE_CONTEXT_MAX_CHARS`` — is the stable surface for that evolution.
+
+        Args:
+            chapter_content: The full chapter text to draw reference content from.
+            student_message: The current student turn. Reserved for future
+                retrieval; ignored by the present head-truncation implementation.
+
+        Returns:
+            The selected reference content, never longer than
+            ``REFERENCE_CONTEXT_MAX_CHARS`` characters.
+        """
+        return chapter_content[:REFERENCE_CONTEXT_MAX_CHARS]
+
     async def socratic_dialogue(
         self,
         student_message: str,
@@ -483,22 +570,21 @@ class AIService:
         self.check_token_budget(user_id, db)
 
         iq = self._normalize_initial_question(initial_question)
-        is_init = student_message == "__INIT__"
 
         # --- TPP-4: persist the student turn server-side (backend = source of
-        # truth). Only when a real session + db are present; the __INIT__ pseudo
-        # message is NOT a real student turn and is never persisted. ---
+        # truth). Only when a real session + db are present. The frontend always
+        # sends the real opening text (AI-HARD-5 removed the ``__INIT__``
+        # sentinel), so every inbound message is a genuine student turn. ---
         repo = None
         if session_id and db is not None:
             try:
                 repo = ChatRepository(db)
-                if not is_init:
-                    await run_in_threadpool(
-                        repo.persist_turn,
-                        session_id,
-                        {"role": "user", "content": student_message, "agent_type": None,
-                         "metadata": None},
-                    )
+                await run_in_threadpool(
+                    repo.persist_turn,
+                    session_id,
+                    {"role": "user", "content": student_message, "agent_type": None,
+                     "metadata": None},
+                )
             except Exception as exc:  # pragma: no cover - persistence is best-effort
                 logger.warning("socratic_dialogue: student-turn persist failed (%s): %s",
                                session_id, exc)
@@ -522,25 +608,80 @@ class AIService:
             remaining = max(0, interactions_remaining - 1)
             should_finalize = interactions_remaining <= 1
 
+        # AI-HARD-5 (#28/#57): the static context is injected ONCE in the system
+        # message (see ``system_prompt`` below), never re-wrapped into the user
+        # turn each follow-up. ``Interacoes restantes`` is recomputed per turn
+        # from the server-side pacing (``remaining``) — it is NOT a stale string
+        # baked into a cached preamble. ``expected_answer`` is included for the
+        # model only (the contract already proves it never leaks to the student).
+        # AI-HARD-6 (#27): route the reference slice through the
+        # ``_select_reference_context`` seam (cap = REFERENCE_CONTEXT_MAX_CHARS,
+        # raised from the legacy inline 4000). No magic number inline; the seam is
+        # ready to evolve into relevance-aware retrieval on ``student_message``.
+        reference_context = self._select_reference_context(
+            chapter_content, student_message=student_message
+        )
         context = (
             f"Pergunta em discussao: {iq.get('text', '')}\n"
             f"Resposta esperada: {iq.get('expected_answer') or 'nao especificada'}\n"
             f"Interacoes restantes: {remaining}\n\n"
-            f"Conteudo de referencia:\n{chapter_content[:4000]}"
+            f"Conteudo de referencia:\n{reference_context}"
         )
+        # SOCRATES_PROMPT + the static context form the single system message.
+        # ``_call_openai`` takes ``system_prompt`` and ``user_message`` separately,
+        # so we combine them here and pass the student's message RAW as the user
+        # turn — matching the role/content framing of the history turns.
+        system_prompt = f"{SOCRATES_PROMPT}\n\n{context}"
 
-        user_msg = (
-            "Apresente-se brevemente e faca a primeira pergunta socratica."
-            if is_init
-            else student_message
-        )
-        history = conversation_history or []
+        # Trim the replayed history to the last ``MAX_HISTORY_TURNS`` turns so the
+        # input token budget per turn is bounded by K rather than the full
+        # transcript. The trim lives in the caller (not ``_call_openai``) so the
+        # detector/editor/tester paths keep their stable generic signature.
+        history = (conversation_history or [])[-MAX_HISTORY_TURNS:]
+
+        # AI-HARD-7 (#31): track whether this turn is served in a degraded state
+        # (mock at startup, or the empty-content socratic fallback from
+        # AI-HARD-4). When set, the final return carries an explicit top-level
+        # ``degraded: True`` + ``reason`` contract and a WARN is emitted — so the
+        # operator can tell the tutor is NOT delivering real socratic value
+        # rather than silently impersonating a working tutor. The success path
+        # leaves both ``None`` (no flag injected, no degradation WARN).
+        degraded_reason: Optional[str] = None
 
         try:
             content, analytics = await self._generate_socratic_reply(
-                context=context, user_msg=user_msg, history=history,
-                user_id=user_id, db=db,
+                system_prompt=system_prompt, student_message=student_message,
+                history=history, user_id=user_id, db=db,
             )
+            # AI-HARD-4 (bug #56): an empty/whitespace-only model reply would
+            # render a blank tutor bubble (the frontend accepts "" verbatim).
+            # Treat it as recoverable: retry the socratic pass EXACTLY ONCE
+            # (FinOps — no loop); if it is STILL empty, fall back to a fixed,
+            # non-empty socratic question. ``socratic_dialogue`` is the only
+            # method whose output goes straight into a chat bubble, so this
+            # repair lives here (not in ``_call_openai``).
+            if not content.strip():
+                logger.warning(
+                    "socratic_dialogue: empty model content — retrying once "
+                    "(session=%s).", session_id,
+                )
+                retry_content, retry_analytics = await self._generate_socratic_reply(
+                    system_prompt=system_prompt, student_message=student_message,
+                    history=history, user_id=user_id, db=db,
+                )
+                if retry_content.strip():
+                    content, analytics = retry_content, retry_analytics
+                else:
+                    logger.warning(
+                        "socratic_dialogue: retry still empty — using socratic "
+                        "fallback content (session=%s).", session_id,
+                    )
+                    content = SOCRATIC_FALLBACK_CONTENT
+                    analytics = retry_analytics
+                    # AI-HARD-7 (#31): the served reply is a fixed fallback, not a
+                    # real socratic turn — surface it under the same degraded
+                    # contract (top-level ``degraded`` + ``reason``).
+                    degraded_reason = "empty_content_fallback"
         except AIServiceError as e:
             if "MOCK_MODE" in str(e):
                 # Mock path: keep the persisted-pacing semantics. ``remaining`` is the
@@ -548,10 +689,13 @@ class AIService:
                 mock = self._mock_socratic(
                     student_message,
                     1 if should_finalize else max(2, remaining),
-                    is_init,
                 )
                 content = mock["response"]["content"]
                 analytics = mock["analytics"]
+                # AI-HARD-7 (#31): ``socratic_dialogue`` re-mounts its own return
+                # (it only lifts ``content``/``analytics`` from the mock dict), so
+                # re-inject the degraded contract here from the mock payload.
+                degraded_reason = mock.get("reason", "mock_mode_no_api_key")
             else:
                 raise
 
@@ -559,8 +703,9 @@ class AIService:
         # failure we keep the best available reply (never block / never 5xx). ---
         if _editor_tester_gate_enabled():
             content = await self._run_editor_tester_gate(
-                socrates_content=content, context=context, user_msg=user_msg,
-                history=history, user_id=user_id, db=db,
+                socrates_content=content, system_prompt=system_prompt,
+                student_message=student_message, history=history,
+                user_id=user_id, db=db,
             )
 
         # --- TPP-4: persist the tutor turn server-side. ---
@@ -576,7 +721,7 @@ class AIService:
                 logger.warning("socratic_dialogue: assistant-turn persist failed (%s): %s",
                                session_id, exc)
 
-        return {
+        result: Dict[str, Any] = {
             "response": {
                 "content": content,
                 "has_question": "?" in content,
@@ -589,15 +734,36 @@ class AIService:
             "analytics": analytics,
         }
 
+        # AI-HARD-7 (#31): when this turn was served degraded (mock at startup or
+        # the empty-content socratic fallback), promote the implicit signal to an
+        # explicit top-level contract AND emit a WARN at serve time — degradation
+        # must not pass unnoticed in production. The success path never enters
+        # this branch, so neither the flags nor the WARN appear for a real reply.
+        if degraded_reason is not None:
+            result["degraded"] = True
+            result["reason"] = degraded_reason
+            logger.warning(
+                "socratic_dialogue: serving DEGRADED reply (reason=%s, session=%s) "
+                "— tutor is not delivering real socratic value.",
+                degraded_reason, session_id,
+            )
+
+        return result
+
     async def _generate_socratic_reply(
-        self, *, context: str, user_msg: str, history: List[Dict[str, str]],
-        user_id: Optional[str], db,
+        self, *, system_prompt: str, student_message: str,
+        history: List[Dict[str, str]], user_id: Optional[str], db,
     ) -> tuple:
         """One Socrates pass. Returns ``(content, analytics_dict)``. Raises
-        ``AIServiceError('MOCK_MODE')`` when no client is configured."""
+        ``AIServiceError('MOCK_MODE')`` when no client is configured.
+
+        AI-HARD-5 (#28/#57): ``system_prompt`` already carries SOCRATES_PROMPT +
+        the static context (injected ONCE). The student's turn is passed RAW as
+        the ``user`` message — no ``CONTEXTO:/MENSAGEM DO ALUNO:`` wrapper — so it
+        matches the role/content framing of the (pre-trimmed) history turns."""
         result = await self._call_openai(
-            SOCRATES_PROMPT,
-            f"CONTEXTO:\n{context}\n\nMENSAGEM DO ALUNO:\n{user_msg}",
+            system_prompt,
+            student_message,
             history=history,
             temperature=0.8,
         )
@@ -612,7 +778,7 @@ class AIService:
         return content, analytics
 
     async def _run_editor_tester_gate(
-        self, *, socrates_content: str, context: str, user_msg: str,
+        self, *, socrates_content: str, system_prompt: str, student_message: str,
         history: List[Dict[str, str]], user_id: Optional[str], db,
     ) -> str:
         """Editor → Tester pedagogical gate (TPP-7).
@@ -633,8 +799,8 @@ class AIService:
                 # Regenerate ONCE: new Socrates pass -> Editor -> (best effort).
                 try:
                     regen, _ = await self._generate_socratic_reply(
-                        context=context, user_msg=user_msg, history=history,
-                        user_id=user_id, db=db,
+                        system_prompt=system_prompt, student_message=student_message,
+                        history=history, user_id=user_id, db=db,
                     )
                     best = await self._edit_safe(regen)
                     # A second validate is informational only — we do NOT retry again.
@@ -666,15 +832,8 @@ class AIService:
         out = await self.validate_response(edited_response=text)
         return str(out.get("verdict", "NEEDS_REVISION")).upper()
 
-    def _mock_socratic(self, msg: str, remaining: int, is_init: bool) -> Dict[str, Any]:
-        if is_init:
-            content = (
-                "Ola! Sou seu orientador socratico. Estou aqui para te ajudar a explorar "
-                "esse tema atraves de perguntas.\n\n"
-                "Para comecar: o que voce ja sabe sobre esse assunto? "
-                "Qual aspecto mais chama sua atencao?"
-            )
-        elif remaining <= 1:
+    def _mock_socratic(self, msg: str, remaining: int) -> Dict[str, Any]:
+        if remaining <= 1:
             content = (
                 "Excelente jornada de reflexao! Voce demonstrou capacidade de analise "
                 "critica e construcao de argumentos.\n\n"
@@ -702,6 +861,15 @@ class AIService:
                 "model_used": "mock",
                 "tokens_used": {"prompt": 0, "completion": 0, "total": 0},
             },
+            # AI-HARD-7 (#31): surface degraded state as an explicit top-level
+            # contract instead of leaving it buried in ``analytics.model_used``.
+            # The canned prompts ignore the student turn and the lesson, so the
+            # caller (and the operator) must be able to tell the tutor is NOT
+            # delivering real socratic value (API key missing/placeholder at
+            # startup). ``socratic_dialogue`` re-mounts its own return, so it
+            # re-injects these flags from here — see its MOCK_MODE branch.
+            "degraded": True,
+            "reason": "mock_mode_no_api_key",
         }
 
     # ------------------------------------------------------------------
@@ -888,6 +1056,17 @@ class AIService:
             }
         except AIServiceError as e:
             if "MOCK_MODE" in str(e):
+                # AI-HARD-7 (#31): the orientador text is returned UNEDITED here.
+                # Surface that explicitly with top-level ``mock``/``degraded`` +
+                # ``reason`` (instead of only ``model_used="mock"`` buried in the
+                # payload), and WARN at serve time. ``edited_text`` is unchanged —
+                # now flagged as not-actually-edited rather than impersonating an
+                # editor pass. The success path above never sets these flags.
+                logger.warning(
+                    "edit_response: serving DEGRADED reply (reason=%s) — "
+                    "orientador text returned unedited (mock mode).",
+                    "mock_mode_no_api_key",
+                )
                 return {
                     "edited_text": orientador_response,
                     "word_count": len(orientador_response.split()),
@@ -896,6 +1075,9 @@ class AIService:
                     "processing_time_ms": 30,
                     "model_used": "mock",
                     "tokens_used": {"prompt": 0, "completion": 0, "total": 0},
+                    "mock": True,
+                    "degraded": True,
+                    "reason": "mock_mode_no_api_key",
                 }
             raise
 

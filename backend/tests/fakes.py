@@ -356,9 +356,13 @@ class _FakeUsage(SimpleNamespace):
 
 
 class _FakeChatCompletion(SimpleNamespace):
-    def __init__(self, content: str, model: str = "fake-model"):
+    def __init__(self, content: str, model: str = "fake-model", empty_choices: bool = False):
+        # AI-HARD-4: ``empty_choices=True`` mirrors a content-filtered / error /
+        # OpenAI-compatible-gateway completion that carries ``choices=[]`` — the
+        # exact protocol failure ``_call_openai`` must normalize into an
+        # ``AIServiceError`` instead of letting ``choices[0]`` raise IndexError.
         super().__init__(
-            choices=[_FakeChoice(content)],
+            choices=[] if empty_choices else [_FakeChoice(content)],
             usage=_FakeUsage(),
             model=model,
         )
@@ -382,6 +386,21 @@ class _AsyncCompletions:
             await asyncio.sleep(p.delay)
         if p.raise_exc is not None:
             raise p.raise_exc
+        # AI-HARD-4: per-call scripting. When ``responses`` is provided, each
+        # chat ``create`` consumes the next step in order; once the script is
+        # exhausted the last step repeats. Each step is either a content string
+        # or the sentinel dict ``{"empty_choices": True}`` (-> ``choices=[]``).
+        # When no script is set, fall back to the static ``response_text``
+        # (legacy behavior — every call returns the same non-empty completion).
+        if p.responses:
+            idx = min(len(p.calls) - 1, len(p.responses) - 1)
+            step = p.responses[idx]
+            if isinstance(step, dict) and step.get("empty_choices"):
+                return _FakeChatCompletion(p.response_text, model=p.model, empty_choices=True)
+            content = step["content"] if isinstance(step, dict) else step
+            return _FakeChatCompletion(content, model=p.model)
+        if p.empty_choices:
+            return _FakeChatCompletion(p.response_text, model=p.model, empty_choices=True)
         return _FakeChatCompletion(p.response_text, model=p.model)
 
 
@@ -408,12 +427,21 @@ class FakeAsyncOpenAI:
 
     Configurable:
       * ``delay``          — per-call ``asyncio.sleep`` (simulated LLM latency)
-      * ``response_text``  — chat completion content
+      * ``response_text``  — chat completion content (static fallback)
       * ``transcribe_text``— whisper text
       * ``raise_exc``      — raise instead of returning (timeout/error mapping)
+      * ``empty_choices``  — (AI-HARD-4) every chat completion carries ``choices=[]``
+                             so ``_call_openai`` must raise ``AIServiceError`` instead
+                             of IndexError.
+      * ``responses``      — (AI-HARD-4) per-call script consumed in order: each step
+                             is a content string OR ``{"empty_choices": True}``. Lets a
+                             test return empty content then valid content across two
+                             calls (the socratic 1-retry path), or empty-choices on a
+                             specific call. The last step repeats once exhausted.
 
     Inspectable:
-      * ``calls``            — list of chat ``create`` kwargs
+      * ``calls``            — list of chat ``create`` kwargs (its length is the
+                               number of chat completions issued)
       * ``transcribe_calls`` — list of transcribe ``create`` kwargs
     """
 
@@ -424,12 +452,16 @@ class FakeAsyncOpenAI:
         transcribe_text: str = "transcribed text",
         model: str = "fake-model",
         raise_exc: Optional[BaseException] = None,
+        empty_choices: bool = False,
+        responses: Optional[List[Any]] = None,
     ):
         self.delay = delay
         self.response_text = response_text
         self.transcribe_text = transcribe_text
         self.model = model
         self.raise_exc = raise_exc
+        self.empty_choices = empty_choices
+        self.responses = responses
         self.calls: List[Dict[str, Any]] = []
         self.transcribe_calls: List[Dict[str, Any]] = []
         self.chat = SimpleNamespace(completions=_AsyncCompletions(self))

@@ -123,8 +123,10 @@ async def test_all_methods_mock_mode(mock_ai_service):
     assert isinstance(q["questions"], list) and len(q["questions"]) >= 1
     assert q["metadata"]["model_used"] == "mock"
 
+    # AI-HARD-5: the ``__INIT__`` sentinel is gone; the frontend sends the real
+    # opening text. A normal opening message exercises the same mock path.
     d = await svc.socratic_dialogue(
-        student_message="__INIT__",
+        student_message="Quero explorar a seguinte questao: o que e X?",
         chapter_content="c",
         initial_question={"text": "Q"},
         interactions_remaining=3,
