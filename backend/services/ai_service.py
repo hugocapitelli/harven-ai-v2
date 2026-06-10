@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 from fastapi.concurrency import run_in_threadpool
 
 if TYPE_CHECKING:
-    pass  # No DB type needed — token tracking uses in-memory cache
+    pass  # No DB type needed — db is a duck-typed Supabase Client (PostgREST/RPC)
 
 from config import get_settings
 from repositories.chat_repo import ChatRepository
@@ -241,9 +241,6 @@ MODEL_PRICING = {
 # Service
 # ---------------------------------------------------------------------------
 
-_user_token_cache: Dict[str, Dict[str, int]] = {}
-
-
 # Explicit network timeout (seconds) for every OpenAI call. Without it the
 # AsyncOpenAI client can hang the request indefinitely on a stalled upstream;
 # a bounded timeout lets the handler surface 502/504 instead of leaking a
@@ -318,20 +315,77 @@ class AIService:
     # ------------------------------------------------------------------
 
     def check_token_budget(self, user_id: Optional[str], db=None) -> None:
+        """Enforce the daily token budget from PERSISTED usage (TKN-3, bug #12).
+
+        Reads today's consumption from the ``token_usage`` table via
+        :class:`TokenUsageRepository` (Supabase PostgREST/RPC) — never a process
+        cache — so the limit survives restarts/deploys and is shared across
+        processes. If ``used >= daily_token_limit`` it raises ``AIServiceError`` as
+        before.
+
+        FAIL-OPEN: a missing/None ``db`` or any read error degrades to allowing the
+        request (log + ``return``). Availability is preferred over perfect
+        enforcement when the persistence layer is unreachable — the asymmetric
+        counterpart of the best-effort write below. ``user_id`` falsy is a no-op.
+        """
         if not user_id:
             return
-        today = date.today().isoformat()
-        used = _user_token_cache.get(user_id, {}).get(today, 0)
+        if db is None:
+            logger.warning(
+                "check_token_budget: no db (Supabase client) provided for %s — "
+                "fail-open (budget not enforced this call).",
+                user_id,
+            )
+            return
+        # Lazy import: avoid a module-import cycle (repository imports may pull in
+        # service-adjacent modules) and keep the import cost off the hot path.
+        from repositories.token_usage_repo import TokenUsageRepository
+
+        try:
+            used = TokenUsageRepository(db).get_today_usage(user_id)
+        except Exception as exc:
+            logger.warning(
+                "check_token_budget: usage read failed for %s (%s) — "
+                "fail-open (budget not enforced this call).",
+                user_id, exc,
+            )
+            return
 
         if used >= self.daily_token_limit:
             raise AIServiceError("Limite diario de tokens excedido. Tente novamente amanha.")
 
     def track_token_usage(self, user_id: Optional[str], tokens: int, db=None) -> None:
+        """Persist a token-usage increment for today (TKN-3, bug #12).
+
+        Delegates to :meth:`TokenUsageRepository.add_usage`, which performs an
+        ATOMIC ``INSERT ... ON CONFLICT (user_id, usage_date) DO UPDATE SET
+        tokens_used = tokens_used + EXCLUDED.tokens_used`` via the
+        ``increment_token_usage`` RPC — the sum lives in Postgres, so concurrent
+        increments never lose a write (no double-count, no read-modify-write).
+
+        BEST-EFFORT: ``user_id`` falsy or ``tokens <= 0`` is a no-op; any write
+        failure is logged and SWALLOWED (never propagated) so token accounting can
+        never break AI generation. A missing/None ``db`` is also a quiet no-op.
+        """
         if not user_id or tokens <= 0:
             return
-        today = date.today().isoformat()
-        _user_token_cache.setdefault(user_id, {})
-        _user_token_cache[user_id][today] = _user_token_cache[user_id].get(today, 0) + tokens
+        if db is None:
+            logger.warning(
+                "track_token_usage: no db (Supabase client) provided for %s — "
+                "increment of %s tokens not persisted.",
+                user_id, tokens,
+            )
+            return
+        from repositories.token_usage_repo import TokenUsageRepository
+
+        try:
+            TokenUsageRepository(db).add_usage(user_id, tokens)
+        except Exception as exc:
+            logger.warning(
+                "track_token_usage: persist failed for %s (%s tokens): %s — "
+                "swallowed (best-effort).",
+                user_id, tokens, exc,
+            )
 
     # ------------------------------------------------------------------
     # Internal OpenAI call
@@ -881,7 +935,16 @@ class AIService:
         text: str,
         context: Optional[Dict[str, Any]] = None,
         interaction_metadata: Optional[Dict[str, Any]] = None,
+        user_id: Optional[str] = None,
+        db=None,
     ) -> Dict[str, Any]:
+        # TKN-4 (bug #12): enforce the daily token budget BEFORE any paid call.
+        # ``user_id``/``db`` DEFAULT to None (no-op without identity — TKN-3). The
+        # check runs OUTSIDE the broad ``try/except Exception`` around ``_call_openai``
+        # below, so an over-cap ``AIServiceError`` PROPAGATES to the route (→503)
+        # instead of being swallowed into the heuristic fallback — no paid call,
+        # no consumption when over-cap.
+        self.check_token_budget(user_id, db)
         analysis_id = f"ANA-{int(time.time())}"
         words = text.split()
         sentences = [s.strip() for s in re.split(r"[.!?]+", text) if s.strip()]
@@ -901,6 +964,11 @@ class AIService:
                 f"Analise o texto do aluno:\n\n{text}",
                 json_mode=True,
             )
+            # TKN-4 (bug #12): a REAL LLM call happened → persist consumption here,
+            # BEFORE parsing. Track lives only on this real-call path; the heuristic
+            # fallback (``except`` below) made no paid call, so it never tracks.
+            # Best-effort; no-op without user_id/db (TKN-3).
+            self.track_token_usage(user_id, result["tokens"]["total"], db)
             # _parse_model_json: bad JSON / contract violation -> None (the single
             # decision point; never raises). raw is the LLM string itself.
             validated = _parse_model_json(result["content"], AIDetectionResult)
@@ -1038,13 +1106,26 @@ class AIService:
         self,
         orientador_response: str,
         context: Optional[Dict[str, Any]] = None,
+        user_id: Optional[str] = None,
+        db=None,
     ) -> Dict[str, Any]:
+        # TKN-4 (bug #12): enforce the daily token budget from PERSISTED usage
+        # BEFORE any paid model call. ``user_id``/``db`` DEFAULT to None because the
+        # socratic gate calls this method internally (``_edit_safe``) WITHOUT an
+        # identity — in that path check/track are no-ops (TKN-3 guards), and the
+        # gate behaviour is unchanged. When the route supplies the authenticated
+        # identity, an over-cap user raises ``AIServiceError`` here (mapped to 503
+        # at the edge) and NO paid call to the model is made.
+        self.check_token_budget(user_id, db)
         try:
             result = await self._call_openai(
                 EDITOR_PROMPT,
                 f"Texto do orientador para editar:\n\n{orientador_response}",
                 temperature=0.5,
             )
+            # Real LLM call succeeded → persist consumption for the authenticated
+            # user (best-effort; no-op without user_id/db — TKN-3).
+            self.track_token_usage(user_id, result["tokens"]["total"], db)
             return {
                 "edited_text": result["content"],
                 "word_count": len(result["content"].split()),
@@ -1089,13 +1170,27 @@ class AIService:
         self,
         edited_response: str,
         context: Optional[Dict[str, Any]] = None,
+        user_id: Optional[str] = None,
+        db=None,
     ) -> Dict[str, Any]:
+        # TKN-4 (bug #12): enforce the daily token budget BEFORE the paid call.
+        # ``user_id``/``db`` DEFAULT to None so the socratic gate's internal call
+        # (``_validate_safe``, no identity) stays a no-op and the fail-open
+        # contract below is unchanged. The check is placed OUTSIDE the ``try`` on
+        # purpose: an over-cap ``AIServiceError`` must PROPAGATE to the route (→503),
+        # NOT be caught by the honest fail-open ``except AIServiceError`` below and
+        # silently degraded to an UNKNOWN verdict. No paid call happens over-cap.
+        self.check_token_budget(user_id, db)
         try:
             result = await self._call_openai(
                 TESTER_PROMPT,
                 f"Valide a resposta editada:\n\n{edited_response}",
                 json_mode=True,
             )
+            # Real LLM call succeeded → persist consumption (best-effort; no-op
+            # without user_id/db — TKN-3). Tracked here, on the REAL success path
+            # only, never in the fail-open/mock branches below.
+            self.track_token_usage(user_id, result["tokens"]["total"], db)
             # AI-HARD-2 (bug #32): the LLM JSON is NO LONGER trusted verbatim. It is
             # routed through the ``TesterVerdict`` contract (verdict enum, optional
             # coerced/clamped score). ``_parse_model_json`` is the single decision

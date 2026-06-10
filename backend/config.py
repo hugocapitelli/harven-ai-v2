@@ -37,6 +37,16 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_MODEL: str = "gpt-4o-mini"
 
+    # TTS / FinOps (TKN-5)
+    # Feature flag for ElevenLabs synthesis cost tracking. The ``token_usage``
+    # ledger has a single ``tokens_used`` column with no per-provider dimension
+    # (KISS — no schema change), so the ElevenLabs char-equivalent is summed into
+    # the SAME daily counter as the LLM and the provider is disambiguated only in
+    # the structured log. Default OFF for a conservative, controlled rollout: when
+    # disabled the LLM (script) cost is still tracked, only the ElevenLabs
+    # synthesis cost is omitted.
+    ENABLE_ELEVENLABS_COST_TRACKING: bool = False
+
     # App
     FRONTEND_URL: str = "http://localhost:3000"
     ENVIRONMENT: str = "development"

@@ -271,12 +271,17 @@ async def ai_socrates_dialogue(
 async def ai_analyst_detect(
     req: AIDetectionRequest,
     current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
+    client: Client = Depends(get_supabase),
 ):
     try:
+        # TKN-4 (bug #12): identity for the budget cap comes EXCLUSIVELY from the
+        # authenticated session (``current_user["id"]``), never ``body.user_id``.
         return await get_ai_service().detect_ai_content(
             text=req.text,
             context=req.context,
             interaction_metadata=req.interaction_metadata,
+            user_id=current_user["id"],
+            db=client,
         )
     except AIServiceError as e:
         raise HTTPException(status_code=503, detail=sanitize_ai_error(e))
@@ -289,11 +294,15 @@ async def ai_analyst_detect(
 async def ai_editor_edit(
     req: EditResponseRequest,
     current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
+    client: Client = Depends(get_supabase),
 ):
     try:
+        # TKN-4 (bug #12): authenticated identity only — never body.user_id.
         return await get_ai_service().edit_response(
             orientador_response=req.orientador_response,
             context=req.context,
+            user_id=current_user["id"],
+            db=client,
         )
     except AIServiceError as e:
         raise HTTPException(status_code=503, detail=sanitize_ai_error(e))
@@ -306,11 +315,15 @@ async def ai_editor_edit(
 async def ai_tester_validate(
     req: ValidateResponseRequest,
     current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
+    client: Client = Depends(get_supabase),
 ):
     try:
+        # TKN-4 (bug #12): authenticated identity only — never body.user_id.
         return await get_ai_service().validate_response(
             edited_response=req.edited_response,
             context=req.context,
+            user_id=current_user["id"],
+            db=client,
         )
     except AIServiceError as e:
         raise HTTPException(status_code=503, detail=sanitize_ai_error(e))
@@ -591,11 +604,43 @@ class AudioGenerateRequest(BaseModel):
 _tts_jobs: dict[str, dict] = {}
 
 
-def _run_tts_job(job_id: str, content_id: str, content_text: str, audio_type: str, voice_id: str, upload_dir: str, supabase_url: str, supabase_key: str):
-    """Background TTS generation — runs in a thread, updates _tts_jobs."""
+def _run_tts_job(job_id: str, content_id: str, content_text: str, audio_type: str, voice_id: str, upload_dir: str, supabase_url: str, supabase_key: str, user_id: Optional[str] = None):
+    """Background TTS generation — runs in a thread, updates _tts_jobs.
+
+    TKN-5 (bug #12): the two paid AI steps of this pipeline are now billed to the
+    INITIATOR's daily ledger via the unified TKN-3 tracker:
+
+    * the LLM (script/summary/explanation) — ``result.usage.total_tokens``;
+    * the ElevenLabs synthesis — a char-equivalent (``len(tts_input)``) summed into
+      the SAME ``tokens_used`` counter, gated by ``ENABLE_ELEVENLABS_COST_TRACKING``
+      (KISS: no provider column in the schema; the provider is disambiguated in the
+      structured log rather than the ledger).
+
+    The async event loop's ``get_supabase`` dependency does not exist inside this
+    thread, so a SYNC Supabase ``Client`` is recreated here from the
+    ``supabase_url``/``supabase_key`` already handed to the job and used as ``db``
+    for both increments. Tracking failures are LOGGED with full context (user_id,
+    content_id, stage) at ERROR level and never allowed to mask the happy path.
+    """
     try:
         svc = get_ai_service()
         tts_input = content_text
+
+        # Recreate a SYNC Supabase client for ledger writes — the request-scoped
+        # ``get_supabase`` dependency is unavailable off the event loop. ``db`` may
+        # stay None if creation fails; the tracker fail-opens on a None db.
+        from supabase import create_client
+        db = None
+        try:
+            db = create_client(supabase_url, supabase_key)
+        except Exception as exc:  # pragma: no cover - defensive: never block audio
+            logger.error(
+                "TTS job %s: failed to create Supabase client for ledger "
+                "(user_id=%s, content_id=%s) — usage will not be persisted: %s",
+                job_id, user_id, content_id, exc,
+            )
+
+        cfg = get_settings()
 
         # ASYNC-AI-1: this job runs in a threading.Thread (OFF the event loop).
         # ``svc.client`` is now ``AsyncOpenAI`` and MUST NOT be called here (calling a
@@ -603,9 +648,10 @@ def _run_tts_job(job_id: str, content_id: str, content_text: str, audio_type: st
         # Use the dedicated SYNCHRONOUS client (``svc.sync_client``) instead — this is
         # QA verification item #1 (no async/coroutine exception leaks into the thread).
         sync_client = svc.sync_client
+        llm_result = None
 
         if audio_type == "summary" and sync_client:
-            result = sync_client.chat.completions.create(
+            llm_result = sync_client.chat.completions.create(
                 model=svc.model,
                 messages=[
                     {"role": "system", "content": "Voce e um assistente educacional. Resuma o conteudo abaixo de forma clara e concisa, em portugues, mantendo os conceitos-chave. Maximo 3 paragrafos."},
@@ -613,9 +659,9 @@ def _run_tts_job(job_id: str, content_id: str, content_text: str, audio_type: st
                 ],
                 max_tokens=800,
             )
-            tts_input = result.choices[0].message.content or content_text
+            tts_input = llm_result.choices[0].message.content or content_text
         elif audio_type == "explanation" and sync_client:
-            result = sync_client.chat.completions.create(
+            llm_result = sync_client.chat.completions.create(
                 model=svc.model,
                 messages=[
                     {"role": "system", "content": "Voce e um professor didatico. Transforme o conteudo abaixo em uma explicacao clara e acessivel, como se estivesse explicando para um aluno. Use linguagem natural e exemplos quando possivel. Em portugues. Maximo 4 paragrafos."},
@@ -623,7 +669,26 @@ def _run_tts_job(job_id: str, content_id: str, content_text: str, audio_type: st
                 ],
                 max_tokens=1000,
             )
-            tts_input = result.choices[0].message.content or content_text
+            tts_input = llm_result.choices[0].message.content or content_text
+
+        # Track the LLM (script) cost to the INITIATOR's ledger. Failures here are
+        # LOGGED at ERROR with stage context — never swallowed, never masking audio.
+        if llm_result is not None:
+            try:
+                llm_tokens = int(getattr(getattr(llm_result, "usage", None), "total_tokens", 0) or 0)
+                if llm_tokens > 0:
+                    logger.info(
+                        "TTS job %s: tracking LLM usage provider=llm user_id=%s "
+                        "content_id=%s tokens=%d",
+                        job_id, user_id, content_id, llm_tokens,
+                    )
+                    svc.track_token_usage(user_id, llm_tokens, db)
+            except Exception as exc:
+                logger.error(
+                    "TTS job %s: LLM usage tracking FAILED (provider=llm, "
+                    "user_id=%s, content_id=%s): %s",
+                    job_id, user_id, content_id, exc, exc_info=True,
+                )
 
         tts_input = tts_input[:5000]
 
@@ -637,6 +702,27 @@ def _run_tts_job(job_id: str, content_id: str, content_text: str, audio_type: st
         )
         audio_bytes = b"".join(audio_generator)
 
+        # Track the ElevenLabs synthesis cost as a char-equivalent (KISS: summed
+        # into the same ``tokens_used`` counter), gated by the feature flag. Provider
+        # is labeled in the structured log, NOT in the schema. Tracking failure is
+        # logged at ERROR with stage context; the happy path is never masked.
+        if cfg.ENABLE_ELEVENLABS_COST_TRACKING:
+            try:
+                el_chars = len(tts_input)
+                if el_chars > 0:
+                    logger.info(
+                        "TTS job %s: tracking ElevenLabs usage provider=elevenlabs "
+                        "user_id=%s content_id=%s char_equivalent=%d",
+                        job_id, user_id, content_id, el_chars,
+                    )
+                    svc.track_token_usage(user_id, el_chars, db)
+            except Exception as exc:
+                logger.error(
+                    "TTS job %s: ElevenLabs usage tracking FAILED "
+                    "(provider=elevenlabs, user_id=%s, content_id=%s): %s",
+                    job_id, user_id, content_id, exc, exc_info=True,
+                )
+
         subdir = "tts"
         dest_dir = Path(upload_dir) / subdir
         dest_dir.mkdir(parents=True, exist_ok=True)
@@ -649,10 +735,9 @@ def _run_tts_job(job_id: str, content_id: str, content_text: str, audio_type: st
         word_count = len(tts_input.split())
         duration_minutes = max(1, round(word_count / 150))
 
-        # Persist to DB
+        # Persist to DB (reuse the ledger client recreated at the top of the job).
         try:
-            from supabase import create_client
-            sb = create_client(supabase_url, supabase_key)
+            sb = db if db is not None else create_client(supabase_url, supabase_key)
             sb.table("contents").update({"audio_url": audio_url}).eq("id", content_id).execute()
         except Exception as e:
             logger.warning(f"Failed to persist audio_url: {e}")
@@ -692,6 +777,19 @@ async def audio_generate_from_content(
     if not content_text.strip():
         raise HTTPException(status_code=400, detail="Conteudo sem texto.")
 
+    # TKN-5: budget pre-check BEFORE the paid synthesis thread is dispatched. A
+    # user over the daily token limit is barred at the source — no thread, no
+    # ElevenLabs call, no LLM call. The TKN-3 budget enforcer reads PERSISTED daily
+    # usage; an over-cap user raises ``AIServiceError`` -> 503. The read is sync, so
+    # it runs off the event loop. ``user_id`` is the INITIATOR, captured here at
+    # enqueue time and propagated to the worker (never derived inside the thread).
+    svc = get_ai_service()
+    user_id = current_user["id"]
+    try:
+        await run_in_threadpool(svc.check_token_budget, user_id, client)
+    except AIServiceError as e:
+        raise HTTPException(status_code=503, detail=sanitize_ai_error(e))
+
     voice_id = body.voice if body.voice in ELEVENLABS_VOICES else "21m00Tcm4TlvDq8ikWAM"
     job_id = uuid4().hex
     _tts_jobs[job_id] = {"status": "processing"}
@@ -701,7 +799,7 @@ async def audio_generate_from_content(
     t = threading.Thread(
         target=_run_tts_job,
         args=(job_id, body.content_id, content_text, body.audio_type, voice_id,
-              str(storage.base_dir), cfg.SUPABASE_URL, cfg.SUPABASE_KEY),
+              str(storage.base_dir), cfg.SUPABASE_URL, cfg.SUPABASE_KEY, user_id),
         daemon=True,
     )
     t.start()
