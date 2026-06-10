@@ -1,7 +1,7 @@
 ---
 id: EPIC-AI
 title: AI Concurrency, Session Truth, LLM Contract Hardening & Token Budget
-status: Draft
+status: Done
 phases: [3, 4]
 story_count: 23
 ---
