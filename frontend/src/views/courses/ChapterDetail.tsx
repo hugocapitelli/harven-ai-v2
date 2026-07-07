@@ -11,10 +11,14 @@ interface ChapterWithMeta extends Chapter {
   learning_objectives?: string[];
 }
 
+// Keyed by the normalized LOWERCASE content.type (see types.ts / normalizeContent).
 const CONTENT_TYPE_META: Record<string, { icon: string; color: string; label: string }> = {
-  VIDEO: { icon: 'play_circle', color: 'text-harven-dark bg-harven-dark/10', label: 'Vídeo' },
-  AUDIO: { icon: 'headphones', color: 'text-harven-gold bg-harven-gold/10', label: 'Áudio' },
-  TEXT: { icon: 'article', color: 'text-green-600 bg-green-50', label: 'Texto' },
+  video: { icon: 'play_circle', color: 'text-harven-dark bg-harven-dark/10', label: 'Vídeo' },
+  audio: { icon: 'headphones', color: 'text-harven-gold bg-harven-gold/10', label: 'Áudio' },
+  image: { icon: 'image', color: 'text-blue-600 bg-blue-50', label: 'Imagem' },
+  pdf: { icon: 'picture_as_pdf', color: 'text-red-600 bg-red-50', label: 'PDF' },
+  summary: { icon: 'summarize', color: 'text-harven-gold bg-harven-gold/10', label: 'Resumo' },
+  text: { icon: 'article', color: 'text-green-600 bg-green-50', label: 'Texto' },
 };
 
 const OBJECTIVE_ICONS = ['school', 'psychology', 'build', 'trending_up'];
@@ -179,7 +183,7 @@ export default function ChapterDetail() {
                 {contents
                   .sort((a, b) => (a as Content & { order?: number }).order ?? 0 - ((b as Content & { order?: number }).order ?? 0))
                   .map((content, idx) => {
-                    const meta = CONTENT_TYPE_META[content.type] ?? CONTENT_TYPE_META.TEXT;
+                    const meta = CONTENT_TYPE_META[content.type] ?? CONTENT_TYPE_META.text;
                     return (
                       <button
                         key={content.id}

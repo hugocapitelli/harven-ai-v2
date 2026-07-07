@@ -538,6 +538,16 @@ class TestGradebookScope:
 # ===========================================================================
 # INT-MOODLE-1 follow-up — GET /disciplines/{id}/grades/export (JSON/CSV)
 # ===========================================================================
+def _seed_discipline_content_chain(fake, discipline_id, course_id, chapter_id, content_id):
+    """Seed the course -> chapter -> content chain the export endpoint now
+    walks to scope sessions to the discipline (mirrors the gradebook's own
+    scoping). Without this chain, a session's ``content_id`` can never match
+    the discipline's ``discipline_content_ids`` set."""
+    fake.add("courses", {"id": course_id, "discipline_id": discipline_id, "title": "Course"})
+    fake.add("chapters", {"id": chapter_id, "course_id": course_id})
+    fake.add("contents", {"id": content_id, "chapter_id": chapter_id, "title": "Content"})
+
+
 class TestGradesExportScope:
     """Same SEC-SCOPE-2 authz pattern as the gradebook: TEACHER scoped to their
     own discipline, ADMIN bypasses. Real-data assertions are exercised with a
@@ -572,7 +582,9 @@ class TestGradesExportScope:
 
     def test_export_json_with_real_session_score_null_when_absent(self, client, as_teacher, fake_supabase):
         # DISCIPLINE_ID already has STUDENT_A_ID enrolled (base seed). Seed a
-        # session for that student WITHOUT performance_score.
+        # session for that student WITHOUT performance_score, plus the
+        # course->chapter->content chain that scopes it to this discipline.
+        _seed_discipline_content_chain(fake_supabase, DISCIPLINE_ID, "course-1", "chapter-1", "content-1")
         fake_supabase.seed("chat_sessions", [
             {"id": "sess-export-1", "user_id": STUDENT_A_ID, "content_id": "content-1",
              "status": "completed", "created_at": "2026-01-01T00:00:00Z"},
@@ -587,6 +599,7 @@ class TestGradesExportScope:
         assert row["started_at"] == "2026-01-01T00:00:00Z"  # fallback to created_at
 
     def test_export_json_with_real_score_preserved(self, client, as_teacher, fake_supabase):
+        _seed_discipline_content_chain(fake_supabase, DISCIPLINE_ID, "course-1", "chapter-1", "content-1")
         fake_supabase.seed("chat_sessions", [
             {"id": "sess-export-2", "user_id": STUDENT_A_ID, "content_id": "content-1",
              "status": "completed", "created_at": "2026-01-01T00:00:00Z",
@@ -596,6 +609,35 @@ class TestGradesExportScope:
         assert resp.status_code == 200
         rows = resp.json()["data"]
         assert rows[0]["performance_score"] == 0
+
+    def test_export_scopes_sessions_to_discipline_content_no_cross_discipline_leak(
+        self, client, as_teacher, fake_supabase
+    ):
+        """A student enrolled in TWO disciplines must not have the other
+        discipline's sessions leak into this discipline's export (the bug
+        this test guards: the endpoint used to filter sessions by
+        ``user_id`` alone, with no content/course scoping)."""
+        # Student A is enrolled in both DISCIPLINE_ID (base seed) and
+        # OTHER_DISCIPLINE_ID (added here).
+        fake_supabase.add("discipline_students", {
+            "discipline_id": OTHER_DISCIPLINE_ID, "student_id": STUDENT_A_ID,
+        })
+        _seed_discipline_content_chain(fake_supabase, DISCIPLINE_ID, "course-a", "chapter-a", "content-a")
+        _seed_discipline_content_chain(fake_supabase, OTHER_DISCIPLINE_ID, "course-b", "chapter-b", "content-b")
+        fake_supabase.seed("chat_sessions", [
+            {"id": "sess-disc-a", "user_id": STUDENT_A_ID, "content_id": "content-a",
+             "status": "completed", "created_at": "2026-01-01T00:00:00Z"},
+            {"id": "sess-disc-b", "user_id": STUDENT_A_ID, "content_id": "content-b",
+             "status": "completed", "created_at": "2026-01-02T00:00:00Z"},
+        ])
+
+        resp = client.get(f"/disciplines/{DISCIPLINE_ID}/grades/export")
+        assert resp.status_code == 200
+        rows = resp.json()["data"]
+        assert len(rows) == 1
+        assert rows[0]["content_id"] == "content-a"
+        session_ids = {r.get("content_id") for r in rows}
+        assert "content-b" not in session_ids  # OTHER_DISCIPLINE_ID's session must not leak
 
     def test_export_csv_has_correct_header_and_content_type(self, client, as_teacher, fake_supabase):
         fake_supabase.seed("discipline_students", [])

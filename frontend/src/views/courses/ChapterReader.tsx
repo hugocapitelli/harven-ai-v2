@@ -682,7 +682,16 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
       // `content` before declaring failure (TTSJOB-3 AC3).
       if (await resolveTtsViaContentFallback(style)) return;
       toast.error('Tempo esgotado — tente novamente em instantes.');
-    } catch {
+    } catch (err) {
+      // The 429 concurrency cap is emitted ONLY by the START endpoint
+      // (ttsApi.generateSummary at line 627, backend routes_ai.py:1095) — its
+      // rejection lands HERE, in the outer catch, not in the poll loop (the
+      // status endpoint never returns 429). Surface the specific guidance
+      // instead of the generic failure toast.
+      if (isRateLimitError(err)) {
+        toast.error('Muitas geracoes de audio simultaneas — aguarde e tente novamente.');
+        return;
+      }
       toast.error('Erro ao gerar audio');
     } finally {
       // #39: reset the loading state on EVERY exit path (success, real

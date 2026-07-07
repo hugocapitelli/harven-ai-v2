@@ -85,6 +85,39 @@ class TestLifecycleTransitions:
         assert updated["status"] == "error"
         assert updated["error"] == "ElevenLabs timeout"
 
+    def test_mark_done_sets_updated_at_so_ttl_measures_completion_not_creation(self):
+        """The sweep's TTL must measure age since the job actually FINISHED,
+        not since it was first seeded 'processing' — otherwise a job that took
+        a while to synthesize would look stale the instant it completed."""
+        old_created = _iso(datetime.now(timezone.utc) - timedelta(days=30))
+        fake = _fake([
+            {"id": "job-1", "content_id": CONTENT_A_ID, "user_id": STUDENT_A_ID,
+             "audio_type": "summary", "status": "processing", "created_at": old_created},
+        ])
+        repo = TtsJobRepository(fake)
+        updated = repo.mark_done("job-1", "/uploads/tts/out.mp3")
+        assert updated["updated_at"] is not None
+        assert updated["updated_at"] != old_created
+        # A fresh mark_done should NOT be swept even with a short TTL, because
+        # updated_at (not the old created_at) is what the sweep now measures.
+        deleted = repo.sweep_expired(ttl=timedelta(hours=1))
+        assert deleted == []
+        assert fake.find("tts_jobs", id="job-1") is not None
+
+    def test_mark_error_sets_updated_at_so_ttl_measures_completion_not_creation(self):
+        old_created = _iso(datetime.now(timezone.utc) - timedelta(days=30))
+        fake = _fake([
+            {"id": "job-1", "content_id": CONTENT_A_ID, "user_id": STUDENT_A_ID,
+             "audio_type": "summary", "status": "processing", "created_at": old_created},
+        ])
+        repo = TtsJobRepository(fake)
+        updated = repo.mark_error("job-1", "boom")
+        assert updated["updated_at"] is not None
+        assert updated["updated_at"] != old_created
+        deleted = repo.sweep_expired(ttl=timedelta(hours=1))
+        assert deleted == []
+        assert fake.find("tts_jobs", id="job-1") is not None
+
 
 class TestGetForContentIdorGuard:
     def test_owner_gets_the_job(self):

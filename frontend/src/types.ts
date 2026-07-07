@@ -53,19 +53,16 @@ export interface Chapter {
 // Content.type is NORMALIZED to lowercase by the shared API contract
 // (normalizeContent in services/api.ts): content_type/legacy uppercase values are
 // translated to the canonical lowercase set before reaching any component.
-// The legacy UPPERCASE literals remain in the union so sibling views that have not
-// migrated yet (ContentRevision, CourseDetails) still type-check against `content.type`;
-// they will be dropped once every consumer reads the normalized contract.
+// The union is lowercase-only ON PURPOSE: every consumer reads the normalized
+// contract, so comparisons against legacy UPPERCASE literals ('VIDEO'/'AUDIO'/'TEXT')
+// are dead code at runtime and MUST fail to type-check so tsc catches the regression.
 export type ContentType =
   | 'text'
   | 'video'
   | 'audio'
   | 'image'
   | 'pdf'
-  | 'summary'
-  | 'TEXT'
-  | 'VIDEO'
-  | 'AUDIO';
+  | 'summary';
 
 export interface Content {
   id: string;

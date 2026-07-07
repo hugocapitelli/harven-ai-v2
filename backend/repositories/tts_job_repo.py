@@ -94,15 +94,32 @@ class TtsJobRepository(BaseRepository):
         audio_url: str,
         duration_estimate: Optional[str] = None,
     ) -> Optional[Dict]:
-        """Transition a job to the terminal `done` state."""
-        payload: Dict[str, Any] = {"status": "done", "audio_url": audio_url}
+        """Transition a job to the terminal `done` state.
+
+        Sets ``updated_at`` explicitly so ``sweep_expired``'s TTL measures age
+        since COMPLETION, not since the row's original ``processing`` creation
+        (a job that took a while to synthesize would otherwise look already
+        stale the instant it finished).
+        """
+        payload: Dict[str, Any] = {
+            "status": "done",
+            "audio_url": audio_url,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
         if duration_estimate is not None:
             payload["duration_estimate"] = duration_estimate
         return self.update(job_id, payload)
 
     def mark_error(self, job_id: str, error: str) -> Optional[Dict]:
-        """Transition a job to the terminal `error` state."""
-        return self.update(job_id, {"status": "error", "error": error[:500]})
+        """Transition a job to the terminal `error` state.
+
+        Sets ``updated_at`` explicitly for the same reason as ``mark_done``.
+        """
+        return self.update(job_id, {
+            "status": "error",
+            "error": error[:500],
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
 
     # ── READ (ownership-scoped — IDOR guard) ────────────────────────
     def get_for_content(self, content_id: str, user_id: str) -> Optional[Dict]:

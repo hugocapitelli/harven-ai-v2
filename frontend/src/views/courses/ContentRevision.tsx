@@ -169,8 +169,8 @@ export default function ContentRevision() {
 
             {content?.file_url && (
               <div className="bg-white rounded-xl border border-harven-border overflow-hidden">
-                {content.type === 'VIDEO' ? <video controls className="w-full" src={content.file_url}><track kind="captions" /></video>
-                  : content.type === 'AUDIO' ? <div className="p-4"><audio controls className="w-full" src={content.file_url} /></div>
+                {content.type === 'video' ? <video controls className="w-full" src={content.file_url}><track kind="captions" /></video>
+                  : content.type === 'audio' ? <div className="p-4"><audio controls className="w-full" src={content.file_url} /></div>
                   : <iframe src={content.file_url} className="w-full h-[500px]" title="Arquivo" />}
               </div>
             )}

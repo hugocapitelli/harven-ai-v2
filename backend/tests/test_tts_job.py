@@ -129,17 +129,45 @@ def test_explanation_job_uses_sync_client_and_reaches_done(tts_env):
     assert len(fake_async.calls) == 0
 
 
-def test_podcast_job_skips_llm_and_reaches_done(tts_env):
-    """``podcast`` does no LLM step — straight to TTS. Must still reach 'done'."""
+def test_podcast_job_generates_script_via_sync_client_and_reaches_done(tts_env):
+    """POD-2 follow-up: ``podcast`` now runs its own LLM step via
+    ``AIService.generate_podcast_script`` (SYNC client, same coupling as
+    summary/explanation) instead of synthesizing the raw HTML body
+    directly. Must still reach 'done' and never touch the async client."""
     svc, fake_sync, fake_async, sb, upload_dir = tts_env
 
     job = _run("job-podcast", "podcast", upload_dir, sb)
 
     assert job["status"] == "done", job
     assert job["audio_url"].startswith("/uploads/tts/")
-    # No summary/explanation LLM call for podcast.
-    assert len(fake_sync.calls) == 0
+    # The podcast script step used the SYNC client (generate_podcast_script)...
+    assert len(fake_sync.calls) == 1
+    call = fake_sync.calls[0]
+    system_msg = call["messages"][0]["content"]
+    assert "PodcastOS" in system_msg
+    # ...and never the async client (which would have leaked a coroutine).
     assert len(fake_async.calls) == 0
+
+
+def test_podcast_job_synthesizes_generated_script_not_raw_body(tts_env, monkeypatch):
+    """The branch must synthesize the LLM-generated script, not the raw
+    ``content_text`` body, proving generate_podcast_script's output is
+    actually threaded into the TTS pipeline (not just called and discarded)."""
+    svc, fake_sync, fake_async, sb, upload_dir = tts_env
+
+    captured_chunks = {}
+    real_synth = routes_ai._synthesize_mp3_chunks
+
+    def _spy_synthesize(el_client, chunks, voice_id):
+        captured_chunks["chunks"] = list(chunks)
+        return real_synth(el_client, chunks, voice_id)
+
+    monkeypatch.setattr(routes_ai, "_synthesize_mp3_chunks", _spy_synthesize)
+
+    _run("job-podcast-script", "podcast", upload_dir, sb)
+
+    joined = " ".join(captured_chunks["chunks"])
+    assert "Resumo gerado pelo cliente sync." in joined
 
 
 def test_async_client_in_thread_would_break_summary_REGRESSION(monkeypatch, tts_env):

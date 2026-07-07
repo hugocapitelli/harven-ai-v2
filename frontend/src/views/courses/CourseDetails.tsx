@@ -169,7 +169,7 @@ export default function CourseDetails({ userRole }: CourseDetailsProps) {
                         {mod.contents?.map(content => (
                           <div key={content.id} onClick={() => navigate(`/course/${courseId}/chapter/${mod.id}/content/${content.id}`)} className="p-5 flex justify-between items-center cursor-pointer hover:bg-white border-l-4 border-l-transparent hover:border-l-primary transition-all">
                             <div className="flex items-center gap-4">
-                              <span className="material-symbols-outlined text-gray-400">{content.type === 'VIDEO' ? 'play_circle' : content.type === 'AUDIO' ? 'headphones' : 'article'}</span>
+                              <span className="material-symbols-outlined text-gray-400">{content.type === 'video' ? 'play_circle' : content.type === 'audio' ? 'headphones' : 'article'}</span>
                               <div><p className="text-sm font-bold">{content.title}</p><p className="text-[10px] text-gray-400 uppercase">{content.type}</p></div>
                             </div>
                             {isInstructor && (

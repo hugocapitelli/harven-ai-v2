@@ -2140,10 +2140,36 @@ async def export_discipline_grades(
         users_res = client.table("users").select("id, name, ra, email").in_("id", student_ids).execute()
         users_map = {u["id"]: u for u in (users_res.data or [])}
 
+        # Scope sessions to the discipline's own content (same content_id ->
+        # chapter -> course chain as the gradebook endpoint above, mirrored
+        # here to close a cross-discipline leak: a student enrolled in
+        # discipline A and B would otherwise have discipline B's sessions
+        # show up in discipline A's export via the unscoped user_id filter).
+        courses_res = client.table("courses").select("id").eq("discipline_id", discipline_id).execute()
+        course_ids = [c["id"] for c in (courses_res.data or [])]
+
+        chapter_course_map: dict[str, str] = {}
+        if course_ids:
+            chapters_res = client.table("chapters").select("id, course_id").in_("course_id", course_ids).execute()
+            for ch in (chapters_res.data or []):
+                chapter_course_map[ch["id"]] = ch["course_id"]
+
+        content_chapter_map: dict[str, str] = {}
+        if chapter_course_map:
+            chapter_ids = list(chapter_course_map.keys())
+            contents_for_scope_res = (
+                client.table("contents").select("id, chapter_id").in_("chapter_id", chapter_ids).execute()
+            )
+            for ct in (contents_for_scope_res.data or []):
+                content_chapter_map[ct["id"]] = ct.get("chapter_id", "")
+
+        discipline_content_ids = set(content_chapter_map.keys())
+
         # Sessions for those students (content_id links to content -> chapter -> course,
-        # but the export is per-session, so course/chapter context is not required here —
-        # mirrors the gradebook's own session shape, just one row per session instead of
-        # per-course aggregate).
+        # but the export is per-session, so course/chapter context is not surfaced in the
+        # row shape — mirrors the gradebook's own session shape, just one row per session
+        # instead of per-course aggregate). Filtered down to the discipline's own content
+        # below since Supabase has no server-side join here.
         sessions_res = (
             client.table("chat_sessions")
             .select("id, user_id, content_id, status, started_at, completed_at, created_at, "
@@ -2151,7 +2177,10 @@ async def export_discipline_grades(
             .in_("user_id", student_ids)
             .execute()
         )
-        sessions = sessions_res.data or []
+        sessions = [
+            s for s in (sessions_res.data or [])
+            if s.get("content_id") in discipline_content_ids
+        ]
         session_ids = [s["id"] for s in sessions]
 
         # Content titles (best-effort — content_id may be null/removed).
