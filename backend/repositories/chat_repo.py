@@ -48,11 +48,18 @@ class ChatRepository(BaseRepository):
         return sessions
 
     def get_by_content_user(self, content_id: str, user_id: str) -> Optional[Dict]:
+        # DATA-GAM-3 guard: (content_id, user_id) is NOT unique — SEC-CHAT-3 keeps a
+        # completed session alongside a fresh "new attempt" row for the same pair. A
+        # bare ``.maybe_single()`` 500s on >1 match, so order newest-first and take
+        # one to reliably return the most recent session. (Full status machine is
+        # DATA-GAM-4.)
         res = (
             self.client.table(self.table)
             .select("*")
             .eq("content_id", content_id)
             .eq("user_id", user_id)
+            .order("created_at", desc=True)
+            .limit(1)
             .maybe_single()
             .execute()
         )

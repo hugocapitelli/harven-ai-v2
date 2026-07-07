@@ -119,10 +119,62 @@ export const coursesApi = {
 };
 
 // ---------------------------------------------------------------------------
+// Contents — adapter
+// ---------------------------------------------------------------------------
+// The backend persists ``content_type``/``media_url`` (see backend/main.py
+// ContentCreate/ContentUpdate and the upload endpoint in backend/main.py, which
+// writes lowercase values like "pdf"/"video"/"audio"/"image"/"document"; the
+// manual-create path in ContentCreation.tsx instead sends legacy uppercase
+// "TEXT"/"VIDEO"/"AUDIO"). The canonical contract (types.ts ContentType,
+// ChapterReader.tsx TYPE_BADGE/TYPE_LABEL) is LOWERCASE:
+// 'text' | 'video' | 'audio' | 'image' | 'pdf' | 'summary'. Without this
+// adapter, records created via upload/manual-create carry mismatched casing and
+// media never renders. normalizeContent bridges both shapes to the lowercase set,
+// tolerant of legacy uppercase input.
+const CONTENT_TYPE_MAP: Record<string, 'text' | 'video' | 'audio' | 'image' | 'pdf' | 'summary'> = {
+  text: 'text',
+  document: 'text',
+  pdf: 'pdf',
+  image: 'image',
+  video: 'video',
+  audio: 'audio',
+  summary: 'summary',
+};
+
+export const normalizeContent = <T extends Record<string, unknown> | null | undefined>(raw: T): T => {
+  if (!raw || typeof raw !== 'object') return raw;
+  const rawType = typeof raw.content_type === 'string' ? raw.content_type : (raw.type as string | undefined);
+  const normalizedType = rawType
+    ? (CONTENT_TYPE_MAP[rawType.toLowerCase()] ?? (rawType.toLowerCase() as 'text' | 'video' | 'audio' | 'image' | 'pdf' | 'summary'))
+    : undefined;
+  return {
+    ...raw,
+    ...(normalizedType ? { type: normalizedType } : {}),
+    file_url: (raw.file_url as string | undefined) ?? (raw.media_url as string | undefined),
+    body: (raw.body as string | undefined) ?? (raw.extracted_text as string | undefined),
+    extracted_text: (raw.extracted_text as string | undefined) ?? (raw.body as string | undefined),
+  };
+};
+
+const normalizeContentList = (raw: unknown): unknown =>
+  Array.isArray(raw) ? raw.map((item) => normalizeContent(item as Record<string, unknown>)) : raw;
+
+// ---------------------------------------------------------------------------
 // Chapters
 // ---------------------------------------------------------------------------
+// Chapters embed raw ``contents[]`` (same content_type/media_url shape as
+// contentsApi, see normalizeContent above) — normalize that nested array too,
+// since CourseDetails.tsx/CourseEdit.tsx read `content.type` off it directly.
+const normalizeChapterList = (raw: unknown): unknown =>
+  Array.isArray(raw)
+    ? raw.map((chapter) => {
+        const c = chapter as Record<string, unknown>;
+        return Array.isArray(c?.contents) ? { ...c, contents: normalizeContentList(c.contents) } : c;
+      })
+    : raw;
+
 export const chaptersApi = {
-  list:   (courseId: string)                                => api.get(`/courses/${courseId}/chapters`).then(d),
+  list:   (courseId: string)                                => api.get(`/courses/${courseId}/chapters`).then(d).then(normalizeChapterList),
   create: (courseId: string, data: Record<string, unknown>) => api.post(`/courses/${courseId}/chapters`, data).then(d),
   update: (id: string, data: Record<string, unknown>)       => api.put(`/chapters/${id}`, data).then(d),
   delete: (id: string)                                      => api.delete(`/chapters/${id}`).then(d),
@@ -132,13 +184,13 @@ export const chaptersApi = {
 // Contents
 // ---------------------------------------------------------------------------
 export const contentsApi = {
-  list:       (chapterId: string)                           => api.get(`/chapters/${chapterId}/contents`).then(d),
-  get:        (id: string)                                  => api.get(`/contents/${id}`).then(d),
-  create:     (chapterId: string, data: Record<string, unknown>) => api.post(`/chapters/${chapterId}/contents`, data).then(d),
-  update:     (id: string, data: Record<string, unknown>)   => api.put(`/contents/${id}`, data).then(d),
+  list:       (chapterId: string)                           => api.get(`/chapters/${chapterId}/contents`).then(d).then(normalizeContentList),
+  get:        (id: string)                                  => api.get(`/contents/${id}`).then(d).then(normalizeContent),
+  create:     (chapterId: string, data: Record<string, unknown>) => api.post(`/chapters/${chapterId}/contents`, data).then(d).then(normalizeContent),
+  update:     (id: string, data: Record<string, unknown>)   => api.put(`/contents/${id}`, data).then(d).then(normalizeContent),
   delete:     (id: string)                                  => api.delete(`/contents/${id}`).then(d),
   uploadFile: (chapterId: string, file: File, onProgress?: (pct: number) => void) =>
-    upload(`/chapters/${chapterId}/upload`, file, 'file', undefined, onProgress),
+    upload(`/chapters/${chapterId}/upload`, file, 'file', undefined, onProgress).then(normalizeContent),
 };
 
 // ---------------------------------------------------------------------------
@@ -175,6 +227,8 @@ export const aiApi = {
   prepareExport:     (data: Record<string, unknown>)                      => api.post('/api/ai/organizer/prepare-export', data).then(d),
   estimateCost:      (prompt: number, completion: number, model?: string) => api.get('/api/ai/estimate-cost', { params: { prompt_tokens: prompt, completion_tokens: completion, model } }).then(d),
   transcribe:        (file: File)                                         => upload('/api/ai/transcribe', file, 'file'),
+  // backend/routes_ai.py reprocess_content — POST { content_id } -> { body, reprocessed, ... }
+  reprocessContent:  (contentId: string)                                  => api.post('/api/ai/reprocess-content', { content_id: contentId }).then(d),
 };
 
 // ---------------------------------------------------------------------------
@@ -183,7 +237,11 @@ export const aiApi = {
 export const ttsApi = {
   getStatus:       ()                                                => api.get('/api/ai/tts/status').then(d),
   listVoices:      ()                                                => api.get('/api/ai/tts/voices').then(d),
-  generate:        (text: string, voice = 'alloy')                   => api.post('/api/ai/tts/generate', null, { params: { text, voice } }).then(d),
+  // backend/routes_ai.py TTSGenerateRequest expects a JSON body { text, voice,
+  // content_id? }, not query params — the previous `params:` call sent an empty
+  // body with querystring args, which never matched the Pydantic model. Default
+  // voice is an ElevenLabs voice id (backend default), not the OpenAI 'alloy' name.
+  generate:        (text: string, voice = '21m00Tcm4TlvDq8ikWAM')   => api.post('/api/ai/tts/generate', { text, voice }).then(d),
   generateSummary: (contentId: string, audioType: string)            => api.post('/api/ai/audio/generate-from-content', { content_id: contentId, audio_type: audioType }).then(d),
   pollJob:         (jobId: string)                                   => api.get(`/api/ai/audio/status/${jobId}`).then(d),
 };

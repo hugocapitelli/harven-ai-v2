@@ -2,7 +2,7 @@
 id: POD-6
 epic: EPIC-PODCAST
 phase: 4
-status: Draft
+status: InReview
 severity: HIGH
 terminal: Backend & Infra
 complexity: low

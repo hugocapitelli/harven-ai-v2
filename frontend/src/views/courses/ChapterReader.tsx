@@ -1,6 +1,6 @@
-// @ts-nocheck
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import axios from 'axios';
 import { toast } from 'sonner';
 import ReactMarkdown from 'react-markdown';
 import DOMPurify from 'dompurify';
@@ -10,9 +10,11 @@ import {
   aiApi,
   chatSessionsApi,
   ttsApi,
+  userStatsApi,
 } from '../../services/api';
+import { useAuth } from '../../contexts/AuthContext';
 import { cn } from '../../lib/utils';
-import type { Content, Question, ChatMessage, UserRole } from '../../types';
+import type { Content, ContentType, Question, ChatMessage, UserRole } from '../../types';
 
 interface ChapterReaderProps {
   userRole?: UserRole;
@@ -24,17 +26,66 @@ type TtsStyle = 'podcast' | 'summary' | 'explanation';
 const MAX_INTERACTIONS = 20;
 const STUDY_SAVE_INTERVAL_MS = 5 * 60 * 1000; // 5 min
 
+// Keys are the NORMALIZED (lowercase) content types from the shared contract.
+// `normalizeType` collapses any legacy uppercase value onto these keys.
 const TYPE_BADGE: Record<string, string> = {
-  VIDEO: 'bg-harven-dark/10 text-harven-dark',
-  AUDIO: 'bg-harven-gold/10 text-harven-gold',
-  TEXT: 'bg-green-100 text-green-600',
+  video: 'bg-harven-dark/10 text-harven-dark',
+  audio: 'bg-harven-gold/10 text-harven-gold',
+  image: 'bg-blue-100 text-blue-600',
+  text: 'bg-green-100 text-green-600',
 };
+
+// Human-facing label per normalized type (badge text).
+const TYPE_LABEL: Record<string, string> = {
+  video: 'VIDEO',
+  audio: 'AUDIO',
+  image: 'IMAGEM',
+  text: 'TEXTO',
+  pdf: 'PDF',
+  summary: 'RESUMO',
+};
+
+// The contract already normalizes `type` to lowercase, but the union still admits
+// legacy uppercase literals (see types.ts). Fold everything to lowercase so the
+// render branches and badge lookups have a single canonical value to match on.
+function normalizeType(type: ContentType | undefined): string {
+  return (type ?? 'text').toString().toLowerCase();
+}
 
 const TTS_LABEL: Record<TtsStyle, { label: string; icon: string; desc: string }> = {
   podcast: { label: 'Podcast', icon: 'podcasts', desc: 'Conversacional, ~10 min' },
   summary: { label: 'Resumo', icon: 'summarize', desc: 'Pontos-chave, ~3 min' },
   explanation: { label: 'Explicacao', icon: 'record_voice_over', desc: 'Didatica, ~5 min' },
 };
+
+// ---------- TTS polling (TTSJOB-3 / TTSJOB-4) ----------
+//
+// Named budget instead of a magic loop-count: ~5 min total, polled every 3s,
+// with the FIRST check happening at t=0 (poll -> check -> sleep, not the
+// inverse). `maxAttempts` is derived from the budget so the two constants
+// never drift apart.
+const TTS_POLL_INTERVAL_MS = 3000;
+const TTS_POLL_BUDGET_MS = 5 * 60 * 1000; // ~5 min
+const TTS_POLL_MAX_ATTEMPTS = Math.ceil(TTS_POLL_BUDGET_MS / TTS_POLL_INTERVAL_MS);
+// A single 404/network/5xx blip (e.g. a redeploy mid-poll) must NOT collapse
+// the poller (bug #38/#39). Tolerate up to N CONSECUTIVE transient failures —
+// the counter resets on every 200 — before falling back.
+const TTS_MAX_TRANSIENT_RETRIES = 3;
+
+/** True for a 404, a network error (no response), or a 5xx — the failure
+ * modes a backend restart/redeploy produces mid-poll. A 4xx other than 404
+ * (e.g. 401/403) is NOT transient — the interceptor already redirects on 401,
+ * and 403 signals a real ownership problem, not a blip. */
+function isTransientPollError(err: unknown): boolean {
+  if (!axios.isAxiosError(err)) return false;
+  const status = err.response?.status;
+  if (status === undefined) return true; // network/timeout — no response at all
+  return status === 404 || status >= 500;
+}
+
+function isRateLimitError(err: unknown): boolean {
+  return axios.isAxiosError(err) && err.response?.status === 429;
+}
 
 // ---------- Helpers ----------
 
@@ -156,6 +207,7 @@ function TableOfContents({
 
 export default function ChapterReader({ userRole }: ChapterReaderProps) {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const { courseId, chapterId, contentId } = useParams<{
     courseId: string;
     chapterId: string;
@@ -164,6 +216,13 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
   const isInstructor = userRole === 'INSTRUCTOR' || userRole === 'ADMIN';
 
   const [content, setContent] = useState<Content | null>(null);
+  // Per-student completion is progress, NOT catalog state. This local flag reflects
+  // "this student has completed this content" for idempotent, non-reclickable UI.
+  // It is seeded from the catalog `completed` flag on load (best-effort) and set on
+  // a successful (or soft-success 503) completeContent call — we NEVER write it back
+  // to the shared catalog via contentsApi.update.
+  const [completed, setCompleted] = useState(false);
+  const [completing, setCompleting] = useState(false);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeView, setActiveView] = useState<ViewMode>('text');
@@ -221,20 +280,39 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
         ]);
         if (ctrl.signal.aborted) return;
         setContent(contentData);
+        // Seed the per-student completion badge from the catalog flag as a best-effort
+        // hint (idempotent UI on re-entry). Authoritative per-user progress lives in the
+        // progress table via completeContent; this only avoids a blank badge on load.
+        setCompleted(Boolean(contentData?.completed));
         setEditTitle(contentData?.title ?? '');
         setEditBody(contentData?.body ?? contentData?.extracted_text ?? '');
-        // Pre-populate TTS player if audio was previously generated
+        // Pre-populate TTS player if audio was previously generated.
+        // TTSJOB-3: `contents.audio_type` (migration 20260707000002) records WHICH
+        // style produced this `audio_url` — legacy rows predate the column and
+        // come back null/undefined, so they fall back to 'summary' (documented
+        // fallback in the migration's Dev Notes). Never hardcode the slot.
         if (contentData?.audio_url) {
           const apiBase = import.meta.env.VITE_API_URL || '';
           const fullUrl = contentData.audio_url.startsWith('/') ? `${apiBase}${contentData.audio_url}` : contentData.audio_url;
-          setTtsUrls((prev) => ({ ...prev, summary: fullUrl }));
+          const style: TtsStyle =
+            contentData.audio_type === 'podcast' || contentData.audio_type === 'explanation'
+              ? contentData.audio_type
+              : 'summary';
+          setTtsUrls((prev) => ({ ...prev, [style]: fullUrl }));
         }
         const rawQ = Array.isArray(questionsData) ? questionsData : [];
-        setQuestions(rawQ.map((item: Record<string, unknown>) => ({
-          ...item,
-          question: item.question || item.question_text || '',
-          expected_answer: item.expected_answer || '',
-        })));
+        setQuestions(
+          rawQ.map((raw): Question => {
+            const item = raw as Record<string, unknown>;
+            return {
+              ...item,
+              id: String(item.id ?? ''),
+              question: String(item.question ?? item.question_text ?? ''),
+              expected_answer:
+                item.expected_answer != null ? String(item.expected_answer) : '',
+            } as Question;
+          }),
+        );
       } catch {
         if (!ctrl.signal.aborted) {
           toast.error('Erro ao carregar conteudo');
@@ -366,6 +444,19 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
       if (typeof o.message === 'string') return o.message;
     }
     return 'Vamos explorar juntos. O que você pensa?';
+  };
+
+  // H3 (bug #21): closing the chat must fully reset local session state so the
+  // socratic question buttons re-enable and a fresh dialogue can start without a page
+  // reload. The buttons are gated by `selectedQuestion`; leaving it set after close
+  // left every button permanently disabled. This is the single teardown path.
+  const closeChat = () => {
+    setChatOpen(false);
+    setSelectedQuestion(null);
+    setSessionId(null);
+    setChatMessages([]);
+    setSessionStatus(null);
+    setChatInput('');
   };
 
   const startChat = async (questionText: string) => {
@@ -507,6 +598,28 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
 
   // ---- TTS ----
 
+  // Re-fetch the `content` row and, if `audio_url` is present, resolve as a
+  // SUCCESS via fallback (TTSJOB-3 AC3 / TTSJOB-4 AC2) instead of a terminal
+  // failure. Used both when the polling budget is exhausted and when 404s
+  // persist past the transient-tolerance window. Returns whether the
+  // fallback recovered an audio URL.
+  const resolveTtsViaContentFallback = async (style: TtsStyle): Promise<boolean> => {
+    if (!contentId) return false;
+    try {
+      const fresh = await contentsApi.get(contentId);
+      const rawUrl = fresh?.audio_url;
+      if (!rawUrl) return false;
+      const apiBase = import.meta.env.VITE_API_URL || '';
+      const fullUrl = rawUrl.startsWith('/') ? `${apiBase}${rawUrl}` : rawUrl;
+      setContent((c) => (c ? { ...c, audio_url: rawUrl, audio_type: fresh.audio_type } : c));
+      setTtsUrls((prev) => ({ ...prev, [style]: fullUrl }));
+      toast.success(`${TTS_LABEL[style].label} gerado`);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const handleGenerateTts = async (style: TtsStyle) => {
     if (!contentId) return;
     setGeneratingTts(style);
@@ -515,42 +628,125 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
       const jobId = startResult?.job_id;
       if (!jobId) { toast.error('Erro ao iniciar geracao'); return; }
 
-      // Poll for completion
       const apiBase = import.meta.env.VITE_API_URL || '';
-      for (let i = 0; i < 30; i++) { // max 90s (30 x 3s)
-        await new Promise((r) => setTimeout(r, 3000));
-        const status = await ttsApi.pollJob(jobId);
-        if (status?.status === 'done') {
-          const rawUrl = status.audio_url;
-          const fullUrl = rawUrl?.startsWith('/') ? `${apiBase}${rawUrl}` : rawUrl;
-          setTtsUrls((prev) => ({ ...prev, [style]: fullUrl }));
-          toast.success(`${TTS_LABEL[style].label} gerado`);
-          return;
+      let transientCount = 0;
+
+      // Poll-then-sleep (TTSJOB-3 AC1): the FIRST status check happens at
+      // t=0, before any wait — a job that finishes fast is picked up
+      // immediately instead of waiting a full interval for no reason.
+      for (let attempt = 0; attempt < TTS_POLL_MAX_ATTEMPTS; attempt++) {
+        try {
+          const status = await ttsApi.pollJob(jobId);
+          transientCount = 0; // any 200 resets the transient-failure window
+
+          if (status?.status === 'done') {
+            const rawUrl = status.audio_url;
+            const fullUrl = rawUrl?.startsWith('/') ? `${apiBase}${rawUrl}` : rawUrl;
+            setTtsUrls((prev) => ({ ...prev, [style]: fullUrl }));
+            toast.success(`${TTS_LABEL[style].label} gerado`);
+            return;
+          }
+          if (status?.status === 'error') {
+            // A REAL terminal failure from the backend still deserves one last
+            // chance at the content fallback — the job may have written
+            // audio_url before reporting `error` on a race.
+            if (await resolveTtsViaContentFallback(style)) return;
+            toast.error(status.detail || 'Erro na geracao de audio');
+            return;
+          }
+          // status === 'processing' (or unrecognized): keep polling.
+        } catch (err) {
+          if (isRateLimitError(err)) {
+            toast.error('Muitas geracoes de audio simultaneas — aguarde e tente novamente.');
+            return;
+          }
+          if (!isTransientPollError(err)) throw err; // real, non-transient error
+
+          transientCount += 1;
+          // #38/#39: a single 404/network/5xx blip (redeploy/restart, cold
+          // start, race between job creation and first read) must NOT
+          // collapse the poller. Tolerate up to TTS_MAX_TRANSIENT_RETRIES
+          // CONSECUTIVE misses before giving up on this job and moving to
+          // the content fallback.
+          if (transientCount > TTS_MAX_TRANSIENT_RETRIES) {
+            if (await resolveTtsViaContentFallback(style)) return;
+            toast.error('Erro ao consultar geracao de audio — tente novamente.');
+            return;
+          }
         }
-        if (status?.status === 'error') {
-          toast.error(status.detail || 'Erro na geracao de audio');
-          return;
-        }
+        await new Promise((r) => setTimeout(r, TTS_POLL_INTERVAL_MS));
       }
-      toast.error('Timeout — tente novamente');
-    } catch {
+
+      // Budget exhausted without a terminal status: the job may already have
+      // finished server-side even though polling never caught up — re-fetch
+      // `content` before declaring failure (TTSJOB-3 AC3).
+      if (await resolveTtsViaContentFallback(style)) return;
+      toast.error('Tempo esgotado — tente novamente em instantes.');
+    } catch (err) {
+      // The 429 concurrency cap is emitted ONLY by the START endpoint
+      // (ttsApi.generateSummary at line 627, backend routes_ai.py:1095) — its
+      // rejection lands HERE, in the outer catch, not in the poll loop (the
+      // status endpoint never returns 429). Surface the specific guidance
+      // instead of the generic failure toast.
+      if (isRateLimitError(err)) {
+        toast.error('Muitas geracoes de audio simultaneas — aguarde e tente novamente.');
+        return;
+      }
       toast.error('Erro ao gerar audio');
     } finally {
+      // #39: reset the loading state on EVERY exit path (success, real
+      // failure, timeout, network error, exception) so the button never
+      // stays stuck on "gerando".
       setGeneratingTts(null);
     }
   };
 
   // ---- Mark complete ----
+  //
+  // B2 (bug #24): completion is PER-STUDENT progress, not catalog state. We call
+  // userStatsApi.completeContent(user.id, courseId, contentId) — scoped to the
+  // authenticated user's id (from the auth session, never from props/mutable UI) —
+  // plus chatSessionsApi.complete(sessionId) to close any active socratic session.
+  // We NEVER call contentsApi.update({ completed }): that would contaminate the shared
+  // catalog for every student. A 503 (progress table absent) is treated as SOFT-SUCCESS:
+  // the visual completion proceeds and we log the graceful degradation for diagnosis.
 
   const markComplete = async () => {
-    if (!contentId) return;
+    if (!contentId || !courseId || !user?.id || completing || completed) return;
+    setCompleting(true);
     try {
-      await contentsApi.update(contentId, { completed: true });
+      await userStatsApi.completeContent(user.id, courseId, contentId);
+      setCompleted(true);
       toast.success('Conteudo marcado como concluido!');
-      setContent((prev) => (prev ? { ...prev, completed: true } : prev));
-    } catch {
-      toast.error('Erro ao marcar como concluido');
+    } catch (err) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 503) {
+        // Soft-success: optional progress/certificate tables are not provisioned.
+        // Complete visually and record the degradation instead of blocking the student.
+        console.warn(
+          '[ChapterReader] completeContent degraded gracefully (503, progress table absent) — treating as soft-success',
+        );
+        setCompleted(true);
+        toast.success('Conteudo marcado como concluido!');
+      } else {
+        toast.error('Erro ao marcar como concluido');
+        setCompleting(false);
+        return;
+      }
     }
+    // Close the associated chat session (best-effort — never blocks completion).
+    if (sessionId) {
+      try {
+        await chatSessionsApi.complete(sessionId);
+      } catch {
+        console.warn('[ChapterReader] chatSessionsApi.complete failed (non-blocking)');
+      }
+    }
+    setCompleting(false);
+    // NOTE (out of scope, documented follow-up): course-completion certificate
+    // emission (userStatsApi.issueCertificate) is intentionally NOT wired here.
+    // See docs/stories/epic-front/sf-3.md — course-completion detection is a
+    // separate follow-up; this handler closes per-content completion only.
   };
 
   // ---- Reprocess with AI ----
@@ -561,20 +757,13 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
     if (!contentId || !content?.body) return;
     setReprocessing(true);
     try {
-      const res = await fetch(
-        `${import.meta.env.VITE_API_URL || ''}/api/ai/reprocess-content`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${sessionStorage.getItem('access_token') ?? ''}`,
-          },
-          body: JSON.stringify({ content_id: contentId }),
-        },
-      );
-      if (!res.ok) throw new Error('Reprocess failed');
-      const data = await res.json();
-      if (data.body) {
+      // H4 (bug #23): route through the shared, authenticated axios instance
+      // (aiApi.reprocessContent → POST /api/ai/reprocess-content). The previous raw
+      // fetch read sessionStorage.getItem('access_token') — the WRONG key (the real
+      // session token lives under 'harven-access-token' and is injected by the axios
+      // interceptor), so the request reached the backend without a valid credential.
+      const data = await aiApi.reprocessContent(contentId) as { body?: string } | null;
+      if (data?.body) {
         setContent((prev) => (prev ? { ...prev, body: data.body } : prev));
         toast.success('Conteudo reprocessado com IA!');
       } else {
@@ -639,6 +828,9 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
   }
 
   const hasFile = Boolean(content.file_url);
+  // Canonical lowercase type for all render branches / badge lookups (contract is
+  // already normalized; this folds any residual legacy uppercase to be safe).
+  const normType = normalizeType(content.type);
 
   // UI mode guards
   const showInstructorUI = isInstructor && !studentView;
@@ -697,10 +889,10 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
             <span
               className={cn(
                 'text-[10px] font-bold px-2 py-0.5 rounded uppercase shrink-0',
-                TYPE_BADGE[content.type] ?? TYPE_BADGE.TEXT,
+                TYPE_BADGE[normType] ?? TYPE_BADGE.text,
               )}
             >
-              {content.type}
+              {TYPE_LABEL[normType] ?? normType.toUpperCase()}
             </span>
           </div>
 
@@ -759,7 +951,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                 </button>
 
                 {/* Edit mode */}
-                {content.type === 'TEXT' && (
+                {normType === 'text' && (
                   <button
                     onClick={() => setEditing(true)}
                     className="flex items-center gap-1 border border-harven-border bg-white hover:bg-harven-bg text-foreground font-bold px-3 py-2 rounded-lg text-xs uppercase tracking-widest transition-colors"
@@ -771,21 +963,23 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
               </>
             )}
 
-            {/* Concluir — prominent in student experience */}
-            {!content.completed && !editing && (
+            {/* Concluir — prominent in student experience. Idempotent, non-reclickable:
+                once completed (success or 503 soft-success) the button becomes a badge. */}
+            {!completed && !editing && (
               <button
                 onClick={markComplete}
+                disabled={completing}
                 className={cn(
-                  'bg-primary hover:bg-primary-dark text-harven-dark font-bold rounded-lg text-xs uppercase tracking-widest transition-colors',
+                  'bg-primary hover:bg-primary-dark text-harven-dark font-bold rounded-lg text-xs uppercase tracking-widest transition-colors disabled:opacity-50',
                   isStudentExperience
                     ? 'px-8 py-2.5 text-sm'
                     : 'px-4 py-2',
                 )}
               >
-                Concluir
+                {completing ? 'Concluindo...' : 'Concluir'}
               </button>
             )}
-            {content.completed && (
+            {completed && (
               <span className={cn(
                 'bg-green-100 text-green-700 font-bold rounded flex items-center gap-1',
                 isStudentExperience
@@ -818,7 +1012,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                 )}
 
                 {/* View toggle */}
-                {content.type === 'TEXT' && hasFile && !editing && (
+                {normType === 'text' && hasFile && !editing && (
                   <div className="flex bg-muted rounded-lg p-1 gap-1 w-fit">
                     <button
                       onClick={() => setActiveView('text')}
@@ -846,7 +1040,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                 )}
 
                 {/* Video */}
-                {content.type === 'VIDEO' && (
+                {normType === 'video' && (
                   <>
                     {content.file_url ? (
                       <video
@@ -866,7 +1060,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                 )}
 
                 {/* Audio */}
-                {content.type === 'AUDIO' && (
+                {normType === 'audio' && (
                   <div className="bg-white rounded-xl border border-harven-border p-6">
                     <div className="flex items-center gap-4 mb-4">
                       <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-harven-gold/10">
@@ -879,16 +1073,38 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                         <p className="font-medium truncate">{content.title}</p>
                       </div>
                     </div>
-                    {content.file_url ? (
-                      <audio controls className="w-full" src={content.file_url} preload="metadata" />
+                    {content.file_url || content.audio_url ? (
+                      <audio
+                        controls
+                        className="w-full"
+                        src={content.file_url || content.audio_url}
+                        preload="metadata"
+                      />
                     ) : (
                       <p className="text-sm text-muted-foreground">Audio indisponivel.</p>
                     )}
                   </div>
                 )}
 
+                {/* Image */}
+                {normType === 'image' && (
+                  <div className="bg-white rounded-xl border border-harven-border p-4">
+                    {content.file_url ? (
+                      <img
+                        src={content.file_url}
+                        alt={content.title}
+                        className="w-full rounded-xl object-contain"
+                      />
+                    ) : (
+                      <div className="aspect-video flex items-center justify-center bg-gray-100 text-muted-foreground rounded-xl">
+                        Imagem indisponivel
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Text — editing */}
-                {content.type === 'TEXT' && editing && (
+                {normType === 'text' && editing && (
                   <div
                     ref={editorRef}
                     contentEditable
@@ -906,15 +1122,17 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                 )}
 
                 {/* Text — HTML fallback (legacy content) */}
-                {content.type === 'TEXT' && !editing && activeView === 'text' && sanitizedHtml && !(content?.body || content?.extracted_text) && (
+                {normType === 'text' && !editing && activeView === 'text' && sanitizedHtml && !(content?.body || content?.extracted_text) && (
                   <article
                     className="bg-white rounded-xl border border-harven-border p-8 prose prose-sm max-w-none"
                     dangerouslySetInnerHTML={{ __html: htmlWithAnchors }}
                   />
                 )}
 
-                {/* Empty state */}
-                {!editing && activeView === 'text' && !sanitizedHtml && !(content?.body || content?.extracted_text) && (
+                {/* Empty state — only for text-like content (media types render their
+                    own player/fallback above, so no spurious "no text" notice there). */}
+                {(normType === 'text' || normType === 'pdf' || normType === 'summary') &&
+                  !editing && activeView === 'text' && !sanitizedHtml && !(content?.body || content?.extracted_text) && (
                   <div className="bg-white rounded-xl border border-harven-border p-16 text-center">
                     <span className="material-symbols-outlined text-5xl text-gray-300">
                       description
@@ -926,7 +1144,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                 )}
 
                 {/* Text — file view */}
-                {content.type === 'TEXT' && !editing && activeView === 'file' && hasFile && (
+                {normType === 'text' && !editing && activeView === 'file' && hasFile && (
                   <iframe
                     src={content.file_url}
                     className="w-full h-[600px] rounded-xl border border-harven-border bg-white"
@@ -1010,7 +1228,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
               <aside className="hidden lg:block">
                 <div className="sticky top-8 space-y-4">
                   {/* TOC */}
-                  {content.type === 'TEXT' && toc.length > 0 && !editing && (
+                  {normType === 'text' && toc.length > 0 && !editing && (
                     <TableOfContents items={toc} activeId={activeTocId} />
                   )}
 
@@ -1092,13 +1310,13 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                   {/* Status card */}
                   <div className={cn(
                     'rounded-xl p-4 text-white',
-                    content.completed ? 'bg-gradient-to-br from-green-700 to-green-900' : 'bg-harven-dark',
+                    completed ? 'bg-gradient-to-br from-green-700 to-green-900' : 'bg-harven-dark',
                   )}>
                     <p className="text-[10px] uppercase tracking-wider text-white/60">Status</p>
                     <p className="mt-1 font-display text-lg font-bold">
-                      {content.completed ? 'Concluido' : 'Em andamento'}
+                      {completed ? 'Concluido' : 'Em andamento'}
                     </p>
-                    {content.completed ? (
+                    {completed ? (
                       <div className="mt-2 flex items-center gap-2 text-sm text-green-200">
                         <span className="material-symbols-outlined text-[18px] fill-1">check_circle</span>
                         Bom trabalho!
@@ -1139,7 +1357,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                   {remainingInteractions}/{MAX_INTERACTIONS}
                 </span>
                 <button
-                  onClick={() => setChatOpen(false)}
+                  onClick={closeChat}
                   className="text-gray-400 hover:text-foreground"
                 >
                   <span className="material-symbols-outlined text-[20px]">close</span>

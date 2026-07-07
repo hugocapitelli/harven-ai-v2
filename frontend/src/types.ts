@@ -50,12 +50,31 @@ export interface Chapter {
   contents?: Content[];
 }
 
+// Content.type is NORMALIZED to lowercase by the shared API contract
+// (normalizeContent in services/api.ts): content_type/legacy uppercase values are
+// translated to the canonical lowercase set before reaching any component.
+// The union is lowercase-only ON PURPOSE: every consumer reads the normalized
+// contract, so comparisons against legacy UPPERCASE literals ('VIDEO'/'AUDIO'/'TEXT')
+// are dead code at runtime and MUST fail to type-check so tsc catches the regression.
+export type ContentType =
+  | 'text'
+  | 'video'
+  | 'audio'
+  | 'image'
+  | 'pdf'
+  | 'summary';
+
 export interface Content {
   id: string;
   title: string;
-  type: 'TEXT' | 'VIDEO' | 'AUDIO';
+  type: ContentType;
   body?: string;
   file_url?: string;
+  audio_url?: string;
+  // POD-6 (migration 20260707000002): which TTS style produced the current
+  // `audio_url` (podcast/summary/explanation). Legacy rows predate the column
+  // and come back `undefined`/`null` — callers fall back to 'summary'.
+  audio_type?: 'podcast' | 'summary' | 'explanation' | null;
   extracted_text?: string;
   completed?: boolean;
   completed_at?: string;

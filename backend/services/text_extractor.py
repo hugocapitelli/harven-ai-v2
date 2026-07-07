@@ -3,28 +3,86 @@ import logging
 import os
 import re
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List, Dict
 
 logger = logging.getLogger("harven")
 
+# Extensions that are explicitly known to be unsupported (no parser exists),
+# mapped to an actionable detail message. Checked before any parser dispatch
+# so we never attempt to parse a binary/legacy format with the wrong tool
+# (e.g. .doc through the python-docx/.docx parser).
+_UNSUPPORTED_EXTENSIONS: Dict[str, str] = {
+    ".doc": "Formato .doc não suportado — reenvie como .docx ou .pdf",
+}
 
-def extract_text(file_path: str, mime_type: str = "") -> Optional[str]:
-    """Extract text as Markdown from a document file."""
+
+@dataclass
+class ExtractionResult:
+    """Structured outcome of a text extraction attempt.
+
+    status:
+        - "ok": extraction succeeded and produced non-empty text.
+        - "empty": extraction ran without error but yielded no text
+          (e.g. a scanned PDF with no text layer).
+        - "unsupported": no parser exists for this file type.
+        - "failed": a parser ran and raised an exception.
+    """
+
+    status: str
+    text: Optional[str] = None
+    detail: Optional[str] = None
+
+
+def extract(file_path: str, mime_type: str = "") -> ExtractionResult:
+    """Extract text as Markdown from a document file, with a structured result.
+
+    Dispatches by extension/mime type to a dedicated parser branch. Every
+    parser call is wrapped so a corrupted/malformed file never propagates
+    an exception to the caller (mapped to status="failed" instead).
+    """
+    ext = Path(file_path).suffix.lower()
+
+    if ext in _UNSUPPORTED_EXTENSIONS:
+        detail = _UNSUPPORTED_EXTENSIONS[ext]
+        logger.warning(f"Unsupported file type for extraction: {ext} — {detail}")
+        return ExtractionResult(status="unsupported", detail=detail)
+
+    if ext == ".pdf" or "pdf" in mime_type:
+        parser = _extract_pdf_markdown
+    elif ext == ".docx" or "wordprocessingml.document" in mime_type:
+        parser = _extract_docx_markdown
+    elif ext == ".pptx" or "presentationml.presentation" in mime_type:
+        parser = _extract_pptx_markdown
+    elif ext in (".txt", ".md", ".html", ".htm", ".csv"):
+        parser = _extract_plain
+    else:
+        detail = f"Extensão '{ext or mime_type or 'desconhecida'}' não suportada para extração de texto"
+        logger.warning(f"Unsupported file type for extraction: {ext}")
+        return ExtractionResult(status="unsupported", detail=detail)
+
     try:
-        ext = Path(file_path).suffix.lower()
-        if ext == ".pdf" or "pdf" in mime_type:
-            return _extract_pdf_markdown(file_path)
-        elif ext in (".docx",) or "wordprocessingml" in mime_type:
-            return _extract_docx_markdown(file_path)
-        elif ext in (".txt", ".md", ".html", ".htm", ".csv"):
-            return _extract_plain(file_path)
-        else:
-            logger.warning(f"Unsupported file type for extraction: {ext}")
-            return None
+        text = parser(file_path)
     except Exception as e:
         logger.error(f"Text extraction failed for {file_path}: {e}")
-        return None
+        return ExtractionResult(status="failed", detail=str(e))
+
+    if not text or not text.strip():
+        return ExtractionResult(status="empty")
+
+    return ExtractionResult(status="ok", text=text)
+
+
+def extract_text(file_path: str, mime_type: str = "") -> Optional[str]:
+    """Legacy wrapper: extract text as Markdown, returning Optional[str].
+
+    Preserves the pre-existing contract for callers that predate the
+    structured ``extract()`` result (returns the text on success, ``None``
+    for empty/unsupported/failed).
+    """
+    result = extract(file_path, mime_type)
+    return result.text if result.status == "ok" else None
 
 
 def extract_text_from_bytes(data: bytes, filename: str, mime_type: str = "") -> Optional[str]:
@@ -195,3 +253,64 @@ def _extract_docx_markdown(path: str) -> Optional[str]:
 def _extract_plain(path: str) -> Optional[str]:
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         return f.read().strip() or None
+
+
+def _extract_pptx_markdown(path: str) -> Optional[str]:
+    """Extract text from a .pptx presentation, slide by slide, in order.
+
+    Walks every shape on every slide (including grouped shapes and tables)
+    and concatenates any text found, using a heading per slide so the
+    output stays consistent with the Markdown produced by the other
+    extractors.
+    """
+    from pptx import Presentation
+
+    prs = Presentation(path)
+    lines: List[str] = []
+
+    for slide_index, slide in enumerate(prs.slides, start=1):
+        slide_lines: List[str] = []
+        for shape in slide.shapes:
+            slide_lines.extend(_pptx_shape_text_lines(shape))
+
+        slide_text = [line for line in slide_lines if line.strip()]
+        if not slide_text:
+            continue
+
+        lines.append(f"## Slide {slide_index}")
+        lines.extend(slide_text)
+        lines.append("")
+
+    result = "\n".join(lines)
+    return result.strip() if result.strip() else None
+
+
+def _pptx_shape_text_lines(shape) -> List[str]:
+    """Recursively collect text lines from a python-pptx shape.
+
+    Handles plain text frames, tables, and grouped shapes (which nest
+    child shapes that must be walked the same way).
+    """
+    lines: List[str] = []
+
+    if shape.shape_type == 6:  # MSO_SHAPE_TYPE.GROUP
+        for sub_shape in shape.shapes:
+            lines.extend(_pptx_shape_text_lines(sub_shape))
+        return lines
+
+    if shape.has_text_frame:
+        for paragraph in shape.text_frame.paragraphs:
+            text = "".join(run.text for run in paragraph.runs).strip()
+            if not text:
+                text = paragraph.text.strip()
+            if text:
+                lines.append(text)
+
+    if shape.has_table:
+        for row in shape.table.rows:
+            cells = [cell.text.strip() for cell in row.cells]
+            row_text = " | ".join(c for c in cells if c)
+            if row_text:
+                lines.append(row_text)
+
+    return lines

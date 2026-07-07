@@ -140,7 +140,7 @@ export default function CourseEdit({ userRole: _userRole }: CourseEditProps) {
                     </div>
                     {expandedId === mod.id && mod.contents?.map(c => (
                       <div key={c.id} className="pl-8 py-1.5 flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground cursor-pointer" onClick={() => navigate(`/course/${courseId}/chapter/${mod.id}/content/${c.id}/revision`)}>
-                        <span className="material-symbols-outlined text-[14px]">{c.type === 'VIDEO' ? 'play_circle' : c.type === 'AUDIO' ? 'headphones' : 'article'}</span>
+                        <span className="material-symbols-outlined text-[14px]">{c.type === 'video' ? 'play_circle' : c.type === 'audio' ? 'headphones' : 'article'}</span>
                         <span className="truncate">{c.title}</span>
                       </div>
                     ))}
@@ -183,7 +183,7 @@ export default function CourseEdit({ userRole: _userRole }: CourseEditProps) {
                   <div className="space-y-2">
                     {mod.contents.map(c => (
                       <div key={c.id} className="flex items-center gap-3 p-3 rounded-lg hover:bg-harven-bg group">
-                        <span className="material-symbols-outlined text-gray-400 text-[18px]">{c.type === 'VIDEO' ? 'play_circle' : c.type === 'AUDIO' ? 'headphones' : 'article'}</span>
+                        <span className="material-symbols-outlined text-gray-400 text-[18px]">{c.type === 'video' ? 'play_circle' : c.type === 'audio' ? 'headphones' : 'article'}</span>
                         <span className="text-sm flex-1">{c.title}</span>
                         <button onClick={() => setDeleteTarget({ type: 'content', id: c.id })} className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 transition-opacity"><span className="material-symbols-outlined text-[16px]">delete</span></button>
                       </div>

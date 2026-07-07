@@ -3,7 +3,7 @@ import json
 import logging
 import os
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -22,6 +22,7 @@ from repositories.chat_repo import ChatRepository
 from schemas.ai import AIDetectionResponse
 from schemas.chat import ChatSessionCreate
 from services.ai_service import AIService, AIServiceError, sanitize_ai_error
+from services.scoring import compute_performance_score
 from services.integration_service import (
     IntegrationService,
     LTIValidationError,
@@ -600,14 +601,165 @@ class AudioGenerateRequest(BaseModel):
     voice: str = Field("21m00Tcm4TlvDq8ikWAM", max_length=50)
 
 
-# In-memory job store for async TTS generation
-_tts_jobs: dict[str, dict] = {}
+# ---------------------------------------------------------------------------
+# TTS job lifecycle — TTSJOB-2 (persisted, non-destructive, ownership-scoped).
+# ---------------------------------------------------------------------------
+# The job lifecycle is now persisted in the `tts_jobs` table (TTSJOB-1) instead
+# of a process-local dict (bug #34/#58/#59/#60): jobs survive a backend restart,
+# ``audio_job_status`` reads are non-destructive (no pop), ownership is enforced
+# on every read (cross-user -> 404, never a leaked row), and terminal jobs are
+# swept by TTL instead of accumulating forever.
+#
+# Concurrency knobs (POD-4, bug #35): a soft in-process lock plus a cap on
+# active jobs per user. The lock is process-local (single-worker deploy, see
+# CLAUDE.md deploy notes) — it prevents two near-simultaneous submits in THIS
+# process from racing past the dedup check before either has written its
+# `processing` row; it does not need to be distributed for that guarantee.
+_TTS_DISPATCH_LOCK = None  # lazily created — see _dispatch_lock()
+
+# Max wall-clock time a synthesis job may run before it is forced into `error`
+# instead of being left in `processing` forever (POD-4 timeout requirement).
+TTS_JOB_TIMEOUT_SECONDS = 600  # 10 minutes
+
+# Max number of `processing` jobs a single user may have in flight at once.
+TTS_MAX_ACTIVE_JOBS_PER_USER = 2
+
+# TTL for terminal (`done`/`error`) jobs before they are swept from `tts_jobs`.
+# Set far longer than the frontend's ~90s polling window, so a legitimate poll
+# never races the sweep; a swept job_id simply 404s on `audio_job_status`
+# (``contents.audio_url``/``audio_type`` — persisted independently on `done`,
+# see ``_persist_audio_url_with_retry`` — remains the durable source of truth
+# for the audio itself regardless of whether the job row still exists).
+TTS_JOB_TTL = timedelta(hours=24)
+
+# ElevenLabs' documented per-request character ceiling. Text longer than this is
+# chunked (POD-2 chunk-and-concatenate) rather than silently truncated.
+TTS_MAX_CHARS_PER_CALL = 4500
+
+
+def _dispatch_lock():
+    """Lazily create the process-local dispatch lock (import-time-safe)."""
+    global _TTS_DISPATCH_LOCK
+    if _TTS_DISPATCH_LOCK is None:
+        import threading
+        _TTS_DISPATCH_LOCK = threading.Lock()
+    return _TTS_DISPATCH_LOCK
+
+
+def _chunk_text_for_tts(text: str, max_chars: int = TTS_MAX_CHARS_PER_CALL) -> List[str]:
+    """Split ``text`` into <= ``max_chars`` chunks, cutting on sentence/paragraph
+    boundaries when possible so no chunk splits mid-word.
+
+    Prefers ``services.ai_service.chunk_text`` (POD-1's shared helper) when it is
+    available, so both TTS entry points converge on the SAME chunking logic and
+    never drift. Falls back to a local, dependency-free splitter (below) when
+    that helper has not landed yet or fails to import — this route module is
+    never blocked on POD-1/POD-2 shipping first.
+    """
+    try:
+        from services.ai_service import chunk_text as _shared_chunk_text  # type: ignore
+        return _shared_chunk_text(text, max_chars)
+    except ImportError:
+        pass
+
+    # Local fallback contract mirrors the shared helper's: empty/whitespace-only
+    # input carries nothing to narrate -> no chunks (never a crash, never a
+    # single spurious empty synthesis call).
+    if not text or not text.strip():
+        return []
+    if len(text) <= max_chars:
+        return [text]
+
+    chunks: List[str] = []
+    remaining = text
+    while len(remaining) > max_chars:
+        window = remaining[:max_chars]
+        # Prefer breaking on a paragraph, then sentence, then whitespace boundary
+        # so words are never split mid-token.
+        split_at = max(
+            window.rfind("\n\n"),
+            window.rfind(". "),
+            window.rfind(" "),
+        )
+        if split_at <= 0:
+            split_at = max_chars
+        else:
+            split_at += 1  # keep the boundary character with the completed chunk
+        chunks.append(remaining[:split_at].rstrip())
+        remaining = remaining[split_at:].lstrip()
+    if remaining:
+        chunks.append(remaining)
+    return [c for c in chunks if c] or [text[:max_chars]]
+
+
+def _synthesize_mp3_chunks(el_client, chunks: List[str], voice_id: str) -> bytes:
+    """Synthesize each chunk via ElevenLabs and concatenate the resulting MP3
+    bytes in order into a single buffer.
+
+    Any chunk failing to synthesize aborts the WHOLE job (raises) rather than
+    persisting a partial/truncated MP3 (POD-2 AC: no silent partial audio).
+    Binary concatenation of MP3 frames produced with the same encoder/model/
+    output_format (as here — every chunk uses identical synthesis params) plays
+    back as one continuous stream, matching POD-1's validated approach.
+    """
+    parts: List[bytes] = []
+    for idx, chunk in enumerate(chunks):
+        try:
+            audio_generator = el_client.text_to_speech.convert(
+                text=chunk,
+                voice_id=voice_id,
+                model_id="eleven_multilingual_v2",
+                output_format="mp3_44100_128",
+            )
+            parts.append(b"".join(audio_generator))
+        except Exception as exc:
+            raise RuntimeError(
+                f"Falha na sintese do trecho {idx + 1}/{len(chunks)}: {exc}"
+            ) from exc
+    return b"".join(parts)
+
+
+def _persist_audio_url_with_retry(
+    sb, content_id: str, audio_url: str, audio_type: str, attempts: int = 3
+) -> bool:
+    """Persist ``contents.audio_url``/``audio_type`` with retry; return whether it
+    actually landed (POD-3/POD-4 bug #35 — no more silent 'done' on a failed
+    UPDATE). Retries are synchronous/blocking — this already runs off the event
+    loop (background thread) — with no sleep between attempts by default, which
+    is sufficient for the transient-network-blip case this guards against
+    without adding latency for the common (single-attempt-succeeds) path.
+    """
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, attempts + 1):
+        try:
+            res = (
+                sb.table("contents")
+                .update({"audio_url": audio_url, "audio_type": audio_type})
+                .eq("id", content_id)
+                .execute()
+            )
+            if getattr(res, "data", None):
+                return True
+            # Empty data with no exception: the row may not exist (deleted
+            # content) — treat as a non-retryable failure, but still honest.
+            last_exc = RuntimeError("UPDATE returned no rows")
+        except Exception as exc:  # pragma: no cover - defensive, exercised via mocks
+            last_exc = exc
+            logger.warning(
+                "persist_audio_url attempt %d/%d failed for content_id=%s: %s",
+                attempt, attempts, content_id, exc,
+            )
+    logger.error(
+        "persist_audio_url: all %d attempts FAILED for content_id=%s audio_url=%s: %s",
+        attempts, content_id, audio_url, last_exc,
+    )
+    return False
 
 
 def _run_tts_job(job_id: str, content_id: str, content_text: str, audio_type: str, voice_id: str, upload_dir: str, supabase_url: str, supabase_key: str, user_id: Optional[str] = None):
-    """Background TTS generation — runs in a thread, updates _tts_jobs.
+    """Background TTS generation — runs in a thread, persists lifecycle to `tts_jobs`.
 
-    TKN-5 (bug #12): the two paid AI steps of this pipeline are now billed to the
+    TKN-5 (bug #12): the two paid AI steps of this pipeline are billed to the
     INITIATOR's daily ledger via the unified TKN-3 tracker:
 
     * the LLM (script/summary/explanation) — ``result.usage.total_tokens``;
@@ -616,29 +768,47 @@ def _run_tts_job(job_id: str, content_id: str, content_text: str, audio_type: st
       (KISS: no provider column in the schema; the provider is disambiguated in the
       structured log rather than the ledger).
 
+    TTSJOB-2 (bug #34/#58/#59/#60): the job's lifecycle row lives in `tts_jobs`
+    (via ``TtsJobRepository``), not a process dict — every terminal transition
+    below is a DB ``UPDATE``, so a restart never strands the poller and status
+    reads never need to mutate/pop anything.
+
+    POD-2/POD-3 (bug #8/#33/#34): the narration text is chunked (never truncated)
+    and synthesized/concatenated as one MP3; the ``done`` status is only ever
+    reached after the audio_url UPDATE actually lands — a persistence failure
+    (even after retries) is surfaced as ``error``, never a silent phantom-done.
+
     The async event loop's ``get_supabase`` dependency does not exist inside this
     thread, so a SYNC Supabase ``Client`` is recreated here from the
-    ``supabase_url``/``supabase_key`` already handed to the job and used as ``db``
-    for both increments. Tracking failures are LOGGED with full context (user_id,
-    content_id, stage) at ERROR level and never allowed to mask the happy path.
+    ``supabase_url``/``supabase_key`` already handed to the job and used both for
+    ledger writes and for the ``tts_jobs``/``contents`` persistence below.
     """
+    from repositories.tts_job_repo import TtsJobRepository
+    from supabase import create_client
+
+    db = None
+    try:
+        db = create_client(supabase_url, supabase_key)
+    except Exception as exc:  # pragma: no cover - defensive: never block audio
+        logger.error(
+            "TTS job %s: failed to create Supabase client "
+            "(user_id=%s, content_id=%s) — lifecycle/ledger will not be persisted: %s",
+            job_id, user_id, content_id, exc,
+        )
+
+    job_repo = TtsJobRepository(db) if db is not None else None
+
+    def _finish_error(message: str) -> None:
+        logger.error("TTS job %s failed: %s", job_id, message)
+        if job_repo is not None:
+            try:
+                job_repo.mark_error(job_id, message)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.error("TTS job %s: failed to persist error state: %s", job_id, exc)
+
     try:
         svc = get_ai_service()
         tts_input = content_text
-
-        # Recreate a SYNC Supabase client for ledger writes — the request-scoped
-        # ``get_supabase`` dependency is unavailable off the event loop. ``db`` may
-        # stay None if creation fails; the tracker fail-opens on a None db.
-        from supabase import create_client
-        db = None
-        try:
-            db = create_client(supabase_url, supabase_key)
-        except Exception as exc:  # pragma: no cover - defensive: never block audio
-            logger.error(
-                "TTS job %s: failed to create Supabase client for ledger "
-                "(user_id=%s, content_id=%s) — usage will not be persisted: %s",
-                job_id, user_id, content_id, exc,
-            )
 
         cfg = get_settings()
 
@@ -670,6 +840,16 @@ def _run_tts_job(job_id: str, content_id: str, content_text: str, audio_type: st
                 max_tokens=1000,
             )
             tts_input = llm_result.choices[0].message.content or content_text
+        elif audio_type == "podcast" and sync_client:
+            # POD-2: the podcast script is generated by AIService.generate_podcast_script
+            # (owns HTML stripping + chunk-and-summarize for long chapters via its own
+            # sync_client calls). It is a plain synchronous method — no ``llm_result``/
+            # ``usage`` object is produced here, so token tracking for this step is done
+            # INSIDE generate_podcast_script's own sync_client calls and is not visible
+            # to the ``llm_result is not None`` tracking block below (unchanged for
+            # summary/explanation). content_text is passed raw (HTML); strip_html runs
+            # inside generate_podcast_script itself.
+            tts_input = svc.generate_podcast_script(content_text, chapter_title="") or content_text
 
         # Track the LLM (script) cost to the INITIATOR's ledger. Failures here are
         # LOGGED at ERROR with stage context — never swallowed, never masking audio.
@@ -690,17 +870,27 @@ def _run_tts_job(job_id: str, content_id: str, content_text: str, audio_type: st
                     job_id, user_id, content_id, exc, exc_info=True,
                 )
 
-        tts_input = tts_input[:5000]
-
+        # POD-2: chunk-and-concatenate — never truncate. Only cap at 5000 chars
+        # here for the non-podcast (summary/explanation) styles when chunking is
+        # unavailable would still be a behavior change, so we ALWAYS route through
+        # the chunker; texts under the chunk size resolve to a single chunk,
+        # preserving prior behavior byte-for-byte for short inputs.
         from elevenlabs.client import ElevenLabs as EL
         el_client = EL(api_key=ELEVENLABS_API_KEY)
-        audio_generator = el_client.text_to_speech.convert(
-            text=tts_input,
-            voice_id=voice_id,
-            model_id="eleven_multilingual_v2",
-            output_format="mp3_44100_128",
-        )
-        audio_bytes = b"".join(audio_generator)
+
+        chunks = _chunk_text_for_tts(tts_input)
+        if not chunks:
+            # Defensive: the route's own pre-check already rejects empty
+            # ``content_text`` before dispatch, but the LLM step above could in
+            # theory hand back an empty/whitespace-only script. Fail loudly
+            # rather than persist a silent 0-byte "done" audio.
+            _finish_error("Texto vazio apos processamento — nada para sintetizar.")
+            return
+        try:
+            audio_bytes = _synthesize_mp3_chunks(el_client, chunks, voice_id)
+        except Exception as exc:
+            _finish_error(str(exc)[:500])
+            return
 
         # Track the ElevenLabs synthesis cost as a char-equivalent (KISS: summed
         # into the same ``tokens_used`` counter), gated by the feature flag. Provider
@@ -735,25 +925,116 @@ def _run_tts_job(job_id: str, content_id: str, content_text: str, audio_type: st
         word_count = len(tts_input.split())
         duration_minutes = max(1, round(word_count / 150))
 
-        # Persist to DB (reuse the ledger client recreated at the top of the job).
-        try:
-            sb = db if db is not None else create_client(supabase_url, supabase_key)
-            sb.table("contents").update({"audio_url": audio_url}).eq("id", content_id).execute()
-        except Exception as e:
-            logger.warning(f"Failed to persist audio_url: {e}")
+        # POD-3/bug #34: persistence is AUTHORITATIVE. `done` is only ever
+        # reached when the UPDATE of contents.audio_url/audio_type actually
+        # lands (with retries) — a persistence failure becomes `error`, never a
+        # phantom `done` pointing at audio the read path can never find again.
+        sb = db if db is not None else _safe_create_client(supabase_url, supabase_key)
+        if sb is None:
+            _finish_error("Falha ao conectar ao banco para persistir o audio gerado.")
+            return
 
-        _tts_jobs[job_id] = {
-            "status": "done",
-            "audio_url": audio_url,
-            "duration_estimate": f"~{duration_minutes} min",
-            "audio_type": audio_type,
-            "voice": voice_id,
-            "provider": "elevenlabs",
-            "size_bytes": len(audio_bytes),
-        }
+        persisted = _persist_audio_url_with_retry(sb, content_id, audio_url, audio_type)
+        if not persisted:
+            _finish_error(
+                "Audio sintetizado, mas falha ao persistir audio_url apos varias tentativas."
+            )
+            return
+
+        if job_repo is not None:
+            try:
+                job_repo.mark_done(job_id, audio_url, f"~{duration_minutes} min")
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.error("TTS job %s: failed to persist done state: %s", job_id, exc)
     except Exception as e:
-        logger.error(f"TTS job {job_id} failed: {e}", exc_info=True)
-        _tts_jobs[job_id] = {"status": "error", "detail": str(e)[:200]}
+        _finish_error(str(e)[:200])
+
+
+def _safe_create_client(supabase_url: str, supabase_key: str):
+    """``supabase.create_client`` guarded against connection-time exceptions."""
+    try:
+        from supabase import create_client
+        return create_client(supabase_url, supabase_key)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error("Failed to create Supabase client for audio_url persistence: %s", exc)
+        return None
+
+
+def _run_tts_job_with_timeout(
+    job_id: str,
+    content_id: str,
+    content_text: str,
+    audio_type: str,
+    voice_id: str,
+    upload_dir: str,
+    supabase_url: str,
+    supabase_key: str,
+    user_id: Optional[str] = None,
+) -> None:
+    """Wrapper enforcing ``TTS_JOB_TIMEOUT_SECONDS`` on ``_run_tts_job``.
+
+    Runs the real job in a daemon sub-thread and joins with a timeout. If the
+    job does not finish in time, the job row is force-marked ``error`` (POD-4:
+    a stuck external call must not leave the row in `processing` forever). The
+    underlying worker thread is a daemon and is abandoned — Python has no safe
+    preemptive thread-kill — but the row is corrected so the poller stops
+    waiting, and the process is not blocked from serving other requests.
+
+    Mirrors ``_run_tts_job``'s full (keyword-explicit) signature so the timeout
+    boundary can never silently drop/misalign an argument.
+    """
+    import threading
+
+    worker = threading.Thread(
+        target=_run_tts_job,
+        kwargs=dict(
+            job_id=job_id,
+            content_id=content_id,
+            content_text=content_text,
+            audio_type=audio_type,
+            voice_id=voice_id,
+            upload_dir=upload_dir,
+            supabase_url=supabase_url,
+            supabase_key=supabase_key,
+            user_id=user_id,
+        ),
+        daemon=True,
+    )
+    worker.start()
+    worker.join(timeout=TTS_JOB_TIMEOUT_SECONDS)
+
+    if worker.is_alive():
+        logger.error("TTS job %s exceeded %ds timeout — marking error.", job_id, TTS_JOB_TIMEOUT_SECONDS)
+        try:
+            from repositories.tts_job_repo import TtsJobRepository
+            sb = _safe_create_client(supabase_url, supabase_key) if supabase_url and supabase_key else None
+            if sb is not None:
+                TtsJobRepository(sb).mark_error(job_id, "Tempo limite excedido na geracao de audio.")
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("TTS job %s: failed to persist timeout error: %s", job_id, exc)
+
+
+# Sweep-on-access is deliberately probabilistic (not on every poll): the
+# frontend polls a single in-flight job every few seconds, so gating each of
+# those requests on a full terminal-rows scan would add needless latency to
+# the hot path. A ~1-in-20 sample keeps `tts_jobs` bounded without that cost.
+_TTS_SWEEP_SAMPLE_RATE = 20
+_tts_sweep_counter = 0
+
+
+def _maybe_sweep_expired_jobs(job_repo) -> None:
+    """Best-effort, sampled TTL sweep of terminal `tts_jobs` rows (#59).
+
+    Never raises — a sweep failure must not turn a status poll into a 500.
+    """
+    global _tts_sweep_counter
+    _tts_sweep_counter += 1
+    if _tts_sweep_counter % _TTS_SWEEP_SAMPLE_RATE != 0:
+        return
+    try:
+        job_repo.sweep_expired(TTS_JOB_TTL)
+    except Exception as exc:  # pragma: no cover - defensive, best-effort
+        logger.warning("TTS job TTL sweep failed (non-fatal): %s", exc)
 
 
 @router.post("/api/ai/audio/generate-from-content", tags=["AI - TTS"])
@@ -763,11 +1044,18 @@ async def audio_generate_from_content(
     storage: StorageService = Depends(get_storage_service),
     client: Client = Depends(get_supabase),
 ):
-    """Start async audio generation. Returns job_id for polling."""
+    """Start async audio generation. Returns job_id for polling.
+
+    TTSJOB-2/POD-4: seeds a persisted `processing` row (never a process dict),
+    deduplicates concurrent submits for the same (content_id, audio_type), and
+    caps the number of jobs a single user may have in flight.
+    """
     if not ELEVENLABS_API_KEY:
         raise HTTPException(status_code=503, detail="Audio indisponivel: ELEVENLABS_API_KEY nao configurada.")
 
     from repositories import ContentRepository
+    from repositories.tts_job_repo import TtsJobRepository
+
     content_repo = ContentRepository(client)
     content_record = content_repo.get_by_id(body.content_id)
     if not content_record:
@@ -790,14 +1078,40 @@ async def audio_generate_from_content(
     except AIServiceError as e:
         raise HTTPException(status_code=503, detail=sanitize_ai_error(e))
 
-    voice_id = body.voice if body.voice in ELEVENLABS_VOICES else "21m00Tcm4TlvDq8ikWAM"
-    job_id = uuid4().hex
-    _tts_jobs[job_id] = {"status": "processing"}
+    job_repo = TtsJobRepository(client)
+
+    # POD-4: dedup by (content_id, audio_type) — a different audio_type for the
+    # SAME content is NOT blocked (each style gets its own job). The check + seed
+    # is guarded by a process-local lock so two near-simultaneous submits in this
+    # worker cannot both pass the "no active job" check before either writes its
+    # row (this deploy is single-worker — see CLAUDE.md — so a process-local lock
+    # is sufficient; it is not meant to replace a DB-level uniqueness guarantee).
+    with _dispatch_lock():
+        active = await run_in_threadpool(
+            job_repo.get_active_for_content, body.content_id, body.audio_type, user_id
+        )
+        if active is not None:
+            return {"job_id": active["id"], "status": "processing"}
+
+        # POD-4: cap concurrent in-flight jobs per user — a user way over their
+        # limit is barred with a clear 429 instead of spawning unbounded threads.
+        active_count = await run_in_threadpool(job_repo.count_active_for_user, user_id)
+        if active_count >= TTS_MAX_ACTIVE_JOBS_PER_USER:
+            raise HTTPException(
+                status_code=429,
+                detail=f"Limite de {TTS_MAX_ACTIVE_JOBS_PER_USER} audios em geracao simultanea atingido. Aguarde a conclusao de um job em andamento.",
+            )
+
+        voice_id = body.voice if body.voice in ELEVENLABS_VOICES else "21m00Tcm4TlvDq8ikWAM"
+        job_id = uuid4().hex
+        await run_in_threadpool(
+            job_repo.seed_processing, job_id, body.content_id, user_id, body.audio_type
+        )
 
     cfg = get_settings()
     import threading
     t = threading.Thread(
-        target=_run_tts_job,
+        target=_run_tts_job_with_timeout,
         args=(job_id, body.content_id, content_text, body.audio_type, voice_id,
               str(storage.base_dir), cfg.SUPABASE_URL, cfg.SUPABASE_KEY, user_id),
         daemon=True,
@@ -808,15 +1122,58 @@ async def audio_generate_from_content(
 
 
 @router.get("/api/ai/audio/status/{job_id}", tags=["AI - TTS"])
-async def audio_job_status(job_id: str, current_user: dict = Depends(get_current_user)):
-    """Poll TTS job status. Returns processing/done/error."""
-    job = _tts_jobs.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job nao encontrado")
-    # Clean up completed jobs after returning result
-    if job["status"] in ("done", "error"):
-        _tts_jobs.pop(job_id, None)
-    return job
+async def audio_job_status(
+    job_id: str,
+    current_user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
+):
+    """Poll TTS job status. Returns processing/done/error.
+
+    TTSJOB-2 (bug #58/#59/#60): reads the persisted `tts_jobs` row WITHOUT any
+    pop/delete — two consecutive polls after `done` return the same payload.
+    Ownership is enforced via ``TtsJobRepository`` (which never filters by
+    ``job_id`` alone), so a cross-user actor gets 404, never another user's job.
+    """
+    from repositories.tts_job_repo import TtsJobRepository
+
+    job_repo = TtsJobRepository(client)
+    # #59: TTL sweep, check-on-access — cheap and best-effort. Only terminal
+    # (`done`/`error`) rows are ever candidates (enforced inside sweep_expired
+    # itself); a sweep failure never blocks the status read.
+    await run_in_threadpool(_maybe_sweep_expired_jobs, job_repo)
+    job = await run_in_threadpool(job_repo.get_by_id, job_id)
+
+    if job is not None:
+        # IDOR guard: a job row exists but belongs to someone else -> 404 (never
+        # leak existence/content of another user's job).
+        if str(job.get("user_id")) != str(current_user["id"]):
+            raise HTTPException(status_code=404, detail="Job nao encontrado")
+        return _tts_job_response(job)
+
+    # Fallback (TTSJOB-2 AC): the job row is gone (swept by TTL, or the poller
+    # is retrying an id from before persistence landed). We cannot recover the
+    # job's content_id once the row itself is gone, so we cannot re-derive
+    # ``contents.audio_url`` for it here — a genuinely-unknown job_id (never
+    # existed, wrong id, or already swept) is a straightforward 404. Callers
+    # polling a still-fresh job never hit this branch: `done`/`error` rows are
+    # only removed after ``TTS_JOB_TTL`` (24h), far longer than the frontend's
+    # ~90s polling window.
+    raise HTTPException(status_code=404, detail="Job nao encontrado")
+
+
+def _tts_job_response(job: dict) -> dict:
+    """Shape a persisted `tts_jobs` row into the poller's expected payload —
+    same field names the dict-based implementation returned, so the frontend
+    contract is unchanged."""
+    status = job.get("status", "processing")
+    payload: Dict[str, Any] = {"status": status}
+    if status == "done":
+        payload["audio_url"] = job.get("audio_url")
+        payload["duration_estimate"] = job.get("duration_estimate")
+        payload["audio_type"] = job.get("audio_type")
+    elif status == "error":
+        payload["detail"] = job.get("error") or "Falha na geracao de audio."
+    return payload
 
 
 class ReprocessContentRequest(BaseModel):
@@ -1148,11 +1505,16 @@ async def get_session_by_content(
     client: Client = Depends(get_supabase),
     current_user: dict = Depends(get_current_user),
 ):
+    # DATA-GAM-3 guard: SEC-CHAT-3 lets a completed session coexist with a fresh
+    # "new attempt" row for the same (content_id, user_id), so this pair is NOT
+    # guaranteed unique. A bare ``.maybe_single()`` would 500 on >1 row; order by
+    # newest and take one so the caller reliably gets the most recent session.
+    # (This is only the cheap guard; the full status machine is DATA-GAM-4.)
     result = client.table("chat_sessions").select("*").eq(
         "content_id", content_id
     ).eq(
         "user_id", current_user["id"]
-    ).maybe_single().execute()
+    ).order("created_at", desc=True).limit(1).maybe_single().execute()
 
     session = result.data
     if not session:
@@ -1193,15 +1555,39 @@ async def complete_chat_session(
     )
 
     # Idempotency: a 2nd complete on an already-completed session is a 200 no-op —
-    # no redundant write is issued.
+    # no redundant write is issued. Because the score is computed and persisted ONLY
+    # on this first active->completed transition (below), a re-complete never
+    # recomputes it (DATA-GAM-3 AC: score written exactly once; DATA-GAM-4 compat).
     if session.get("status") == "completed":
         return session
 
+    # DATA-GAM-3: additive hook on the completion edge. Load the turns persisted by
+    # TPP-4, compute the gamification/progress ``performance_score`` from them, and
+    # persist it together with the status flip — once, on this transition only.
+    # The computation is best-effort: any failure leaves ``performance_score`` NULL
+    # and NEVER blocks completion (completion is the primary op; the score is
+    # additive). ``None`` (insufficient signal) is left as NULL, not forced to 0, so
+    # dashboard averages are not polluted with false zeros. The gradebook (official
+    # grade) does not read this field and is unaffected.
+    update_payload: Dict[str, Any] = {"status": "completed"}
+    try:
+        turns = await run_in_threadpool(
+            ChatRepository(client).get_session_messages, session_id
+        )
+        score = compute_performance_score(turns)
+        if score is not None:
+            update_payload["performance_score"] = score
+    except Exception as exc:  # pragma: no cover - score is additive, never blocking
+        logger.warning(
+            "complete_chat_session: performance_score computation failed (%s): %s",
+            session_id, exc,
+        )
+
     updated = client.table("chat_sessions").update(
-        {"status": "completed"}
+        update_payload
     ).eq("id", session_id).execute()
 
-    return updated.data[0] if updated.data else {"id": session_id, "status": "completed"}
+    return updated.data[0] if updated.data else {"id": session_id, **update_payload}
 
 
 @router.post("/chat-sessions/{session_id}/export-moodle", tags=["Chat Sessions"])

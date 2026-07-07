@@ -124,6 +124,12 @@ export default function ContentCreation() {
     return 'insert_drive_file';
   };
 
+  const EXTRACTION_WARNING_MESSAGES: Record<string, string> = {
+    empty: 'não foi possível extrair texto do arquivo (documento pode estar vazio ou ser baseado em imagens)',
+    unsupported: 'formato de arquivo não suportado para extração de texto',
+    failed: 'falha ao extrair o texto do arquivo',
+  };
+
   const handleUpload = async () => {
     if (!files.length || !chapterId) return;
     setUploading(true);
@@ -136,12 +142,26 @@ export default function ContentCreation() {
         const result = await contentsApi.uploadFile(chapterId, f, setUploadProgress);
         const cId = result?.id ?? result?.content_id ?? result?.data?.id;
         if (cId) ids.push(cId);
+
+        const extractionStatus = result?.extraction_status;
+        if (extractionStatus && extractionStatus !== 'ok') {
+          const reason =
+            EXTRACTION_WARNING_MESSAGES[extractionStatus] ||
+            result?.extraction_detail ||
+            'motivo desconhecido';
+          toast.warning(
+            `"${f.name}" foi enviado, mas o texto não pôde ser extraído automaticamente: ${reason}. Você pode completar o conteúdo manualmente.`,
+          );
+        }
       }
       setUploadedIds(ids);
       setUploadedContentId(ids[0] ?? null);
       setStep(2);
     } catch (err) {
       console.error('Upload failed', err);
+      const axErr = err as { response?: { data?: { detail?: string } } };
+      const detail = axErr?.response?.data?.detail;
+      toast.error(detail || 'Erro ao enviar o arquivo. Tente novamente.');
     } finally {
       setUploading(false);
       setUploadingIdx(-1);

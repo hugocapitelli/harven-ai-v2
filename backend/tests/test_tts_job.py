@@ -1,4 +1,5 @@
-"""ASYNC-AI-3 — coverage of the TTS background job sync-client coupling.
+"""ASYNC-AI-3 / TTSJOB-2 — coverage of the TTS background job sync-client
+coupling AND the persisted job lifecycle.
 
 ``_run_tts_job`` (routes_ai.py) runs in a ``threading.Thread`` OFF the event loop.
 After ASYNC-AI-1, ``svc.client`` is ``AsyncOpenAI`` and must NOT be used there; the
@@ -6,7 +7,8 @@ job must use ``svc.sync_client`` (synchronous ``OpenAI``) for the summary/explan
 LLM step. This module proves:
 
 * The job reaches ``status == 'done'`` for ``audio_type`` ∈ {summary, explanation,
-  podcast}, writes ``contents.audio_url``, and raises NO await/coroutine error.
+  podcast}, persists the row in ``tts_jobs`` (TTSJOB-2) with ``audio_url``, writes
+  ``contents.audio_url``/``audio_type`` (POD-6), and raises NO await/coroutine error.
 * It calls the SYNC client (recorded on the fake), never the async client.
 * Regression guard: if the job were (wrongly) handed an AsyncOpenAI for the LLM
   step, its synchronous ``.create(...)`` returns a coroutine and the summary path
@@ -22,12 +24,18 @@ import types
 import pytest
 
 import routes_ai
-from fakes import FakeAsyncOpenAI, FakeSyncOpenAI, _FakeChatCompletion
+from fakes import FakeAsyncOpenAI, FakeSupabaseClient, FakeSyncOpenAI, _FakeChatCompletion
+from repositories.tts_job_repo import TtsJobRepository
 from services.ai_service import AIService
+
+USER_ID = "user-1"
 
 
 # ---------------------------------------------------------------------------
-# Fakes for ElevenLabs + Supabase, installed via monkeypatch.
+# Fake for ElevenLabs, installed via monkeypatch. Supabase persistence uses
+# the shared ``FakeSupabaseClient`` (tests/fakes.py) so both the ``tts_jobs``
+# lifecycle row AND ``contents.audio_url``/``audio_type`` land in the same
+# in-memory store the test can assert on.
 # ---------------------------------------------------------------------------
 
 class _FakeTTS:
@@ -44,36 +52,13 @@ class _FakeElevenLabs:
         self.text_to_speech = _FakeTTS()
 
 
-class _FakeSBTable:
-    def __init__(self, store):
-        self._store = store
-        self._payload = None
-
-    def update(self, payload):
-        self._payload = payload
-        return self
-
-    def eq(self, col, val):
-        self._store.append({"col": col, "val": val, "payload": self._payload})
-        return self
-
-    def execute(self):
-        return types.SimpleNamespace(data=list(self._store))
-
-
-class _FakeSB:
-    def __init__(self):
-        self.writes = []
-
-    def table(self, name):
-        return _FakeSBTable(self.writes)
-
-
 @pytest.fixture
 def tts_env(monkeypatch, tmp_path):
     """Wire up a headless environment for ``_run_tts_job``.
 
-    Returns (svc, fake_sync, fake_async, sb, upload_dir).
+    Returns (svc, fake_sync, fake_async, sb, upload_dir). ``sb`` is the SAME
+    ``FakeSupabaseClient`` instance the job recreates via the patched
+    ``create_client`` — both ``tts_jobs`` and ``contents`` mutations land here.
     """
     fake_sync = FakeSyncOpenAI(response_text="Resumo gerado pelo cliente sync.")
     fake_async = FakeAsyncOpenAI(response_text='{"unused": true}')
@@ -87,19 +72,21 @@ def tts_env(monkeypatch, tmp_path):
     el_mod.ElevenLabs = _FakeElevenLabs
     monkeypatch.setitem(sys.modules, "elevenlabs.client", el_mod)
 
-    # Patch supabase.create_client used for audio_url persistence.
-    sb = _FakeSB()
+    # Patch supabase.create_client used for lifecycle + audio_url persistence.
+    sb = FakeSupabaseClient({"tts_jobs": [], "contents": [{"id": "content-1", "body": "seed"}]})
     supabase_mod = sys.modules.get("supabase") or types.ModuleType("supabase")
     monkeypatch.setattr(supabase_mod, "create_client", lambda url, key: sb, raising=False)
     monkeypatch.setitem(sys.modules, "supabase", supabase_mod)
 
-    # Isolate the job store between tests.
-    monkeypatch.setattr(routes_ai, "_tts_jobs", {}, raising=False)
-
     return svc, fake_sync, fake_async, sb, str(tmp_path)
 
 
-def _run(job_id, audio_type, upload_dir, content_id="content-1"):
+def _run(job_id, audio_type, upload_dir, sb, content_id="content-1"):
+    # TTSJOB-2: the job row must exist BEFORE ``_run_tts_job`` runs (the route
+    # seeds it via ``TtsJobRepository.seed_processing`` before dispatching the
+    # thread) — mirror that here so ``mark_done``/``mark_error`` have a row to
+    # transition.
+    TtsJobRepository(sb).seed_processing(job_id, content_id, USER_ID, audio_type)
     routes_ai._run_tts_job(
         job_id=job_id,
         content_id=content_id,
@@ -109,30 +96,32 @@ def _run(job_id, audio_type, upload_dir, content_id="content-1"):
         upload_dir=upload_dir,
         supabase_url="http://fake",
         supabase_key="fake-key",
+        user_id=USER_ID,
     )
-    return routes_ai._tts_jobs[job_id]
+    return TtsJobRepository(sb).get_by_id(job_id)
 
 
 def test_summary_job_uses_sync_client_and_reaches_done(tts_env):
     svc, fake_sync, fake_async, sb, upload_dir = tts_env
 
-    job = _run("job-summary", "summary", upload_dir)
+    job = _run("job-summary", "summary", upload_dir, sb)
 
     assert job["status"] == "done", job
     assert job["audio_url"].startswith("/uploads/tts/")
-    assert job["size_bytes"] > 0
     # The summary LLM step used the SYNC client...
     assert len(fake_sync.calls) == 1
     # ...and never the async client (which would have leaked a coroutine).
     assert len(fake_async.calls) == 0
-    # audio_url was persisted to contents.
-    assert any(w["payload"].get("audio_url") == job["audio_url"] for w in sb.writes)
+    # audio_url + audio_type were persisted to contents (POD-6).
+    content = sb.find("contents", id="content-1")
+    assert content["audio_url"] == job["audio_url"]
+    assert content["audio_type"] == "summary"
 
 
 def test_explanation_job_uses_sync_client_and_reaches_done(tts_env):
     svc, fake_sync, fake_async, sb, upload_dir = tts_env
 
-    job = _run("job-explanation", "explanation", upload_dir)
+    job = _run("job-explanation", "explanation", upload_dir, sb)
 
     assert job["status"] == "done", job
     assert job["audio_url"].startswith("/uploads/tts/")
@@ -140,17 +129,45 @@ def test_explanation_job_uses_sync_client_and_reaches_done(tts_env):
     assert len(fake_async.calls) == 0
 
 
-def test_podcast_job_skips_llm_and_reaches_done(tts_env):
-    """``podcast`` does no LLM step — straight to TTS. Must still reach 'done'."""
+def test_podcast_job_generates_script_via_sync_client_and_reaches_done(tts_env):
+    """POD-2 follow-up: ``podcast`` now runs its own LLM step via
+    ``AIService.generate_podcast_script`` (SYNC client, same coupling as
+    summary/explanation) instead of synthesizing the raw HTML body
+    directly. Must still reach 'done' and never touch the async client."""
     svc, fake_sync, fake_async, sb, upload_dir = tts_env
 
-    job = _run("job-podcast", "podcast", upload_dir)
+    job = _run("job-podcast", "podcast", upload_dir, sb)
 
     assert job["status"] == "done", job
     assert job["audio_url"].startswith("/uploads/tts/")
-    # No summary/explanation LLM call for podcast.
-    assert len(fake_sync.calls) == 0
+    # The podcast script step used the SYNC client (generate_podcast_script)...
+    assert len(fake_sync.calls) == 1
+    call = fake_sync.calls[0]
+    system_msg = call["messages"][0]["content"]
+    assert "PodcastOS" in system_msg
+    # ...and never the async client (which would have leaked a coroutine).
     assert len(fake_async.calls) == 0
+
+
+def test_podcast_job_synthesizes_generated_script_not_raw_body(tts_env, monkeypatch):
+    """The branch must synthesize the LLM-generated script, not the raw
+    ``content_text`` body, proving generate_podcast_script's output is
+    actually threaded into the TTS pipeline (not just called and discarded)."""
+    svc, fake_sync, fake_async, sb, upload_dir = tts_env
+
+    captured_chunks = {}
+    real_synth = routes_ai._synthesize_mp3_chunks
+
+    def _spy_synthesize(el_client, chunks, voice_id):
+        captured_chunks["chunks"] = list(chunks)
+        return real_synth(el_client, chunks, voice_id)
+
+    monkeypatch.setattr(routes_ai, "_synthesize_mp3_chunks", _spy_synthesize)
+
+    _run("job-podcast-script", "podcast", upload_dir, sb)
+
+    joined = " ".join(captured_chunks["chunks"])
+    assert "Resumo gerado pelo cliente sync." in joined
 
 
 def test_async_client_in_thread_would_break_summary_REGRESSION(monkeypatch, tts_env):
@@ -168,7 +185,50 @@ def test_async_client_in_thread_would_break_summary_REGRESSION(monkeypatch, tts_
     broken_svc = AIService(client=fake_async, sync_client=FakeAsyncOpenAI())
     monkeypatch.setattr(routes_ai, "get_ai_service", lambda: broken_svc)
 
-    job = _run("job-broken", "summary", upload_dir)
+    job = _run("job-broken", "summary", upload_dir, sb)
 
     # The job must surface an error, not pretend success — proving the coupling matters.
     assert job["status"] == "error", job
+    assert job.get("error")
+
+
+# ===========================================================================
+# TTSJOB-2 — persisted lifecycle: non-destructive status, no phantom-done.
+# ===========================================================================
+
+
+class TestPersistedLifecycle:
+    def test_status_read_is_non_destructive_two_polls_match(self, tts_env):
+        """#58: audio_job_status must NOT pop; two consecutive reads after
+        `done` return the same payload (proven here at the repo layer that
+        backs the route)."""
+        svc, fake_sync, fake_async, sb, upload_dir = tts_env
+        job = _run("job-poll", "summary", upload_dir, sb)
+        assert job["status"] == "done"
+
+        repo = TtsJobRepository(sb)
+        first = repo.get_by_id("job-poll")
+        second = repo.get_by_id("job-poll")
+        assert first is not None and second is not None
+        assert first["status"] == second["status"] == "done"
+        assert first["audio_url"] == second["audio_url"]
+
+    def test_persist_failure_after_synthesis_marks_error_not_done(self, tts_env, monkeypatch):
+        """#34/#35: if the contents.audio_url UPDATE never lands (even after
+        retries), the job must surface `error` — never a phantom `done`
+        pointing at audio the read path can never find again."""
+        svc, fake_sync, fake_async, sb, upload_dir = tts_env
+
+        monkeypatch.setattr(routes_ai, "_persist_audio_url_with_retry", lambda *a, **k: False)
+
+        job = _run("job-phantom", "summary", upload_dir, sb)
+
+        assert job["status"] == "error", job
+        assert "persistir" in (job.get("error") or "").lower()
+
+    def test_job_row_carries_owning_user_id(self, tts_env):
+        """The persisted row carries ``user_id`` so the route layer
+        (``audio_job_status``) can enforce ownership (cross-user -> 404)."""
+        svc, fake_sync, fake_async, sb, upload_dir = tts_env
+        job = _run("job-owner", "summary", upload_dir, sb)
+        assert job["user_id"] == USER_ID

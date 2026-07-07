@@ -2,7 +2,7 @@
 id: MEDIA-2
 epic: EPIC-FRONT
 phase: 4
-status: Draft
+status: InReview
 severity: HIGH
 terminal: UX/UI & Design
 complexity: medium

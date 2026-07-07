@@ -2,7 +2,7 @@
 id: TTSJOB-2
 epic: EPIC-PODCAST
 phase: 4
-status: Draft
+status: InReview
 severity: HIGH
 terminal: Backend & Infra
 complexity: medium

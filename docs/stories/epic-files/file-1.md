@@ -2,7 +2,7 @@
 id: FILE-1
 epic: EPIC-FILES
 phase: 4
-status: Draft
+status: InReview
 severity: HIGH
 terminal: Backend & Infra
 complexity: medium
