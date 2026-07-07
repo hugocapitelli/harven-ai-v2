@@ -485,6 +485,31 @@ class TestGradebookScope:
         )
         assert ov is not None and ov["grade"] == 9.5
 
+    def test_set_grade_first_time_insert_sets_graded_by(self, client, as_teacher, fake_supabase):
+        # Regression: grade_overrides.graded_by is NOT NULL in the schema
+        # (supabase/migrations/20260518_grade_overrides.sql). The fake does not
+        # enforce NOT NULL, so this asserts the insert PAYLOAD itself carries the
+        # column — a passing test here proves the fix even though the fake alone
+        # would not have caught the original 500.
+        resp = client.put(
+            f"/disciplines/{DISCIPLINE_ID}/students/{STUDENT_A_ID}/grade",
+            json={"course_id": "course-1", "grade": 8.0},
+        )
+        assert resp.status_code == 200
+
+        insert_mutations = [
+            m for m in fake_supabase.mutations
+            if m["table"] == "grade_overrides" and m["op"] == "insert"
+        ]
+        assert len(insert_mutations) == 1
+        payload = insert_mutations[0]["rows"][0]
+        assert payload["graded_by"] == TEACHER_ID
+        # Sanity: the other NOT NULL columns without a DB default remain present.
+        assert payload["discipline_id"] == DISCIPLINE_ID
+        assert payload["student_id"] == STUDENT_A_ID
+        assert payload["course_id"] == "course-1"
+        assert payload["grade"] == 8.0
+
     def test_set_grade_teacher_unlinked_forbidden_no_mutation(self, client, as_teacher, fake_supabase):
         # OTHER_DISCIPLINE_ID is not owned by TEACHER_ID.
         fake_supabase.reset_mutations()

@@ -2070,6 +2070,7 @@ async def set_student_grade(
                 "student_id": student_id,
                 "course_id": body.course_id,
                 "grade": body.grade,
+                "graded_by": current_user["id"],
             }).execute()
     except Exception as e:
         # If table doesn't exist, create it on the fly won't work with Supabase

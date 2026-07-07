@@ -9,7 +9,11 @@ from fastapi import UploadFile
 from config import get_settings
 
 ALLOWED_EXTENSIONS = {
-    "pdf", "doc", "docx", "txt", "pptx",
+    # NOTE: ".doc" (legacy OLE2 binary) intentionally excluded — no parser
+    # exists (python-docx only reads .docx). Rejecting at upload time is
+    # more honest than silently accepting a file we can never extract text
+    # from. See backend/services/text_extractor.py (status="unsupported").
+    "pdf", "docx", "txt", "pptx",
     "mp4", "mov", "avi", "webm",
     "mp3", "wav", "ogg", "m4a",
     "jpg", "jpeg", "png", "gif", "webp",

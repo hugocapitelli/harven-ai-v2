@@ -22,6 +22,7 @@ from repositories.chat_repo import ChatRepository
 from schemas.ai import AIDetectionResponse
 from schemas.chat import ChatSessionCreate
 from services.ai_service import AIService, AIServiceError, sanitize_ai_error
+from services.scoring import compute_performance_score
 from services.integration_service import (
     IntegrationService,
     LTIValidationError,
@@ -1148,11 +1149,16 @@ async def get_session_by_content(
     client: Client = Depends(get_supabase),
     current_user: dict = Depends(get_current_user),
 ):
+    # DATA-GAM-3 guard: SEC-CHAT-3 lets a completed session coexist with a fresh
+    # "new attempt" row for the same (content_id, user_id), so this pair is NOT
+    # guaranteed unique. A bare ``.maybe_single()`` would 500 on >1 row; order by
+    # newest and take one so the caller reliably gets the most recent session.
+    # (This is only the cheap guard; the full status machine is DATA-GAM-4.)
     result = client.table("chat_sessions").select("*").eq(
         "content_id", content_id
     ).eq(
         "user_id", current_user["id"]
-    ).maybe_single().execute()
+    ).order("created_at", desc=True).limit(1).maybe_single().execute()
 
     session = result.data
     if not session:
@@ -1193,15 +1199,39 @@ async def complete_chat_session(
     )
 
     # Idempotency: a 2nd complete on an already-completed session is a 200 no-op —
-    # no redundant write is issued.
+    # no redundant write is issued. Because the score is computed and persisted ONLY
+    # on this first active->completed transition (below), a re-complete never
+    # recomputes it (DATA-GAM-3 AC: score written exactly once; DATA-GAM-4 compat).
     if session.get("status") == "completed":
         return session
 
+    # DATA-GAM-3: additive hook on the completion edge. Load the turns persisted by
+    # TPP-4, compute the gamification/progress ``performance_score`` from them, and
+    # persist it together with the status flip — once, on this transition only.
+    # The computation is best-effort: any failure leaves ``performance_score`` NULL
+    # and NEVER blocks completion (completion is the primary op; the score is
+    # additive). ``None`` (insufficient signal) is left as NULL, not forced to 0, so
+    # dashboard averages are not polluted with false zeros. The gradebook (official
+    # grade) does not read this field and is unaffected.
+    update_payload: Dict[str, Any] = {"status": "completed"}
+    try:
+        turns = await run_in_threadpool(
+            ChatRepository(client).get_session_messages, session_id
+        )
+        score = compute_performance_score(turns)
+        if score is not None:
+            update_payload["performance_score"] = score
+    except Exception as exc:  # pragma: no cover - score is additive, never blocking
+        logger.warning(
+            "complete_chat_session: performance_score computation failed (%s): %s",
+            session_id, exc,
+        )
+
     updated = client.table("chat_sessions").update(
-        {"status": "completed"}
+        update_payload
     ).eq("id", session_id).execute()
 
-    return updated.data[0] if updated.data else {"id": session_id, "status": "completed"}
+    return updated.data[0] if updated.data else {"id": session_id, **update_payload}
 
 
 @router.post("/chat-sessions/{session_id}/export-moodle", tags=["Chat Sessions"])

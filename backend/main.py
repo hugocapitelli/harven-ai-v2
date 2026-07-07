@@ -9,14 +9,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Sentry — error monitoring
+# Sentry — error monitoring (only initialized when a DSN is configured)
 import sentry_sdk
-sentry_sdk.init(
-    dsn="https://95e066dfc17a6ccb971886374baf81be@o4511017059287040.ingest.us.sentry.io/4511263208177664",
-    send_default_pii=False,
-    traces_sample_rate=0.2,
-    environment=os.getenv("ENVIRONMENT", "production"),
-)
+
+_sentry_dsn = os.environ.get("SENTRY_DSN", "").strip()
+if _sentry_dsn:
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        send_default_pii=False,
+        traces_sample_rate=0.2,
+        environment=os.getenv("ENVIRONMENT", "production"),
+    )
 
 from fastapi import (
     FastAPI,
@@ -1250,7 +1253,14 @@ async def upload_chapter_file(
     file_bytes = await file.read()
     await file.seek(0)
 
-    url = await storage.save_file(file, subdir="contents")
+    try:
+        url = await storage.save_file(file, subdir="contents")
+    except ValueError as e:
+        logger.warning(f"Chapter upload validation error: {e}")
+        message = str(e)
+        if "excede" in message.lower() or "mb" in message.lower():
+            raise HTTPException(status_code=413, detail=message)
+        raise HTTPException(status_code=400, detail=message)
 
     mime = file.content_type or ""
     if mime.startswith("video/"):
@@ -1265,10 +1275,27 @@ async def upload_chapter_file(
         ctype = "document"
 
     # Extract text from document
+    extraction_status = None
+    extraction_detail = None
     extracted_text = None
     if ctype in ("pdf", "document"):
-        from services.text_extractor import extract_text_from_bytes
-        extracted_text = extract_text_from_bytes(file_bytes, file.filename or "file", mime)
+        import tempfile
+        from pathlib import Path
+        from services.text_extractor import extract
+
+        suffix = Path(file.filename or "").suffix or ".bin"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+        try:
+            result = extract(tmp_path, mime)
+        finally:
+            os.unlink(tmp_path)
+
+        extraction_status = result.status
+        extraction_detail = result.detail
+        if extraction_status == "ok":
+            extracted_text = result.text
 
     content_repo = ContentRepository(client)
     content_data = {
@@ -1277,10 +1304,12 @@ async def upload_chapter_file(
         "content_type": ctype,
         "media_url": url,
     }
-    if extracted_text:
+    if extraction_status == "ok" and extracted_text:
         content_data["body"] = extracted_text
 
     content = content_repo.create(content_data)
+    content["extraction_status"] = extraction_status
+    content["extraction_detail"] = extraction_detail
 
     return content
 
