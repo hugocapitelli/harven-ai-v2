@@ -10,8 +10,8 @@
 
 1. **Aplicar as migrações no Supabase ANTES do deploy.** No SQL Editor do
    projeto, rodar em **ordem alfabética** os dois arquivos novos deste sprint:
-   - `supabase/migrations/20260707b_tts_jobs.sql`
-   - `supabase/migrations/20260707c_content_audio_type.sql`
+   - `supabase/migrations/20260707000001_tts_jobs.sql`
+   - `supabase/migrations/20260707000002_content_audio_type.sql`
 
    Confirme que ambos rodam sem erro (idempotentes — podem ser reexecutados
    com segurança se algo falhar no meio).

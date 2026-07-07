@@ -287,7 +287,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
         setEditTitle(contentData?.title ?? '');
         setEditBody(contentData?.body ?? contentData?.extracted_text ?? '');
         // Pre-populate TTS player if audio was previously generated.
-        // TTSJOB-3: `contents.audio_type` (migration 20260707c) records WHICH
+        // TTSJOB-3: `contents.audio_type` (migration 20260707000002) records WHICH
         // style produced this `audio_url` — legacy rows predate the column and
         // come back null/undefined, so they fall back to 'summary' (documented
         // fallback in the migration's Dev Notes). Never hardcode the slot.

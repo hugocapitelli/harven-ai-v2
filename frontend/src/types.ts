@@ -71,7 +71,7 @@ export interface Content {
   body?: string;
   file_url?: string;
   audio_url?: string;
-  // POD-6 (migration 20260707c): which TTS style produced the current
+  // POD-6 (migration 20260707000002): which TTS style produced the current
   // `audio_url` (podcast/summary/explanation). Legacy rows predate the column
   // and come back `undefined`/`null` — callers fall back to 'summary'.
   audio_type?: 'podcast' | 'summary' | 'explanation' | null;

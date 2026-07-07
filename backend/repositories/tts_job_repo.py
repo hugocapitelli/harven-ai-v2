@@ -1,7 +1,7 @@
 """TTS job repository — Supabase client API (TTSJOB-1).
 
 Thin data-access layer over the new durable `tts_jobs` table (migration
-`20260707b_tts_jobs.sql`), replacing the volatile in-memory `_tts_jobs` dict in
+`20260707000001_tts_jobs.sql`), replacing the volatile in-memory `_tts_jobs` dict in
 `routes_ai.py` (bug sweep #34/#58/#59). This story is exclusively the
 persistence foundation — wiring the endpoints/worker to read/write through
 this repository instead of the dict is a follow-up story.
