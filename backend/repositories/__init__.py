@@ -10,6 +10,7 @@ from .admin_repo import AdminRepository
 from .gamification_repo import GamificationRepository
 from .notification_repo import NotificationRepository
 from .token_usage_repo import TokenUsageRepository
+from .tts_job_repo import TtsJobRepository
 
 __all__ = [
     "BaseRepository",
@@ -24,4 +25,5 @@ __all__ = [
     "GamificationRepository",
     "NotificationRepository",
     "TokenUsageRepository",
+    "TtsJobRepository",
 ]

@@ -28,7 +28,8 @@ Design notes
   unavailable, so the job recreates a SYNC Supabase client from the
   ``supabase_url``/``supabase_key`` it is handed. Here that ``create_client`` is
   monkeypatched to return an in-process :class:`FakeSupabaseClient` (rpc enabled),
-  which IS the ledger we then assert on.
+  which IS both the ledger AND the ``tts_jobs`` lifecycle store (TTSJOB-2) we
+  then assert on.
 
 Headless: ElevenLabs, OpenAI and Supabase are all faked/monkeypatched. No network.
 """
@@ -44,6 +45,7 @@ import routes_ai
 from conftest import TEACHER_ID, STUDENT_A_ID
 from fakes import FakeAsyncOpenAI, FakeSyncOpenAI, FakeSupabaseClient
 from repositories.token_usage_repo import TokenUsageRepository
+from repositories.tts_job_repo import TtsJobRepository
 from services.ai_service import AIService
 
 # Each fake chat completion = 10 + 20 tokens (see tests/fakes.py::_FakeUsage).
@@ -87,7 +89,8 @@ def job_env(monkeypatch, tmp_path):
 
     Returns (svc, ledger, upload_dir). ``ledger`` is the FakeSupabaseClient the
     worker recreates via the patched ``create_client`` — the same object the job's
-    ``track_token_usage`` writes to, so the test can assert the ledger after.
+    ``track_token_usage`` AND ``tts_jobs``/``contents`` persistence write to, so
+    the test can assert both the ledger and the job/content rows after.
     """
     fake_sync = FakeSyncOpenAI(response_text=FAKE_SUMMARY)
     fake_async = FakeAsyncOpenAI(response_text='{"unused": true}')
@@ -102,19 +105,31 @@ def job_env(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "elevenlabs.client", el_mod)
 
     # The worker recreates a Supabase client via ``from supabase import create_client``.
-    # Hand it an in-process fake WITH the increment_token_usage RPC = our ledger.
-    ledger = FakeSupabaseClient({"token_usage": [], "contents": []}, rpc_enabled=True)
+    # Hand it an in-process fake WITH the increment_token_usage RPC = our ledger,
+    # seeded with a `contents` row per possible content_id used below and an
+    # empty `tts_jobs` table (TTSJOB-2 lifecycle).
+    ledger = FakeSupabaseClient(
+        {
+            "token_usage": [],
+            "contents": [{"id": "content-1", "body": "seed"}, {"id": "content-7", "body": "seed"}],
+            "tts_jobs": [],
+        },
+        rpc_enabled=True,
+    )
     supabase_mod = sys.modules.get("supabase") or types.ModuleType("supabase")
     monkeypatch.setattr(supabase_mod, "create_client", lambda url, key: ledger, raising=False)
     monkeypatch.setitem(sys.modules, "supabase", supabase_mod)
 
-    monkeypatch.setattr(routes_ai, "_tts_jobs", {}, raising=False)
     return svc, ledger, str(tmp_path)
 
 
-def _run_job(upload_dir, *, user_id, audio_type="summary", content_id="content-1"):
+def _run_job(upload_dir, ledger, *, user_id, audio_type="summary", content_id="content-1"):
+    job_id = f"job-{audio_type}"
+    # TTSJOB-2: the route seeds the `processing` row before dispatching the
+    # thread — mirror that here so ``mark_done``/``mark_error`` have a row.
+    TtsJobRepository(ledger).seed_processing(job_id, content_id, user_id, audio_type)
     routes_ai._run_tts_job(
-        job_id=f"job-{audio_type}",
+        job_id=job_id,
         content_id=content_id,
         content_text="Conteudo academico longo para sintetizar em audio.",
         audio_type=audio_type,
@@ -124,7 +139,7 @@ def _run_job(upload_dir, *, user_id, audio_type="summary", content_id="content-1
         supabase_key="fake-key",
         user_id=user_id,
     )
-    return routes_ai._tts_jobs[f"job-{audio_type}"]
+    return TtsJobRepository(ledger).get_by_id(job_id)
 
 
 # ===========================================================================
@@ -135,7 +150,7 @@ class TestSuccessfulJobTracksBothProviders:
         svc, ledger, upload_dir = job_env
         monkeypatch.setattr(routes_ai, "get_settings", lambda: _settings_stub(elevenlabs_tracking=True))
 
-        job = _run_job(upload_dir, user_id=TEACHER_ID, audio_type="summary")
+        job = _run_job(upload_dir, ledger, user_id=TEACHER_ID, audio_type="summary")
 
         assert job["status"] == "done", job
         # LLM (script) was charged AND the ElevenLabs char-equivalent (len of the
@@ -153,8 +168,8 @@ class TestSuccessfulJobTracksBothProviders:
         svc, ledger, upload_dir = job_env
         monkeypatch.setattr(routes_ai, "get_settings", lambda: _settings_stub(elevenlabs_tracking=True))
 
-        _run_job(upload_dir, user_id=TEACHER_ID, audio_type="summary")
-        _run_job(upload_dir, user_id=TEACHER_ID, audio_type="explanation")
+        _run_job(upload_dir, ledger, user_id=TEACHER_ID, audio_type="summary")
+        _run_job(upload_dir, ledger, user_id=TEACHER_ID, audio_type="explanation")
 
         per_job = FAKE_LLM_TOKENS + len(FAKE_SUMMARY[:5000])
         assert TokenUsageRepository(ledger).get_today_usage(TEACHER_ID) == 2 * per_job
@@ -170,7 +185,7 @@ class TestFeatureFlagOffTracksOnlyLLM:
         svc, ledger, upload_dir = job_env
         monkeypatch.setattr(routes_ai, "get_settings", lambda: _settings_stub(elevenlabs_tracking=False))
 
-        job = _run_job(upload_dir, user_id=TEACHER_ID, audio_type="summary")
+        job = _run_job(upload_dir, ledger, user_id=TEACHER_ID, audio_type="summary")
 
         assert job["status"] == "done", job
         # ONLY the LLM cost — the ElevenLabs char-equivalent is NOT added.
@@ -183,7 +198,7 @@ class TestFeatureFlagOffTracksOnlyLLM:
         svc, ledger, upload_dir = job_env
         monkeypatch.setattr(routes_ai, "get_settings", lambda: _settings_stub(elevenlabs_tracking=False))
 
-        job = _run_job(upload_dir, user_id=TEACHER_ID, audio_type="podcast")
+        job = _run_job(upload_dir, ledger, user_id=TEACHER_ID, audio_type="podcast")
 
         assert job["status"] == "done", job
         assert TokenUsageRepository(ledger).get_today_usage(TEACHER_ID) == 0
@@ -206,7 +221,7 @@ class TestTrackingFailureLoggedNotSwallowed:
         monkeypatch.setattr(svc, "track_token_usage", _boom)
 
         with caplog.at_level(logging.ERROR, logger=routes_ai.logger.name):
-            job = _run_job(upload_dir, user_id=TEACHER_ID, audio_type="summary", content_id="content-7")
+            job = _run_job(upload_dir, ledger, user_id=TEACHER_ID, audio_type="summary", content_id="content-7")
 
         # Happy path is NOT masked — audio was produced despite the tracking failure.
         assert job["status"] == "done", job
@@ -240,7 +255,7 @@ class TestTrackingFailureLoggedNotSwallowed:
         monkeypatch.setattr(svc, "track_token_usage", _selective)
 
         with caplog.at_level(logging.ERROR, logger=routes_ai.logger.name):
-            job = _run_job(upload_dir, user_id=TEACHER_ID, audio_type="summary")
+            job = _run_job(upload_dir, ledger, user_id=TEACHER_ID, audio_type="summary")
 
         assert job["status"] == "done", job
         # LLM still charged; ElevenLabs charge was lost but LOGGED, not swallowed.
@@ -274,6 +289,7 @@ class TestPreCheckBarsOverBudgetBeforeSynthesis:
         fake_supabase.seed("contents", [
             {"id": "content-1", "body": "Conteudo academico para audio."}
         ])
+        fake_supabase.seed("tts_jobs", [])
         # ElevenLabs IS configured — so a 503 here can ONLY come from the budget
         # pre-check, never from the missing-key guard.
         monkeypatch.setattr(routes_ai, "ELEVENLABS_API_KEY", "fake-key", raising=False)
@@ -288,7 +304,7 @@ class TestPreCheckBarsOverBudgetBeforeSynthesis:
         def _no_thread(*a, **k):
             raise AssertionError("pre-check must bar the over-cap user BEFORE the thread")
 
-        monkeypatch.setattr(routes_ai, "_run_tts_job", _no_thread)
+        monkeypatch.setattr(routes_ai, "_run_tts_job_with_timeout", _no_thread)
 
         resp = client.post(
             "/api/ai/audio/generate-from-content",
@@ -298,6 +314,8 @@ class TestPreCheckBarsOverBudgetBeforeSynthesis:
         assert resp.status_code == 503, resp.text
         # No paid synthesis ran — the over-cap user never reached ElevenLabs.
         assert _FakeElevenLabs.calls == []
+        # And no job row was seeded either — the pre-check runs before dedup/seed.
+        assert fake_supabase.rows("tts_jobs") == []
 
     def test_within_cap_dispatches_thread(
         self, client, as_teacher, fake_supabase, monkeypatch
@@ -307,6 +325,7 @@ class TestPreCheckBarsOverBudgetBeforeSynthesis:
         fake_supabase.seed("contents", [
             {"id": "content-1", "body": "Conteudo academico para audio."}
         ])
+        fake_supabase.seed("tts_jobs", [])
         monkeypatch.setattr(routes_ai, "ELEVENLABS_API_KEY", "fake-key", raising=False)
         fake_async = FakeAsyncOpenAI(response_text='{"x": 1}')
         svc = AIService(client=fake_async, sync_client=FakeSyncOpenAI(response_text=FAKE_SUMMARY))
@@ -318,10 +337,15 @@ class TestPreCheckBarsOverBudgetBeforeSynthesis:
         dispatched = {}
 
         def _capture(*args, **kwargs):
-            # ``user_id`` is the LAST positional arg the handler appends to args.
-            dispatched["user_id"] = kwargs.get("user_id", args[-1] if args else None)
+            # ``_run_tts_job_with_timeout`` is invoked with all args as keywords
+            # (see routes_ai — the dispatch Thread passes them positionally in
+            # the SAME declared order); accept both shapes defensively.
+            if "user_id" in kwargs:
+                dispatched["user_id"] = kwargs["user_id"]
+            elif args:
+                dispatched["user_id"] = args[-1]
 
-        monkeypatch.setattr(routes_ai, "_run_tts_job", _capture)
+        monkeypatch.setattr(routes_ai, "_run_tts_job_with_timeout", _capture)
 
         # Run the dispatched target SYNCHRONOUSLY so the assertion is deterministic
         # (no race with a real background thread).
@@ -346,3 +370,8 @@ class TestPreCheckBarsOverBudgetBeforeSynthesis:
         assert resp.json()["status"] == "processing"
         # The INITIATOR (authenticated teacher) was propagated to the worker.
         assert dispatched.get("user_id") == TEACHER_ID
+        # TTSJOB-2: the route seeded a `processing` row before dispatch.
+        jobs = fake_supabase.rows("tts_jobs")
+        assert len(jobs) == 1
+        assert jobs[0]["user_id"] == TEACHER_ID
+        assert jobs[0]["status"] == "processing"

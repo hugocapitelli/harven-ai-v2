@@ -59,6 +59,177 @@ MAX_HISTORY_TURNS = 10
 REFERENCE_CONTEXT_MAX_CHARS = 15000
 
 # ---------------------------------------------------------------------------
+# Podcast script generation + TTS chunking (POD-1, bugs #8 / #33)
+# ---------------------------------------------------------------------------
+# The ElevenLabs TTS endpoint hard-caps a single ``text_to_speech.convert`` call
+# at 5000 characters. ``chunk_text`` below fatiates (never truncates) the full
+# narration into chunks strictly <= this limit, cutting on sentence boundaries.
+TTS_CHAR_LIMIT = 5000
+
+# Default chunk size passed to ``chunk_text`` by the podcast pipeline. Left a
+# small margin under ``TTS_CHAR_LIMIT`` (200 chars) as a safety buffer — the
+# ElevenLabs cap is on the RAW chunk sent over the wire, and staying a bit
+# under it costs nothing while leaving headroom for any future chunk-joining
+# punctuation added by the TTS wiring (POD-2).
+DEFAULT_CHUNK_MAX_CHARS = 4800
+
+# Minimum word count target for a podcast script (~10 min of narration at the
+# ~120 wpm pace typical of a Portuguese conversational narration). Chapters
+# shorter than this in the source body simply produce the maximum honest
+# conversational expansion of what exists — the model is instructed never to
+# invent content beyond the source (Article IV — No Invention).
+PODCAST_MIN_WORDS = 1200
+
+PODCAST_SCRIPT_PROMPT = (
+    "# System Prompt: Harven_Podcast (PodcastOS)\n\n"
+    "Voce e PodcastOS, o Roteirista de Podcast Educacional da plataforma Harven.AI.\n\n"
+    "## MISSAO\n"
+    "- Transformar o conteudo completo de um capitulo em um roteiro de narracao "
+    "conversacional, como um podcast educacional falado por um unico narrador.\n"
+    "- O roteiro deve cobrir TODO o material do capitulo, sem pular secoes.\n"
+    "- Duracao alvo: ~10 minutos de narracao (aproximadamente 1200+ palavras).\n\n"
+    "## REGRAS\n"
+    "- NUNCA invente fatos, exemplos ou dados que nao estejam no conteudo fornecido.\n"
+    "- NUNCA use marcacao de multiplos locutores (e uma narracao de voz UNICA para TTS) — "
+    "sem 'Locutor 1:', sem dialogos, sem indicacoes de cena.\n"
+    "- Tom conversacional e didatico, como se estivesse explicando o material a um aluno "
+    "durante um passeio — frases naturais, transicoes fluidas entre topicos, sem bullet "
+    "points nem titulos de secao.\n"
+    "- Se o conteudo fornecido for curto, expanda apenas com explicacoes, contextualizacoes "
+    "e conexoes logicas DERIVADAS do proprio material — nunca com fatos externos inventados.\n"
+    "- Responda APENAS com o texto corrido do roteiro, sem comentarios, sem titulos, sem "
+    "marcacoes markdown.\n"
+)
+
+# Above this size the chapter body is summarized section-by-section BEFORE
+# roteirization instead of being pasted whole into the script prompt — keeps a
+# very long chapter from silently exceeding the LLM's practical input budget
+# while still covering the entire body (never a silent head-truncation).
+PODCAST_SECTION_SUMMARY_THRESHOLD_CHARS = 12000
+PODCAST_SECTION_CHUNK_CHARS = 6000
+
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def strip_html(html: str) -> str:
+    """Convert an HTML fragment to normalized plain text.
+
+    Used to turn a chapter's ``body`` (stored as HTML) into clean prose before
+    it is roteirized into a podcast script (POD-1, bug #8) — the podcast
+    branch must never feed raw HTML tags/entities to the LLM or the TTS.
+
+    Tags are removed, entities are decoded, and whitespace is normalized
+    (collapsed runs of blank lines/spaces, trimmed edges). Block-level tags
+    (``</p>``, ``<br>``, ``</div>``, ``</li>``, headings) are mapped to a
+    newline BEFORE tag stripping so paragraph/sentence boundaries survive —
+    without this, "</p><p>" would glue two paragraphs into one run-on
+    sentence and break the sentence-aware chunking downstream.
+
+    Falls back to a lossless-effort ``html.unescape`` when ``bs4`` is
+    unavailable, so this function never raises for a missing dependency.
+    """
+    if not html:
+        return ""
+
+    try:
+        from bs4 import BeautifulSoup
+
+        soup = BeautifulSoup(html, "html.parser")
+        text = soup.get_text(separator="\n")
+    except Exception:
+        # Defensive fallback (bs4 missing/broken markup): strip tags with a
+        # regex and decode entities manually — degraded but never a crash.
+        import html as html_mod
+
+        block_tags = r"</?(?:p|div|br|li|h[1-6]|tr|table)[^>]*>"
+        text = re.sub(block_tags, "\n", html, flags=re.IGNORECASE)
+        text = re.sub(r"<[^>]+>", "", text)
+        text = html_mod.unescape(text)
+
+    # Normalize whitespace: collapse horizontal runs, collapse 3+ blank lines
+    # to a single blank line, trim every line, trim overall.
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines()]
+    text = "\n".join(lines)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def chunk_text(text: str, max_chars: int = DEFAULT_CHUNK_MAX_CHARS) -> List[str]:
+    """Split ``text`` into chunks of at most ``max_chars`` characters, lossless.
+
+    POD-1 (bug #33): replaces the old ``text[:5000]`` cap that silently
+    TRUNCATED and discarded everything past the limit. This function instead
+    FATIATES the input: the ordered concatenation of the returned chunks
+    reproduces ``text`` (round-trip lossless, module docstring contract for
+    callers) — no character is ever dropped.
+
+    Sentence-aware: chunks are closed on sentence boundaries (after
+    ``.``, ``!`` or ``?`` followed by whitespace) or paragraph boundaries
+    (``\\n\\n``) whenever possible, so a chunk never ends mid-sentence unless
+    a SINGLE sentence itself exceeds ``max_chars`` — that one pathological
+    case falls back to a hard split (documented, unavoidable: there is no
+    smaller lossless boundary to cut on).
+
+    Empty/whitespace-only input returns ``[]`` (nothing to narrate).
+    """
+    if not text or not text.strip():
+        return []
+
+    if len(text) <= max_chars:
+        return [text]
+
+    # Split into sentence-like units, but preserve the EXACT separator text
+    # (which may be a single space, a newline, or a blank-line "\n\n" between
+    # paragraphs) by slicing the original string around each regex match
+    # rather than trusting ``re.split`` (which DISCARDS the matched
+    # separator) or re-synthesizing a guessed replacement. This is what makes
+    # the round-trip lossless regardless of which whitespace character
+    # originally separated two sentences/paragraphs.
+    pieces: List[str] = []
+    last_end = 0
+    for m in _SENTENCE_END_RE.finditer(text):
+        pieces.append(text[last_end:m.end()])
+        last_end = m.end()
+    pieces.append(text[last_end:])
+    # ``finditer`` may leave an empty trailing piece when the text ends
+    # exactly on a matched separator boundary — drop it, it carries no chars.
+    pieces = [p for p in pieces if p]
+
+    chunks: List[str] = []
+    current = ""
+
+    def _flush():
+        nonlocal current
+        if current:
+            chunks.append(current)
+            current = ""
+
+    for piece in pieces:
+        if len(piece) > max_chars:
+            # A single "sentence" (no terminal punctuation) is itself longer
+            # than the limit — documented fallback: flush what we have, then
+            # hard-split this oversized piece into <= max_chars slices with
+            # NO characters dropped.
+            _flush()
+            start = 0
+            while start < len(piece):
+                chunks.append(piece[start:start + max_chars])
+                start += max_chars
+            continue
+
+        if len(current) + len(piece) > max_chars:
+            _flush()
+
+        current += piece
+
+    _flush()
+
+    # Lossless contract: the exact concatenation reproduces the input.
+    assert "".join(chunks) == text, "chunk_text produced a lossy split"
+    return chunks
+
+
+# ---------------------------------------------------------------------------
 # Editor→Tester quality gate (TPP-7)
 # ---------------------------------------------------------------------------
 # Server-side feature flag (default OFF). When OFF, ``socratic_dialogue`` is
@@ -1372,6 +1543,128 @@ class AIService:
                 result["metrics"]["flags_triggered"] = ai_detection["flags_triggered"]
 
         return result
+
+    # ------------------------------------------------------------------
+    # 7. Podcast — conversational script from the full chapter body (POD-1)
+    # ------------------------------------------------------------------
+
+    def generate_podcast_script(self, body_html: str, chapter_title: str = "") -> str:
+        """Roteiriza o CORPO COMPLETO de um capitulo em um script de podcast.
+
+        POD-1 (bug #8): fixes the branch where ``audio_type='podcast'`` fell
+        through to the summary/explanation path (a short clip narrating a
+        3-paragraph summary instead of the full chapter). This method is the
+        dedicated podcast source-of-script: it strips the chapter's HTML
+        ``body`` to plain text and produces a conversational, single-narrator
+        script covering the ENTIRE source material (Article IV — no invented
+        content beyond it), targeting ``PODCAST_MIN_WORDS`` (~10 min).
+
+        SYNCHRONOUS on purpose, mirroring the summary/explanation LLM calls
+        already made in ``_run_tts_job`` (``routes_ai.py``): that job runs in
+        a ``threading.Thread`` OFF the event loop, so it must use
+        ``self.sync_client`` (never ``self.client``, which is ``AsyncOpenAI``
+        and would silently return an unawaited coroutine there — the exact
+        failure mode ASYNC-AI-1 already guards against for summary/
+        explanation). Callers on the async request path should wrap this in
+        ``run_in_threadpool`` rather than adding a parallel async client call.
+
+        For chapters whose stripped body exceeds
+        ``PODCAST_SECTION_SUMMARY_THRESHOLD_CHARS``, the body is first
+        summarized section-by-section (splitting on paragraph-ish
+        boundaries via ``chunk_text``) and the summaries are then roteirized
+        together — this keeps a very long chapter from being silently
+        head-truncated into the roteirizer prompt while still covering
+        100% of the source (each section contributes to the script, none
+        are skipped).
+
+        Falls back to the (HTML-stripped) body itself when no client is
+        configured (mock mode) or the LLM call fails — the caller always
+        gets *something* narratable, never an exception surfaced mid-job.
+        """
+        plain_body = strip_html(body_html)
+        if not plain_body:
+            return ""
+
+        if not self.sync_client:
+            # Mock mode / no client configured — the plain (stripped) body is
+            # itself a valid (if non-conversational) narration source so the
+            # podcast job still reaches 'done' instead of failing hard.
+            return plain_body
+
+        try:
+            source_material = self._prepare_podcast_source(plain_body)
+            user_msg = (
+                f"Titulo do capitulo: {chapter_title or 'Capitulo'}\n\n"
+                f"Conteudo completo a roteirizar:\n\n{source_material}\n\n"
+                f"Gere o roteiro de narracao conversacional completo agora, cobrindo "
+                f"TODO o conteudo acima, com pelo menos {PODCAST_MIN_WORDS} palavras "
+                f"quando o material permitir."
+            )
+            result = self.sync_client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": PODCAST_SCRIPT_PROMPT},
+                    {"role": "user", "content": user_msg},
+                ],
+                max_tokens=4000,
+                temperature=0.6,
+            )
+            script = (result.choices[0].message.content or "").strip()
+            return script or plain_body
+        except Exception as e:
+            logger.error(
+                "generate_podcast_script: roteirizacao falhou, usando corpo "
+                "puro (HTML-stripped) como fallback: %s", e, exc_info=True,
+            )
+            return plain_body
+
+    def _prepare_podcast_source(self, plain_body: str) -> str:
+        """Return the material handed to the podcast roteirizer prompt.
+
+        Below ``PODCAST_SECTION_SUMMARY_THRESHOLD_CHARS`` the full stripped
+        body is passed through untouched. Above it, the body is split into
+        ``chunk_text``-derived sections and EACH section is summarized by the
+        model, then the summaries are concatenated — so the roteirizer still
+        sees the entirety of the chapter's content (just condensed), never a
+        silently truncated head. Any per-section summarization failure falls
+        back to including that section's own (unsummarized) text, so a single
+        LLM hiccup never drops content from the final script.
+        """
+        if len(plain_body) <= PODCAST_SECTION_SUMMARY_THRESHOLD_CHARS:
+            return plain_body
+
+        sections = chunk_text(plain_body, max_chars=PODCAST_SECTION_CHUNK_CHARS)
+        summarized_sections: List[str] = []
+        for section in sections:
+            try:
+                result = self.sync_client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "Resuma o trecho abaixo preservando todos os "
+                                "conceitos e fatos importantes, em portugues, "
+                                "de forma densa e factual (sem estilo de "
+                                "podcast ainda — este e um resumo intermediario)."
+                            ),
+                        },
+                        {"role": "user", "content": section},
+                    ],
+                    max_tokens=1200,
+                    temperature=0.3,
+                )
+                summary = (result.choices[0].message.content or "").strip()
+                summarized_sections.append(summary or section)
+            except Exception as e:
+                logger.warning(
+                    "generate_podcast_script: falha ao resumir secao "
+                    "(%d chars), usando texto original da secao: %s",
+                    len(section), e,
+                )
+                summarized_sections.append(section)
+
+        return "\n\n".join(summarized_sections)
 
     # ------------------------------------------------------------------
     # Utility

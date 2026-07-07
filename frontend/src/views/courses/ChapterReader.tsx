@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import axios from 'axios';
 import { toast } from 'sonner';
 import ReactMarkdown from 'react-markdown';
 import DOMPurify from 'dompurify';
@@ -56,6 +57,35 @@ const TTS_LABEL: Record<TtsStyle, { label: string; icon: string; desc: string }>
   summary: { label: 'Resumo', icon: 'summarize', desc: 'Pontos-chave, ~3 min' },
   explanation: { label: 'Explicacao', icon: 'record_voice_over', desc: 'Didatica, ~5 min' },
 };
+
+// ---------- TTS polling (TTSJOB-3 / TTSJOB-4) ----------
+//
+// Named budget instead of a magic loop-count: ~5 min total, polled every 3s,
+// with the FIRST check happening at t=0 (poll -> check -> sleep, not the
+// inverse). `maxAttempts` is derived from the budget so the two constants
+// never drift apart.
+const TTS_POLL_INTERVAL_MS = 3000;
+const TTS_POLL_BUDGET_MS = 5 * 60 * 1000; // ~5 min
+const TTS_POLL_MAX_ATTEMPTS = Math.ceil(TTS_POLL_BUDGET_MS / TTS_POLL_INTERVAL_MS);
+// A single 404/network/5xx blip (e.g. a redeploy mid-poll) must NOT collapse
+// the poller (bug #38/#39). Tolerate up to N CONSECUTIVE transient failures —
+// the counter resets on every 200 — before falling back.
+const TTS_MAX_TRANSIENT_RETRIES = 3;
+
+/** True for a 404, a network error (no response), or a 5xx — the failure
+ * modes a backend restart/redeploy produces mid-poll. A 4xx other than 404
+ * (e.g. 401/403) is NOT transient — the interceptor already redirects on 401,
+ * and 403 signals a real ownership problem, not a blip. */
+function isTransientPollError(err: unknown): boolean {
+  if (!axios.isAxiosError(err)) return false;
+  const status = err.response?.status;
+  if (status === undefined) return true; // network/timeout — no response at all
+  return status === 404 || status >= 500;
+}
+
+function isRateLimitError(err: unknown): boolean {
+  return axios.isAxiosError(err) && err.response?.status === 429;
+}
 
 // ---------- Helpers ----------
 
@@ -256,11 +286,19 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
         setCompleted(Boolean(contentData?.completed));
         setEditTitle(contentData?.title ?? '');
         setEditBody(contentData?.body ?? contentData?.extracted_text ?? '');
-        // Pre-populate TTS player if audio was previously generated
+        // Pre-populate TTS player if audio was previously generated.
+        // TTSJOB-3: `contents.audio_type` (migration 20260707c) records WHICH
+        // style produced this `audio_url` — legacy rows predate the column and
+        // come back null/undefined, so they fall back to 'summary' (documented
+        // fallback in the migration's Dev Notes). Never hardcode the slot.
         if (contentData?.audio_url) {
           const apiBase = import.meta.env.VITE_API_URL || '';
           const fullUrl = contentData.audio_url.startsWith('/') ? `${apiBase}${contentData.audio_url}` : contentData.audio_url;
-          setTtsUrls((prev) => ({ ...prev, summary: fullUrl }));
+          const style: TtsStyle =
+            contentData.audio_type === 'podcast' || contentData.audio_type === 'explanation'
+              ? contentData.audio_type
+              : 'summary';
+          setTtsUrls((prev) => ({ ...prev, [style]: fullUrl }));
         }
         const rawQ = Array.isArray(questionsData) ? questionsData : [];
         setQuestions(
@@ -560,6 +598,28 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
 
   // ---- TTS ----
 
+  // Re-fetch the `content` row and, if `audio_url` is present, resolve as a
+  // SUCCESS via fallback (TTSJOB-3 AC3 / TTSJOB-4 AC2) instead of a terminal
+  // failure. Used both when the polling budget is exhausted and when 404s
+  // persist past the transient-tolerance window. Returns whether the
+  // fallback recovered an audio URL.
+  const resolveTtsViaContentFallback = async (style: TtsStyle): Promise<boolean> => {
+    if (!contentId) return false;
+    try {
+      const fresh = await contentsApi.get(contentId);
+      const rawUrl = fresh?.audio_url;
+      if (!rawUrl) return false;
+      const apiBase = import.meta.env.VITE_API_URL || '';
+      const fullUrl = rawUrl.startsWith('/') ? `${apiBase}${rawUrl}` : rawUrl;
+      setContent((c) => (c ? { ...c, audio_url: rawUrl, audio_type: fresh.audio_type } : c));
+      setTtsUrls((prev) => ({ ...prev, [style]: fullUrl }));
+      toast.success(`${TTS_LABEL[style].label} gerado`);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const handleGenerateTts = async (style: TtsStyle) => {
     if (!contentId) return;
     setGeneratingTts(style);
@@ -568,27 +628,66 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
       const jobId = startResult?.job_id;
       if (!jobId) { toast.error('Erro ao iniciar geracao'); return; }
 
-      // Poll for completion
       const apiBase = import.meta.env.VITE_API_URL || '';
-      for (let i = 0; i < 30; i++) { // max 90s (30 x 3s)
-        await new Promise((r) => setTimeout(r, 3000));
-        const status = await ttsApi.pollJob(jobId);
-        if (status?.status === 'done') {
-          const rawUrl = status.audio_url;
-          const fullUrl = rawUrl?.startsWith('/') ? `${apiBase}${rawUrl}` : rawUrl;
-          setTtsUrls((prev) => ({ ...prev, [style]: fullUrl }));
-          toast.success(`${TTS_LABEL[style].label} gerado`);
-          return;
+      let transientCount = 0;
+
+      // Poll-then-sleep (TTSJOB-3 AC1): the FIRST status check happens at
+      // t=0, before any wait — a job that finishes fast is picked up
+      // immediately instead of waiting a full interval for no reason.
+      for (let attempt = 0; attempt < TTS_POLL_MAX_ATTEMPTS; attempt++) {
+        try {
+          const status = await ttsApi.pollJob(jobId);
+          transientCount = 0; // any 200 resets the transient-failure window
+
+          if (status?.status === 'done') {
+            const rawUrl = status.audio_url;
+            const fullUrl = rawUrl?.startsWith('/') ? `${apiBase}${rawUrl}` : rawUrl;
+            setTtsUrls((prev) => ({ ...prev, [style]: fullUrl }));
+            toast.success(`${TTS_LABEL[style].label} gerado`);
+            return;
+          }
+          if (status?.status === 'error') {
+            // A REAL terminal failure from the backend still deserves one last
+            // chance at the content fallback — the job may have written
+            // audio_url before reporting `error` on a race.
+            if (await resolveTtsViaContentFallback(style)) return;
+            toast.error(status.detail || 'Erro na geracao de audio');
+            return;
+          }
+          // status === 'processing' (or unrecognized): keep polling.
+        } catch (err) {
+          if (isRateLimitError(err)) {
+            toast.error('Muitas geracoes de audio simultaneas — aguarde e tente novamente.');
+            return;
+          }
+          if (!isTransientPollError(err)) throw err; // real, non-transient error
+
+          transientCount += 1;
+          // #38/#39: a single 404/network/5xx blip (redeploy/restart, cold
+          // start, race between job creation and first read) must NOT
+          // collapse the poller. Tolerate up to TTS_MAX_TRANSIENT_RETRIES
+          // CONSECUTIVE misses before giving up on this job and moving to
+          // the content fallback.
+          if (transientCount > TTS_MAX_TRANSIENT_RETRIES) {
+            if (await resolveTtsViaContentFallback(style)) return;
+            toast.error('Erro ao consultar geracao de audio — tente novamente.');
+            return;
+          }
         }
-        if (status?.status === 'error') {
-          toast.error(status.detail || 'Erro na geracao de audio');
-          return;
-        }
+        await new Promise((r) => setTimeout(r, TTS_POLL_INTERVAL_MS));
       }
-      toast.error('Timeout — tente novamente');
+
+      // Budget exhausted without a terminal status: the job may already have
+      // finished server-side even though polling never caught up — re-fetch
+      // `content` before declaring failure (TTSJOB-3 AC3).
+      if (await resolveTtsViaContentFallback(style)) return;
+      toast.error('Tempo esgotado — tente novamente em instantes.');
     } catch {
       toast.error('Erro ao gerar audio');
     } finally {
+      // #39: reset the loading state on EVERY exit path (success, real
+      // failure, timeout, network error, exception) so the button never
+      // stays stuck on "gerando".
       setGeneratingTts(null);
     }
   };
