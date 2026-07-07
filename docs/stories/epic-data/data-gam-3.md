@@ -2,7 +2,7 @@
 id: DATA-GAM-3
 epic: EPIC-DATA
 phase: 4
-status: Draft
+status: InReview
 severity: HIGH
 terminal: Backend & Infra
 complexity: medium

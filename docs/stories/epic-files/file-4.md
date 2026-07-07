@@ -2,7 +2,7 @@
 id: FILE-4
 epic: EPIC-FILES
 phase: 4
-status: Draft
+status: InReview
 severity: HIGH
 terminal: UX/UI & Design
 complexity: low

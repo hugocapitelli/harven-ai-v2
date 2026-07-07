@@ -2,7 +2,7 @@
 id: TTSJOB-3
 epic: EPIC-PODCAST
 phase: 4
-status: Draft
+status: InReview
 severity: HIGH
 terminal: UX/UI & Design
 complexity: low
