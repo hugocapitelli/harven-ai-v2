@@ -376,10 +376,23 @@ class IntegrationService:
     # ---- Moodle export ----
 
     async def export_sessions_to_moodle(self, filters: Optional[Dict] = None) -> SyncResult:
+        # NOTE (INT-MOODLE-1/2): this does NOT send anything to Moodle. It only
+        # stamps a local ``moodle_export_id`` on each pending session — no network
+        # call, no real Moodle gradebook write. Real delivery to Moodle is
+        # deliberately out of scope for now (grades are served via the read-only
+        # /disciplines/{id}/grades/export endpoint instead). ``status`` stays
+        # "success" because the stamping itself succeeds, but ``error_message``
+        # carries the honest "nothing was actually sent" signal instead of a
+        # fabricated all-clear.
         started = datetime.now(timezone.utc)
         result = SyncResult(
             system="moodle", operation="export_sessions", direction="export",
             status="success", records_processed=0, started_at=started,
+            error_message=(
+                "not_implemented: no data was sent to Moodle — only local "
+                "moodle_export_id stamping occurred. Real Moodle delivery is "
+                "not implemented yet."
+            ),
         )
         try:
             query = self.client.table("chat_sessions").select("*").is_("moodle_export_id", "null")

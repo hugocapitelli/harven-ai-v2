@@ -1309,7 +1309,23 @@ class AIService:
             if m.get("role") == "user"
         )
 
-        return {
+        # INT-MOODLE-1: started_at is derived from the real session, never
+        # fabricated. ``started_at`` wins when present; ``created_at`` is the
+        # fallback (chat_sessions has no dedicated started_at column today, so
+        # every caller effectively falls back to created_at — that is honest,
+        # not a placeholder).
+        started_at = session_data.get("started_at") or session_data.get("created_at")
+
+        # score.raw must distinguish "no score computed yet" (None/null) from a
+        # legitimate score of 0. ``performance_score`` (DATA-GAM-3) is the real,
+        # persisted signal — a truthy check would wrongly collapse a real 0 into
+        # the same bucket as "no data", so the check is explicit `is None`.
+        performance_score = session_data.get("performance_score")
+        if performance_score is None:
+            performance_score = session_data.get("score")  # legacy/manual override, if provided
+        score_raw = performance_score if performance_score is not None else None
+
+        result: Dict[str, Any] = {
             "export_id": f"HARVEN-MOODLE-{uuid4().hex[:8]}",
             "actor": {
                 "name": session_data.get("user_name", ""),
@@ -1322,7 +1338,7 @@ class AIService:
             },
             "session": {
                 "id": session_data.get("session_id"),
-                "started_at": session_data.get("started_at"),
+                "started_at": started_at,
                 "total_messages": len(messages),
             },
             "interactions": [
@@ -1337,15 +1353,25 @@ class AIService:
             "result": {
                 "success": True,
                 "completion": session_data.get("status") == "completed",
-                "score": {"raw": session_data.get("score", 0), "max": 100, "min": 0},
+                "score": {"raw": score_raw, "max": 100, "min": 0},
             },
             "verb": {"id": "http://adlnet.gov/expapi/verbs/experienced"},
             "metrics": {
                 "total_words_student": student_words,
-                "avg_ai_probability": 0.0,
-                "flags_triggered": [],
             },
         }
+
+        # AI-detection metrics are only emitted when a real, persisted detection
+        # result is available on the session — never as fabricated 0.0/[] filler
+        # implying "no AI suspicion" when no analysis was actually run.
+        ai_detection = session_data.get("ai_detection")
+        if isinstance(ai_detection, dict):
+            if ai_detection.get("avg_ai_probability") is not None:
+                result["metrics"]["avg_ai_probability"] = ai_detection["avg_ai_probability"]
+            if ai_detection.get("flags_triggered") is not None:
+                result["metrics"]["flags_triggered"] = ai_detection["flags_triggered"]
+
+        return result
 
     # ------------------------------------------------------------------
     # Utility

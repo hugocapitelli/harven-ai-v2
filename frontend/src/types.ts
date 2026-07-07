@@ -50,12 +50,30 @@ export interface Chapter {
   contents?: Content[];
 }
 
+// Content.type is NORMALIZED to lowercase by the shared API contract
+// (normalizeContent in services/api.ts): content_type/legacy uppercase values are
+// translated to the canonical lowercase set before reaching any component.
+// The legacy UPPERCASE literals remain in the union so sibling views that have not
+// migrated yet (ContentRevision, CourseDetails) still type-check against `content.type`;
+// they will be dropped once every consumer reads the normalized contract.
+export type ContentType =
+  | 'text'
+  | 'video'
+  | 'audio'
+  | 'image'
+  | 'pdf'
+  | 'summary'
+  | 'TEXT'
+  | 'VIDEO'
+  | 'AUDIO';
+
 export interface Content {
   id: string;
   title: string;
-  type: 'TEXT' | 'VIDEO' | 'AUDIO';
+  type: ContentType;
   body?: string;
   file_url?: string;
+  audio_url?: string;
   extracted_text?: string;
   completed?: boolean;
   completed_at?: string;

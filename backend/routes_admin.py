@@ -2087,3 +2087,156 @@ async def set_student_grade(
         "course_id": body.course_id,
         "grade": body.grade,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GRADES EXPORT (INT-MOODLE-1 follow-up) — grades surfaced via a plain API
+# endpoint (JSON/CSV). No external delivery: the Moodle export stays a stub
+# (see ``IntegrationService.export_sessions_to_moodle``); this is the honest,
+# read-only surface for "get the real grades out" today.
+# ═══════════════════════════════════════════════════════════════════════════
+@router.get(
+    "/disciplines/{discipline_id}/grades/export",
+    tags=["Gradebook"],
+    summary="Exportar notas dos alunos da disciplina (JSON ou CSV)",
+)
+async def export_discipline_grades(
+    discipline_id: str,
+    format: str = Query("json", regex="^(json|csv)$"),
+    current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
+    client: Client = Depends(get_supabase),
+):
+    from fastapi.responses import StreamingResponse
+
+    # SEC-SCOPE-2 pattern: scope TEACHER/INSTRUCTOR to their own discipline;
+    # ADMIN bypasses. The gate runs BEFORE any read, mirroring the gradebook
+    # endpoint immediately above.
+    assert_teacher_owns_discipline(discipline_id, current_user, DisciplineRepository(client))
+
+    # Verify discipline exists.
+    disc_res = (
+        client.table("disciplines")
+        .select("id, name")
+        .eq("id", discipline_id)
+        .maybe_single()
+        .execute()
+        or type("_R", (), {"data": None})()
+    )
+    if not disc_res.data:
+        raise HTTPException(status_code=404, detail="Disciplina nao encontrada")
+
+    # Students enrolled in the discipline.
+    ds_res = (
+        client.table("discipline_students")
+        .select("student_id")
+        .eq("discipline_id", discipline_id)
+        .execute()
+    )
+    student_ids = [s["student_id"] for s in (ds_res.data or [])]
+
+    rows_out: List[dict] = []
+    if student_ids:
+        # Batch-fetch users (name, ra/email).
+        users_res = client.table("users").select("id, name, ra, email").in_("id", student_ids).execute()
+        users_map = {u["id"]: u for u in (users_res.data or [])}
+
+        # Sessions for those students (content_id links to content -> chapter -> course,
+        # but the export is per-session, so course/chapter context is not required here —
+        # mirrors the gradebook's own session shape, just one row per session instead of
+        # per-course aggregate).
+        sessions_res = (
+            client.table("chat_sessions")
+            .select("id, user_id, content_id, status, started_at, completed_at, created_at, "
+                    "interactions_used, performance_score")
+            .in_("user_id", student_ids)
+            .execute()
+        )
+        sessions = sessions_res.data or []
+        session_ids = [s["id"] for s in sessions]
+
+        # Content titles (best-effort — content_id may be null/removed).
+        content_ids = list({s["content_id"] for s in sessions if s.get("content_id")})
+        contents_map: dict[str, dict] = {}
+        if content_ids:
+            contents_res = client.table("contents").select("id, title").in_("id", content_ids).execute()
+            contents_map = {c["id"]: c for c in (contents_res.data or [])}
+
+        # Reviews (teacher rating) keyed by session_id.
+        reviews_map: dict[str, dict] = {}
+        if session_ids:
+            reviews_res = (
+                client.table("session_reviews")
+                .select("session_id, rating")
+                .in_("session_id", session_ids)
+                .execute()
+            )
+            reviews_map = {r["session_id"]: r for r in (reviews_res.data or [])}
+
+        # Grade overrides keyed by (student_id, course_id) — best-effort, table may
+        # not exist yet on older environments (same graceful fallback as the
+        # gradebook endpoint above).
+        overrides_by_student: dict[str, dict[str, float]] = {}
+        try:
+            overrides_res = (
+                client.table("grade_overrides")
+                .select("student_id, course_id, grade")
+                .eq("discipline_id", discipline_id)
+                .execute()
+            )
+            for ov in (overrides_res.data or []):
+                overrides_by_student.setdefault(ov["student_id"], {})[ov["course_id"]] = ov["grade"]
+        except Exception:
+            pass
+
+        for s in sessions:
+            uid = s.get("user_id")
+            u = users_map.get(uid, {})
+            content = contents_map.get(s.get("content_id") or "", {})
+            review = reviews_map.get(s["id"])
+            # started_at: real column when present, else created_at (same honest
+            # fallback as prepare_moodle_export — INT-MOODLE-1).
+            started_at = s.get("started_at") or s.get("created_at")
+            override_grade = None
+            student_overrides = overrides_by_student.get(uid)
+            if student_overrides:
+                # A session has no course_id directly; grade_overrides are keyed by
+                # course, so we surface the override only if the student has exactly
+                # one (unambiguous) override on record for this discipline.
+                if len(student_overrides) == 1:
+                    override_grade = next(iter(student_overrides.values()))
+
+            rows_out.append({
+                "student_id": uid,
+                "student_name": u.get("name"),
+                "ra": u.get("ra"),
+                "email": u.get("email"),
+                "content_id": s.get("content_id"),
+                "content_title": content.get("title"),
+                "session_status": s.get("status"),
+                "started_at": started_at,
+                "completed_at": s.get("completed_at"),
+                "interactions_used": s.get("interactions_used"),
+                "performance_score": s.get("performance_score"),
+                "review_rating": review.get("rating") if review else None,
+                "grade_override": override_grade,
+            })
+
+    if format == "csv":
+        buf = io.StringIO()
+        header = [
+            "student_id", "student_name", "ra", "email", "content_id", "content_title",
+            "session_status", "started_at", "completed_at", "interactions_used",
+            "performance_score", "review_rating", "grade_override",
+        ]
+        writer = csv.writer(buf)
+        writer.writerow(header)
+        for r in rows_out:
+            writer.writerow([r.get(col) for col in header])
+        buf.seek(0)
+        return StreamingResponse(
+            iter([buf.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=grades-{discipline_id}.csv"},
+        )
+
+    return {"discipline_id": discipline_id, "data": rows_out}

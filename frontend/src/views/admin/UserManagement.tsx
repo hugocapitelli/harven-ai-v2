@@ -80,8 +80,8 @@ export default function UserManagement() {
       toast.error('Nome, RA e email são obrigatórios.');
       return;
     }
-    if (!form.password.trim() || form.password.length < 4) {
-      toast.error('Defina uma senha temporária (mínimo 4 caracteres).');
+    if (!form.password.trim() || form.password.length < 6) {
+      toast.error('Defina uma senha temporária (mínimo 6 caracteres).');
       return;
     }
     setSaving(true);

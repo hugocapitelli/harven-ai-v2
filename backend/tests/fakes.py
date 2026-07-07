@@ -4,9 +4,15 @@ This is a duck-typed double of ``supabase.Client`` that stores tables as lists o
 dict rows in memory and exposes the same fluent builder the production code uses:
 
     client.table(name).select(...).eq(col, val).maybe_single().execute()
+    client.table(name).select(...).in_(col, [v1, v2]).execute()
     client.table(name).insert({...}).execute()
     client.table(name).update({...}).eq(col, val).execute()
     client.table(name).delete().eq(col, val).execute()
+
+``.in_(col, values)`` (INT-MOODLE-1 grades-export tests) composes with ``.eq``:
+a row must satisfy every accumulated ``.eq`` filter AND, for each ``.in_`` call,
+have its column value present in that call's value set (values are compared as
+strings, mirroring ``.eq``'s stringly comparison).
 
 ``.execute()`` returns a ``SimpleNamespace`` with a ``.data`` attribute (a list,
 a single row, or ``None``) plus a ``.count`` attribute, matching what
@@ -50,6 +56,7 @@ class _QueryBuilder:
         self._table = table
         self._op = "select"          # select | insert | update | delete
         self._filters: List[tuple] = []  # list of (col, value) for .eq
+        self._in_filters: List[tuple] = []  # list of (col, values) for .in_
         self._payload: Any = None        # insert/update payload
         self._single = False             # .single() -> dict or raise
         self._maybe_single = False       # .maybe_single() -> dict or None
@@ -71,6 +78,10 @@ class _QueryBuilder:
 
     def eq(self, col: str, value: Any) -> "_QueryBuilder":
         self._filters.append((col, value))
+        return self
+
+    def in_(self, col: str, values: Any) -> "_QueryBuilder":
+        self._in_filters.append((col, list(values)))
         return self
 
     def order(self, col: str, *_a, **kwargs) -> "_QueryBuilder":
@@ -107,7 +118,13 @@ class _QueryBuilder:
 
     # ── resolution ──────────────────────────────────────────────────
     def _matches(self, row: Dict[str, Any]) -> bool:
-        return all(str(row.get(c)) == str(v) for c, v in self._filters)
+        if not all(str(row.get(c)) == str(v) for c, v in self._filters):
+            return False
+        for col, values in self._in_filters:
+            str_values = {str(v) for v in values}
+            if str(row.get(col)) not in str_values:
+                return False
+        return True
 
     def execute(self) -> _Result:
         rows = self._fake._tables.setdefault(self._table, [])

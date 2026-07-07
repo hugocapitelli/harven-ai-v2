@@ -15,12 +15,14 @@ never edits ``conftest.py``. The 3-outcome contract is asserted via
 ``idor_helpers``: (1) owner passes, (2) cross actor 403/404 with no mutation,
 (3) client-supplied identity is never trusted.
 
-Harness note: the in-memory fake implements ``.eq``/``maybe_single``/``insert``/
-``update``/``delete`` but not ``.in_()``/``.not_``. The authorization gates in
+Harness note: the in-memory fake implements ``.eq``/``.in_``/``maybe_single``/
+``insert``/``update``/``delete`` but not ``.not_``. The authorization gates in
 every endpoint under test run BEFORE any ``.in_()`` query, so the deny paths
-exercise the gate directly. The owner-passes paths are seeded so each endpoint
+exercise the gate directly. Most owner-passes paths are seeded so the endpoint
 returns through its early-exit branch (empty enrollment / no courses), proving
-2xx without depending on unimplemented fake operators.
+2xx without depending on ``.in_()``; ``TestGradesExportScope`` (INT-MOODLE-1
+follow-up) exercises the populated ``.in_()`` path directly since ``.in_`` is
+now supported by the fake.
 """
 from __future__ import annotations
 
@@ -531,3 +533,79 @@ class TestGradebookScope:
             json={"course_id": "course-2", "grade": 7.0},
         )
         assert resp.status_code == 200
+
+
+# ===========================================================================
+# INT-MOODLE-1 follow-up — GET /disciplines/{id}/grades/export (JSON/CSV)
+# ===========================================================================
+class TestGradesExportScope:
+    """Same SEC-SCOPE-2 authz pattern as the gradebook: TEACHER scoped to their
+    own discipline, ADMIN bypasses. Real-data assertions are exercised with a
+    single enrolled student + one session (the fake DOES implement ``.in_()``
+    with a 1-element filter list the same way it resolves ``.eq``-only chains —
+    verified directly below rather than assumed)."""
+
+    def test_export_teacher_linked_passes_json(self, client, as_teacher, fake_supabase):
+        fake_supabase.seed("discipline_students", [])  # empty -> no students, no data rows
+        resp = client.get(f"/disciplines/{DISCIPLINE_ID}/grades/export")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["discipline_id"] == DISCIPLINE_ID
+        assert body["data"] == []
+
+    def test_export_teacher_unlinked_forbidden(self, client, as_teacher, fake_supabase):
+        resp = client.get(f"/disciplines/{OTHER_DISCIPLINE_ID}/grades/export")
+        assert resp.status_code == 403
+
+    def test_export_student_forbidden(self, client, as_student, fake_supabase):
+        resp = client.get(f"/disciplines/{DISCIPLINE_ID}/grades/export")
+        assert resp.status_code == 403
+
+    def test_export_admin_passes(self, client, as_admin, fake_supabase):
+        fake_supabase.seed("discipline_students", [])
+        resp = client.get(f"/disciplines/{OTHER_DISCIPLINE_ID}/grades/export")
+        assert resp.status_code == 200
+
+    def test_export_missing_discipline_404(self, client, as_admin, fake_supabase):
+        resp = client.get("/disciplines/does-not-exist/grades/export")
+        assert resp.status_code == 404
+
+    def test_export_json_with_real_session_score_null_when_absent(self, client, as_teacher, fake_supabase):
+        # DISCIPLINE_ID already has STUDENT_A_ID enrolled (base seed). Seed a
+        # session for that student WITHOUT performance_score.
+        fake_supabase.seed("chat_sessions", [
+            {"id": "sess-export-1", "user_id": STUDENT_A_ID, "content_id": "content-1",
+             "status": "completed", "created_at": "2026-01-01T00:00:00Z"},
+        ])
+        resp = client.get(f"/disciplines/{DISCIPLINE_ID}/grades/export")
+        assert resp.status_code == 200
+        rows = resp.json()["data"]
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["student_id"] == STUDENT_A_ID
+        assert row["performance_score"] is None  # honest null, never a fake 0
+        assert row["started_at"] == "2026-01-01T00:00:00Z"  # fallback to created_at
+
+    def test_export_json_with_real_score_preserved(self, client, as_teacher, fake_supabase):
+        fake_supabase.seed("chat_sessions", [
+            {"id": "sess-export-2", "user_id": STUDENT_A_ID, "content_id": "content-1",
+             "status": "completed", "created_at": "2026-01-01T00:00:00Z",
+             "performance_score": 0},  # legitimate zero must survive, not become null
+        ])
+        resp = client.get(f"/disciplines/{DISCIPLINE_ID}/grades/export")
+        assert resp.status_code == 200
+        rows = resp.json()["data"]
+        assert rows[0]["performance_score"] == 0
+
+    def test_export_csv_has_correct_header_and_content_type(self, client, as_teacher, fake_supabase):
+        fake_supabase.seed("discipline_students", [])
+        resp = client.get(f"/disciplines/{DISCIPLINE_ID}/grades/export?format=csv")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/csv")
+        assert "attachment" in resp.headers.get("content-disposition", "")
+        header = resp.text.splitlines()[0]
+        assert header == (
+            "student_id,student_name,ra,email,content_id,content_title,session_status,"
+            "started_at,completed_at,interactions_used,performance_score,review_rating,"
+            "grade_override"
+        )
