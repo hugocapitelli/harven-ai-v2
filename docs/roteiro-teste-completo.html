@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Roteiro de Teste Completo, Harven.AI v2</title>
+<style>
+  @page { size: A4; margin: 18mm 15mm 20mm 15mm; }
+  * { box-sizing: border-box; }
+  body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #1a2b23; font-size: 10.5pt; line-height: 1.45; margin: 0; }
+  .cover { text-align: center; padding-top: 150px; page-break-after: always; }
+  .cover h1 { font-size: 30pt; color: #0d3b2e; margin-bottom: 6px; letter-spacing: -0.5px; }
+  .cover .sub { font-size: 14pt; color: #4a6358; margin-bottom: 40px; }
+  .cover .meta { display: inline-block; text-align: left; border: 1px solid #c8d6cf; border-radius: 8px; padding: 18px 28px; font-size: 11pt; background: #f4f8f6; }
+  .cover .meta div { margin: 4px 0; }
+  .cover .meta b { color: #0d3b2e; }
+  h2 { font-size: 15pt; color: #ffffff; background: #0d3b2e; padding: 8px 14px; border-radius: 6px; margin-top: 28px; page-break-after: avoid; }
+  h3 { font-size: 12pt; color: #0d3b2e; border-bottom: 2px solid #c8d6cf; padding-bottom: 4px; margin-top: 20px; page-break-after: avoid; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 18px 0; page-break-inside: auto; }
+  tr { page-break-inside: avoid; }
+  th { background: #e3ede8; color: #0d3b2e; text-align: left; padding: 6px 8px; font-size: 9.5pt; border: 1px solid #c8d6cf; }
+  td { padding: 6px 8px; border: 1px solid #d5e0da; vertical-align: top; font-size: 9.5pt; }
+  td.chk { width: 22px; text-align: center; font-size: 12pt; color: #7a8f85; }
+  td.num { width: 30px; text-align: center; font-weight: bold; color: #0d3b2e; }
+  td.onde { width: 130px; color: #4a6358; }
+  .warn { background: #fff7e6; border-left: 4px solid #e6a817; padding: 8px 12px; margin: 10px 0; font-size: 9.5pt; border-radius: 0 6px 6px 0; }
+  .info { background: #e8f2fd; border-left: 4px solid #2a6fbb; padding: 8px 12px; margin: 10px 0; font-size: 9.5pt; border-radius: 0 6px 6px 0; }
+  .bug { color: #8a4500; font-size: 8.5pt; display: block; margin-top: 3px; font-style: italic; }
+  code { background: #eef3f0; padding: 1px 5px; border-radius: 3px; font-family: Menlo, monospace; font-size: 8.5pt; color: #0d3b2e; }
+  pre { background: #f0f4f2; border: 1px solid #d5e0da; border-radius: 6px; padding: 10px 12px; font-family: Menlo, monospace; font-size: 8pt; overflow-x: hidden; white-space: pre-wrap; word-break: break-all; }
+  .creds td { font-size: 10pt; }
+  .footer-note { margin-top: 30px; font-size: 9pt; color: #6a7d73; text-align: center; }
+  .toc td { border: none; padding: 3px 8px; font-size: 10.5pt; }
+  .falha-table td { height: 26px; }
+</style>
+</head>
+<body>
+
+<!-- CAPA -->
+<div class="cover">
+  <h1>Roteiro de Teste Completo</h1>
+  <div class="sub">Harven.AI v2, Plataforma de Tutoria Socrática<br>Validação funcional de lançamento, curso criado do zero</div>
+  <div class="meta">
+    <div><b>Ambiente:</b> https://harven.eximiaventures.com.br</div>
+    <div><b>API:</b> https://api.harven.eximiaventures.com.br</div>
+    <div><b>Data:</b> 08 de julho de 2026</div>
+    <div><b>Versão:</b> sprint/launch-funcional (commit 4d345fd)</div>
+    <div><b>Total de passos:</b> 74, em 7 partes</div>
+    <div><b>Senha universal de teste:</b> <code>Harven@2026</code></div>
+  </div>
+</div>
+
+<!-- PARTE 0 -->
+<h2>Parte 0, Preparação (antes de abrir o browser)</h2>
+
+<h3>Credenciais</h3>
+<table class="creds">
+  <tr><th>Login (RA)</th><th>Papel</th><th>Uso no roteiro</th></tr>
+  <tr><td><code>admin</code></td><td>ADMIN</td><td>Partes 1 e 6</td></tr>
+  <tr><td><code>hugo.capitelli</code></td><td>INSTRUCTOR</td><td>Partes 2 e 5 (professor da disciplina)</td></tr>
+  <tr><td><code>hugo.aluno</code></td><td>STUDENT</td><td>Parte 3 (aluno A)</td></tr>
+  <tr><td><code>aluno.teste2</code> (criado no passo 4)</td><td>STUDENT</td><td>Parte 4 (aluno B, teste de vazamento)</td></tr>
+  <tr><td><code>rafael.bin</code></td><td>INSTRUCTOR</td><td>Passo 64 (professor SEM vínculo, teste de escopo)</td></tr>
+</table>
+<p>Senha de todos: <code>Harven@2026</code>. Login é pelo <b>RA</b>, não pelo email.</p>
+
+<h3>Arquivos para ter em mãos</h3>
+<table>
+  <tr><th>Arquivo</th><th>Para quê</th></tr>
+  <tr><td>1 PDF com texto real (5+ páginas)</td><td>Extração de texto (passo 23)</td></tr>
+  <tr><td>1 PPTX com slides de aula</td><td>Extração nova de PPTX (passo 24)</td></tr>
+  <tr><td>1 ZIP qualquer</td><td>Rejeição elegante de tipo inválido (passo 25)</td></tr>
+  <tr><td>1 PDF escaneado (só imagem), se tiver</td><td>Aviso de "sem texto" (passo 26)</td></tr>
+  <tr><td>1 vídeo MP4 curto, 1 áudio MP3, 1 imagem JPG/PNG</td><td>Renderização de mídia (passos 27 e 40)</td></tr>
+  <tr><td>1 foto qualquer</td><td>Avatar (passos 15 e 52)</td></tr>
+</table>
+
+<div class="warn"><b>Regra de ouro:</b> qualquer tela de "Erro interno" (500), spinner infinito ou dado de um usuário aparecendo para outro é reprovação imediata do passo. Anote o número do passo e o que apareceu na tela, na folha de registro do final.</div>
+
+<!-- PARTE 1 -->
+<h2>Parte 1, Admin: fundação do zero (login: admin)</h2>
+
+<table>
+  <tr><th></th><th>#</th><th>Onde</th><th>Ação</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td class="num">1</td><td class="onde">/login</td><td>Entrar com <code>admin</code> / <code>Harven@2026</code></td><td>Painel admin carrega, menu lateral com Console, Usuários, Turmas, Configurações</td></tr>
+  <tr><td class="chk">☐</td><td class="num">2</td><td class="onde">/login</td><td>Tentar senha errada de propósito</td><td>Mensagem clara de credenciais inválidas, sem travar a tela</td></tr>
+  <tr><td class="chk">☐</td><td class="num">3</td><td class="onde">Usuários</td><td>Criar usuário com senha de 5 caracteres</td><td>Recusado com mensagem clara (mínimo 6)<span class="bug">Bug antigo: front aceitava 4+, backend recusava com erro opaco</span></td></tr>
+  <tr><td class="chk">☐</td><td class="num">4</td><td class="onde">Usuários</td><td>Criar <code>aluno.teste2</code> (STUDENT, senha <code>Harven@2026</code>)</td><td>Criado, aparece na lista</td></tr>
+  <tr><td class="chk">☐</td><td class="num">5</td><td class="onde">Usuários</td><td>Editar um usuário (nome), salvar, recarregar página</td><td>Alteração persistiu</td></tr>
+  <tr><td class="chk">☐</td><td class="num">6</td><td class="onde">Usuários</td><td>Se houver import em lote (batch), testar com 1 a 2 usuários</td><td>Importa sem erro, usuários aparecem</td></tr>
+  <tr><td class="chk">☐</td><td class="num">7</td><td class="onde">Turmas</td><td>Criar disciplina NOVA do zero (nome, descrição)</td><td>Criada, aparece na lista</td></tr>
+  <tr><td class="chk">☐</td><td class="num">8</td><td class="onde">Turmas</td><td>Subir imagem de capa da disciplina</td><td>Imagem aparece no card</td></tr>
+  <tr><td class="chk">☐</td><td class="num">9</td><td class="onde">Turmas</td><td>Vincular o professor <code>hugo.capitelli</code> à disciplina</td><td>Professor listado na turma</td></tr>
+  <tr><td class="chk">☐</td><td class="num">10</td><td class="onde">Turmas</td><td>Matricular <code>hugo.aluno</code> E <code>aluno.teste2</code></td><td>Ambos listados como alunos da turma</td></tr>
+  <tr><td class="chk">☐</td><td class="num">11</td><td class="onde">Configurações</td><td>Alterar nome da plataforma, salvar, recarregar</td><td>Valor persistiu</td></tr>
+  <tr><td class="chk">☐</td><td class="num">12</td><td class="onde">Configurações</td><td>Conferir toggles de Tutor IA e Gamificação ligados</td><td>Toggles salvam e persistem</td></tr>
+  <tr><td class="chk">☐</td><td class="num">13</td><td class="onde">Configurações</td><td>Subir logo da plataforma (e logo/fundo da tela de login, se houver)</td><td>Upload sem erro, imagem aplicada</td></tr>
+  <tr><td class="chk">☐</td><td class="num">14</td><td class="onde">Configurações › Backups</td><td>Criar um backup, depois baixar</td><td>Backup criado na lista e download funciona</td></tr>
+  <tr><td class="chk">☐</td><td class="num">15</td><td class="onde">Conta (menu avatar)</td><td>Subir foto de avatar do admin</td><td>Avatar aparece no header</td></tr>
+  <tr><td class="chk">☐</td><td class="num">16</td><td class="onde">Console</td><td>Ver dashboard de estatísticas gerais</td><td>Números carregam sem erro (podem ser baixos, plataforma nova)</td></tr>
+  <tr><td class="chk">☐</td><td class="num">17</td><td class="onde">Notificações</td><td>Criar notificação individual para <code>hugo.aluno</code></td><td>Criada sem erro (o aluno confere no passo 39)</td></tr>
+</table>
+
+<div class="warn"><b>NÃO teste agora:</b> "Ação Global" / broadcast de notificação (quebrado, contrato antigo, correção fase 2) e "Force Logout" (derruba TODOS os logados, fica por último, passo 73). Bloquear/desbloquear usuário também está fora (coluna não existe no banco, fase 2).</div>
+
+<!-- PARTE 2 -->
+<h2>Parte 2, Professor: curso criado do zero (login: hugo.capitelli)</h2>
+
+<h3>2.1 Estrutura do curso</h3>
+<table>
+  <tr><th></th><th>#</th><th>Onde</th><th>Ação</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td class="num">18</td><td class="onde">Minhas Disciplinas</td><td>Logar e abrir a disciplina criada no passo 7</td><td>Disciplina aparece, com os 2 alunos matriculados</td></tr>
+  <tr><td class="chk">☐</td><td class="num">19</td><td class="onde">Cursos</td><td>Criar curso NOVO do zero dentro da disciplina (nome, descrição, imagem de capa)</td><td>Curso criado com capa</td></tr>
+  <tr><td class="chk">☐</td><td class="num">20</td><td class="onde">Editar curso</td><td>Criar 3 capítulos (ex.: Introdução, Desenvolvimento, Conclusão)</td><td>Capítulos criados na ordem</td></tr>
+  <tr><td class="chk">☐</td><td class="num">21</td><td class="onde">Editar curso</td><td>Reordenar capítulos arrastando (drag and drop), salvar, recarregar</td><td>Nova ordem persistiu</td></tr>
+  <tr><td class="chk">☐</td><td class="num">22</td><td class="onde">Editar curso</td><td>Editar título de um capítulo e excluir um capítulo de teste</td><td>Edição e exclusão funcionam</td></tr>
+</table>
+
+<h3>2.2 Ingestão de conteúdo (o coração do teste)</h3>
+<table>
+  <tr><th></th><th>#</th><th>Onde</th><th>Ação</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td class="num">23</td><td class="onde">Novo conteúdo</td><td>Upload do <b>PDF</b> com texto</td><td>Sucesso, corpo do conteúdo preenchido com o texto extraído<span class="bug">Bug antigo: falha de extração era silenciosa, conteúdo ficava vazio sem aviso</span></td></tr>
+  <tr><td class="chk">☐</td><td class="num">24</td><td class="onde">Novo conteúdo</td><td>Upload do <b>PPTX</b></td><td>Sucesso, texto dos slides extraído na ordem<span class="bug">Bug antigo: PPTX era aceito mas NUNCA extraía, silêncio total</span></td></tr>
+  <tr><td class="chk">☐</td><td class="num">25</td><td class="onde">Novo conteúdo</td><td>Upload do <b>ZIP</b> (inválido)</td><td>Erro 400 elegante explicando o tipo não permitido, nunca "erro interno"<span class="bug">Bug antigo: estourava 500 opaco</span></td></tr>
+  <tr><td class="chk">☐</td><td class="num">26</td><td class="onde">Novo conteúdo</td><td>Upload do PDF escaneado (se tiver)</td><td>Upload da mídia funciona MAS aparece aviso visível de que não havia texto extraível</td></tr>
+  <tr><td class="chk">☐</td><td class="num">27</td><td class="onde">Novo conteúdo</td><td>Upload de vídeo MP4, áudio MP3 e imagem JPG (3 conteúdos)</td><td>Todos aceitos e salvos com o tipo correto</td></tr>
+  <tr><td class="chk">☐</td><td class="num">28</td><td class="onde">Novo conteúdo</td><td>Criar conteúdo por IA: informar tema e gerar texto (botão de geração IA)</td><td>Texto gerado aparece para revisão; se houver estimativa de custo, ela aparece antes</td></tr>
+</table>
+
+<h3>2.3 Revisão e enriquecimento com IA</h3>
+<table>
+  <tr><th></th><th>#</th><th>Onde</th><th>Ação</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td class="num">29</td><td class="onde">Revisão do conteúdo</td><td>Abrir o conteúdo do PDF em modo revisão, editar um trecho manualmente, salvar</td><td>Edição persiste</td></tr>
+  <tr><td class="chk">☐</td><td class="num">30</td><td class="onde">Revisão do conteúdo</td><td>Clicar "Reprocessar IA" (gera as perguntas socráticas)</td><td>Perguntas geradas sem erro<span class="bug">Bug antigo: falhava com 401 silencioso, token errado</span></td></tr>
+  <tr><td class="chk">☐</td><td class="num">31</td><td class="onde">Revisão do conteúdo</td><td>Gerenciar questões: editar uma pergunta gerada, excluir outra</td><td>Alterações salvam</td></tr>
+  <tr><td class="chk">☐</td><td class="num">32</td><td class="onde">Revisão do conteúdo</td><td>Rodar detecção de conteúdo IA (se o botão estiver visível)</td><td>Retorna probabilidade/veredito sem crash, mesmo em texto curto</td></tr>
+  <tr><td class="chk">☐</td><td class="num">33</td><td class="onde">Revisão do conteúdo</td><td>Ver o conteúdo de vídeo/imagem em modo revisão</td><td>Mídia renderiza (player/imagem), não só link cru</td></tr>
+</table>
+
+<h3>2.4 Geração de áudio (TTS e Podcast)</h3>
+<table>
+  <tr><th></th><th>#</th><th>Onde</th><th>Ação</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td class="num">34</td><td class="onde">Conteúdo do PDF</td><td>Gerar áudio estilo <b>Resumo</b></td><td>Job inicia na hora (não trava a tela), termina, player aparece e toca</td></tr>
+  <tr><td class="chk">☐</td><td class="num">35</td><td class="onde">Conteúdo LONGO</td><td>Gerar <b>Podcast</b> no conteúdo mais extenso</td><td>Áudio final cobre o capítulo INTEIRO em tom de narração conversacional<span class="bug">Bug antigo: truncava em 5.000 caracteres em silêncio</span></td></tr>
+  <tr><td class="chk">☐</td><td class="num">36</td><td class="onde">Durante a geração</td><td>Recarregar a página (F5) no meio do processamento</td><td>Ao voltar, o job continua/recupera, sem sumir<span class="bug">Bug antigo: job vivia só na memória, restart matava tudo</span></td></tr>
+  <tr><td class="chk">☐</td><td class="num">37</td><td class="onde">Durante a geração</td><td>Clicar "gerar" 2x seguidas no mesmo estilo</td><td>Não duplica: reaproveita o mesmo job</td></tr>
+</table>
+
+<!-- PARTE 3 -->
+<h2>Parte 3, Aluno: jornada de estudo (login: hugo.aluno)</h2>
+
+<table>
+  <tr><th></th><th>#</th><th>Onde</th><th>Ação</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td class="num">38</td><td class="onde">Dashboard</td><td>Logar como <code>hugo.aluno</code></td><td>Dashboard do aluno carrega com estatísticas zeradas/iniciais</td></tr>
+  <tr><td class="chk">☐</td><td class="num">39</td><td class="onde">Sino (header)</td><td>Conferir a notificação criada no passo 17</td><td>Contador do sino mostra 1; se houver lista, marcar como lida zera o contador</td></tr>
+  <tr><td class="chk">☐</td><td class="num">40</td><td class="onde">Meus Estudos</td><td>Abrir o curso novo, navegar pelos capítulos, abrir cada conteúdo</td><td><b>Vídeo com player, áudio com player, imagem exibida, PDF/texto legível</b><span class="bug">Bug antigo: NENHUMA mídia renderizava, tudo caía em tela vazia</span></td></tr>
+  <tr><td class="chk">☐</td><td class="num">41</td><td class="onde">Leitor</td><td>Ouvir o podcast gerado pelo professor</td><td>Player aparece com o estilo correto (podcast) e toca até o fim</td></tr>
+  <tr><td class="chk">☐</td><td class="num">42</td><td class="onde">Leitor › Tutor</td><td>Clicar numa pergunta socrática e iniciar o diálogo</td><td>Chat abre, tutor responde no contexto do conteúdo</td></tr>
+  <tr><td class="chk">☐</td><td class="num">43</td><td class="onde">Leitor › Tutor</td><td>Trocar 3 a 4 mensagens observando o contador de interações</td><td>Contador decresce a cada turno</td></tr>
+  <tr><td class="chk">☐</td><td class="num">44</td><td class="onde">Leitor › Tutor</td><td><b>Dar F5 no meio do diálogo</b> e reabrir o chat</td><td>Contador NÃO reseta, histórico preservado (a verdade vem do servidor)<span class="bug">Bug antigo: contador era do navegador, F5 zerava o pacing</span></td></tr>
+  <tr><td class="chk">☐</td><td class="num">45</td><td class="onde">Leitor › Tutor</td><td>Fechar o painel do chat e reabrir</td><td>Botões continuam clicáveis, dá para continuar ou iniciar outra pergunta<span class="bug">Bug antigo: fechar 1x travava os botões para sempre</span></td></tr>
+  <tr><td class="chk">☐</td><td class="num">46</td><td class="onde">Leitor › Tutor</td><td>Se houver botão de microfone: gravar uma resposta por voz</td><td>Transcrição vira texto no campo de mensagem</td></tr>
+  <tr><td class="chk">☐</td><td class="num">47</td><td class="onde">Leitor › Tutor</td><td>Conversar até esgotar as interações</td><td>Síntese de fechamento aparece, sessão encerra graciosamente, sem bolha em branco</td></tr>
+  <tr><td class="chk">☐</td><td class="num">48</td><td class="onde">Leitor</td><td>Clicar <b>Concluir</b> no conteúdo</td><td>Badge "Concluído" aparece, botão não reclicável</td></tr>
+  <tr><td class="chk">☐</td><td class="num">49</td><td class="onde">Curso</td><td>Voltar à página do curso</td><td>Barra de progresso do curso avançou</td></tr>
+  <tr><td class="chk">☐</td><td class="num">50</td><td class="onde">Conquistas</td><td>Abrir a tela de Conquistas</td><td>Pontos da atividade registrados; conquistas desbloqueadas aparecem nas abas</td></tr>
+  <tr><td class="chk">☐</td><td class="num">51</td><td class="onde">Curso completo</td><td>Concluir os demais conteúdos até fechar 100% do curso</td><td>Curso marca completo; certificado emitido/disponível (se a UI expõe)</td></tr>
+  <tr><td class="chk">☐</td><td class="num">52</td><td class="onde">Conta</td><td>Trocar a foto de avatar e editar o nome</td><td>Salva e reflete no header</td></tr>
+  <tr><td class="chk">☐</td><td class="num">53</td><td class="onde">Histórico</td><td>Abrir o histórico de sessões</td><td>A sessão socrática concluída aparece listada</td></tr>
+  <tr><td class="chk">☐</td><td class="num">54</td><td class="onde">/login (deslogado)</td><td>Clicar "esqueci a senha" com um email qualquer</td><td>Resposta genérica de OK (não revela se o email existe)</td></tr>
+</table>
+
+<!-- PARTE 4 -->
+<h2>Parte 4, O teste do vazamento (login: aluno.teste2)</h2>
+
+<div class="info">Este era o bug mais grave da plataforma: a conclusão de um aluno aparecia para TODOS os alunos, porque gravava no catálogo compartilhado. A correção escopou por usuário. Estes 4 passos provam isso.</div>
+
+<table>
+  <tr><th></th><th>#</th><th>Onde</th><th>Ação</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td class="num">55</td><td class="onde">Meus Estudos</td><td>Logar como <code>aluno.teste2</code> e abrir o MESMO conteúdo que hugo.aluno concluiu</td><td>Aparece <b>NÃO concluído</b> para este aluno</td></tr>
+  <tr><td class="chk">☐</td><td class="num">56</td><td class="onde">Curso</td><td>Conferir a barra de progresso deste aluno</td><td>Zerada/independente do progresso do hugo.aluno</td></tr>
+  <tr><td class="chk">☐</td><td class="num">57</td><td class="onde">Leitor › Tutor</td><td>Fazer um diálogo socrático próprio e concluir 1 conteúdo</td><td>Funciona normalmente, progressos ficam independentes</td></tr>
+  <tr><td class="chk">☐</td><td class="num">58</td><td class="onde">Barra de endereço</td><td>Tentar acessar a URL do painel admin (ex.: /admin)</td><td>Bloqueado/redirecionado, sem dados de admin</td></tr>
+</table>
+
+<!-- PARTE 5 -->
+<h2>Parte 5, Professor avalia e as notas saem (login: hugo.capitelli)</h2>
+
+<table>
+  <tr><th></th><th>#</th><th>Onde</th><th>Ação</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td class="num">59</td><td class="onde">Disciplina</td><td>Ver as sessões/estatísticas dos alunos da turma</td><td>As sessões dos 2 alunos aparecem, com status completed</td></tr>
+  <tr><td class="chk">☐</td><td class="num">60</td><td class="onde">Revisão de sessão</td><td>Abrir a sessão de <code>hugo.aluno</code>, dar rating (estrelas) + feedback escrito</td><td>Review salva sem erro</td></tr>
+  <tr><td class="chk">☐</td><td class="num">61</td><td class="onde">Revisão de sessão</td><td>Tentar revisar a MESMA sessão de novo</td><td>Bloqueado ou vira edição, nunca duplica</td></tr>
+  <tr><td class="chk">☐</td><td class="num">62</td><td class="onde">Notas</td><td>Dar a PRIMEIRA nota manual para <code>aluno.teste2</code></td><td><b>Salva sem erro 500</b><span class="bug">Bug antigo: primeira nota de qualquer aluno estourava 500 (coluna graded_by omitida). Só se prova aqui, contra o banco real</span></td></tr>
+  <tr><td class="chk">☐</td><td class="num">63</td><td class="onde">API (ver anexo)</td><td>Export de notas em JSON e CSV (comandos prontos no Anexo A)</td><td>JSON com dados REAIS (score, rating, override, timestamps); CSV baixa e abre no Excel<span class="bug">Bug antigo: export emitia score zerado e métricas fake hardcoded</span></td></tr>
+  <tr><td class="chk">☐</td><td class="num">64</td><td class="onde">API (ver anexo)</td><td>Repetir o export logado como <code>rafael.bin</code> (sem vínculo com a disciplina)</td><td><b>403</b>, nada vaza<span class="bug">Correção de ontem: o export vazava sessões de outras disciplinas</span></td></tr>
+  <tr><td class="chk">☐</td><td class="num">65</td><td class="onde">Aluno responde</td><td>Logar como <code>hugo.aluno</code>, abrir a review recebida e responder</td><td>Resposta do aluno salva e aparece na conversa da review</td></tr>
+</table>
+
+<div class="info">O gradebook e o export de notas ainda NÃO têm tela no frontend, são API (a tela é fase 2). Os comandos prontos estão no Anexo A, é copiar e colar no Terminal.</div>
+
+<!-- PARTE 6 -->
+<h2>Parte 6, Admin: encerramento e infra (login: admin)</h2>
+
+<table>
+  <tr><th></th><th>#</th><th>Onde</th><th>Ação</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td class="num">66</td><td class="onde">Console</td><td>Rever o dashboard após toda a atividade</td><td>Números refletem o teste: usuários, sessões, cursos criados</td></tr>
+  <tr><td class="chk">☐</td><td class="num">67</td><td class="onde">Configurações › Logs</td><td>Buscar nos logs a atividade do teste, exportar CSV</td><td>Eventos aparecem, export baixa</td></tr>
+  <tr><td class="chk">☐</td><td class="num">68</td><td class="onde">Configurações</td><td>Ver métricas de armazenamento (se a tela expõe)</td><td>Espaço usado condiz com os uploads feitos</td></tr>
+  <tr><td class="chk">☐</td><td class="num">69</td><td class="onde">Turmas</td><td>Ver estatísticas da disciplina do teste</td><td>Médias e contagens refletem as sessões avaliadas (média de performance não é zero fixo)</td></tr>
+  <tr><td class="chk">☐</td><td class="num">70</td><td class="onde">Configurações</td><td>Limpar cache</td><td>Ação executa sem derrubar a plataforma</td></tr>
+  <tr><td class="chk">☐</td><td class="num">71</td><td class="onde">Cursos</td><td>Exportar o curso criado (botão exportar no curso)</td><td>Arquivo de export baixa</td></tr>
+  <tr><td class="chk">☐</td><td class="num">72</td><td class="onde">Usuários</td><td>Excluir um usuário de teste descartável (crie um só para isso)</td><td>Excluído, não loga mais</td></tr>
+  <tr><td class="chk">☐</td><td class="num">73</td><td class="onde">Configurações › Segurança</td><td><b>POR ÚLTIMO:</b> Force Logout global</td><td>TODOS os usuários logados são derrubados na próxima ação; relogar funciona normalmente<span class="bug">Correção de junho: antes mutava o .env do servidor; agora rotaciona o segredo no banco</span></td></tr>
+  <tr><td class="chk">☐</td><td class="num">74</td><td class="onde">Geral</td><td>Relogar com 2 usuários após o force logout</td><td>Login normal, plataforma operante, fim do roteiro</td></tr>
+</table>
+
+<!-- PARTE 7 -->
+<h2>Parte 7, Fora de escopo (não testar, comportamento conhecido)</h2>
+
+<table>
+  <tr><th>Função</th><th>Estado</th><th>Plano</th></tr>
+  <tr><td>Broadcast de notificação ("Ação Global")</td><td>Quebrado, contrato antigo entre front e back</td><td>Fase 2</td></tr>
+  <tr><td>Bloquear/desbloquear usuário</td><td>Botão morto, coluna não existe no banco</td><td>Fase 2</td></tr>
+  <tr><td>Envio real ao Moodle / LTI grade write-back</td><td>Stub, a saída oficial de notas é o export do Anexo A</td><td>Fase 2</td></tr>
+  <tr><td>Reset de senha após restart do servidor</td><td>Token vive em memória, restart invalida pedidos pendentes</td><td>Fase 2</td></tr>
+  <tr><td>Tela de gradebook/notas no frontend</td><td>Não existe, uso via API (Anexo A)</td><td>Fase 2</td></tr>
+  <tr><td>Integrações JACAD (sync/import)</td><td>Endpoints existem, sem tela dedicada confirmada</td><td>Validar na fase 2</td></tr>
+</table>
+
+<!-- ANEXO A -->
+<h2>Anexo A, Export de notas via API (copiar e colar no Terminal)</h2>
+
+<p><b>1. Obter o token do professor:</b></p>
+<pre>TOKEN=$(curl -s -X POST "https://api.harven.eximiaventures.com.br/auth/login" \
+  -H "Content-Type: application/json" \
+  -d '{"ra": "hugo.capitelli", "password": "Harven@2026"}' | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")</pre>
+
+<p><b>2. Descobrir o ID da disciplina:</b></p>
+<pre>curl -s "https://api.harven.eximiaventures.com.br/disciplines" \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool | head -30</pre>
+
+<p><b>3. Export JSON (troque DISC_ID pelo id do passo anterior):</b></p>
+<pre>curl -s "https://api.harven.eximiaventures.com.br/disciplines/DISC_ID/grades/export" \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool</pre>
+
+<p><b>4. Export CSV (baixa a planilha na pasta atual):</b></p>
+<pre>curl -s "https://api.harven.eximiaventures.com.br/disciplines/DISC_ID/grades/export?format=csv" \
+  -H "Authorization: Bearer $TOKEN" -o notas.csv && open notas.csv</pre>
+
+<p><b>5. Teste de escopo (passo 64): repita o passo 1 com <code>rafael.bin</code> e rode o passo 3 de novo. Esperado: <code>403</code>.</b></p>
+
+<!-- FOLHA DE FALHAS -->
+<h2>Folha de registro de falhas</h2>
+
+<table class="falha-table">
+  <tr><th style="width:50px">Passo</th><th>O que apareceu na tela / resposta recebida</th><th style="width:110px">Gravidade (trava tudo / incômodo / cosmético)</th></tr>
+  <tr><td></td><td></td><td></td></tr>
+  <tr><td></td><td></td><td></td></tr>
+  <tr><td></td><td></td><td></td></tr>
+  <tr><td></td><td></td><td></td></tr>
+  <tr><td></td><td></td><td></td></tr>
+  <tr><td></td><td></td><td></td></tr>
+  <tr><td></td><td></td><td></td></tr>
+  <tr><td></td><td></td><td></td></tr>
+  <tr><td></td><td></td><td></td></tr>
+  <tr><td></td><td></td><td></td></tr>
+</table>
+
+<p><b>Critério de aprovação geral:</b> os 74 passos sem nenhum erro 500 inesperado, sem vazamento de dados entre alunos ou disciplinas, e com números honestos em toda ponta (extração, score, notas, áudio). Falhas registradas voltam para J.A.R.V.I.S. com o número do passo.</p>
+
+<div class="footer-note">Harven.AI v2 · Roteiro de teste de lançamento · Gerado por J.A.R.V.I.S. em 08/07/2026 · eximIA</div>
+
+</body>
+</html>
