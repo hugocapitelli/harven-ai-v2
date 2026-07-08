@@ -255,6 +255,7 @@ export const usersApi = {
   create:       (data: Record<string, unknown>)    => api.post('/users', data).then(d),
   createBatch:  (users: Record<string, unknown>[]) => api.post('/users/batch', users).then(d),
   update:       (id: string, data: Record<string, unknown>) => api.put(`/users/${id}`, data).then(d),
+  delete:       (id: string)                       => api.delete(`/users/${id}`).then(d),
   uploadAvatar: (id: string, file: File) => upload(`/users/${id}/avatar`, file, 'file'),
 };
 

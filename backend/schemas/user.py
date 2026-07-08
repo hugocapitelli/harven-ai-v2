@@ -13,6 +13,9 @@ class UserCreate(BaseModel):
     bio: Optional[str] = None
 
 
+# NOTE: this UserUpdate is dead code — not imported by main.py, which defines
+# its own UserUpdate (with the `status` field) inline. Left as-is per BUG-1
+# scope (out of scope to refactor/consolidate imports here).
 class UserUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=200)
     email: Optional[EmailStr] = None

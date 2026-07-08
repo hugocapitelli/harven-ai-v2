@@ -69,13 +69,21 @@ export default function DisciplineEdit() {
     if (!discipline.name?.trim()) { toast.error('Título é obrigatório.'); return; }
     setSaving(true);
     try {
+      let disciplineId = id;
       if (isNew) {
         const created = await disciplinesApi.create(discipline as Record<string, unknown>);
+        disciplineId = created.id;
         toast.success('Disciplina criada.');
-        navigate(`/instructor/discipline/${created.id}`, { replace: true });
       } else if (id) {
         await disciplinesApi.update(id, discipline as Record<string, unknown>);
         toast.success('Disciplina atualizada.');
+      }
+      if (disciplineId && imageFile) {
+        await disciplinesApi.uploadImage(disciplineId, imageFile);
+        setImageFile(null);
+      }
+      if (isNew && disciplineId) {
+        navigate(`/instructor/discipline/${disciplineId}`, { replace: true });
       }
     } catch {
       toast.error('Erro ao salvar.');

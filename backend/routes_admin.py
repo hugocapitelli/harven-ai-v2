@@ -84,6 +84,13 @@ class NotificationCreate(BaseModel):
     link: Optional[str] = Field(None, max_length=500)
 
 
+class NotificationBroadcast(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    message: str = Field(..., min_length=1)
+    notification_type: Optional[str] = Field("announcement", max_length=50)
+    target: Optional[str] = "all"
+
+
 class ActivityCreate(BaseModel):
     activity_type: str = Field(..., max_length=50)
     description: Optional[str] = None
@@ -759,6 +766,40 @@ async def create_notification(
         "type": row.get("notification_type", body.notification_type),
         "created_at": row.get("created_at"),
     }
+
+
+@router.post("/notifications/broadcast", tags=["Notifications"], summary="Enviar notificacao em massa")
+async def broadcast_notification(
+    body: NotificationBroadcast,
+    _admin: dict = Depends(require_role("ADMIN")),
+    client: Client = Depends(get_supabase),
+):
+    # Fan-out is an ADMIN-only operation (mirrors create_notification's ADMIN
+    # gate) — resolves recipients server-side and inserts one notification row
+    # per recipient in a single batch call.
+    target = (body.target or "all").lower()
+    if target == "all":
+        users_res = client.table("users").select("id").execute()
+    else:
+        users_res = client.table("users").select("id").eq("role", target.upper()).execute()
+    recipients = users_res.data or []
+
+    if not recipients:
+        return {"sent": 0}
+
+    rows = [
+        {
+            "id": str(uuid4()),
+            "user_id": r["id"],
+            "title": body.title,
+            "message": body.message,
+            "notification_type": body.notification_type,
+            "link": None,
+        }
+        for r in recipients
+    ]
+    client.table("notifications").insert(rows).execute()
+    return {"sent": len(rows)}
 
 
 @router.put("/notifications/{notification_id}/read", tags=["Notifications"], summary="Marcar como lida")

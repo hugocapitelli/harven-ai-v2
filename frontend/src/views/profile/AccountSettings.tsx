@@ -36,7 +36,7 @@ function Toggle({ checked, onChange, label, description }: { checked: boolean; o
 }
 
 export default function AccountSettings() {
-  const { user } = useAuth();
+  const { user, updateUser } = useAuth();
   const avatarRef = useRef<HTMLInputElement>(null);
 
   const [activeTab, setActiveTab] = useState('profile');
@@ -68,8 +68,7 @@ export default function AccountSettings() {
     setSaving(true);
     try {
       await usersApi.update(user.id, { name, email, title, bio } as Record<string, unknown>);
-      const savedUser = JSON.parse(sessionStorage.getItem('user-data') ?? '{}');
-      sessionStorage.setItem('user-data', JSON.stringify({ ...savedUser, name, email, title, bio }));
+      updateUser({ name, email, title, bio });
       toast.success('Perfil atualizado.');
     } catch {
       toast.error('Erro ao atualizar perfil.');
@@ -83,12 +82,16 @@ export default function AccountSettings() {
     if (!file || !user?.id) return;
     setAvatarPreview(URL.createObjectURL(file));
     try {
+      // NOTE (infra follow-up, fora do escopo deste pacote): se a imagem ainda
+      // falhar ao carregar após este fix, confirmar que API_BASE_URL está
+      // configurada em produção (storage_service._get_base_url) OU que o proxy
+      // do frontend expõe /uploads na mesma origem — sem isso, a URL retornada
+      // pode ser relativa e quebrar fora do host da API.
       const result = await usersApi.uploadAvatar(user.id, file);
       const url = result.avatar_url ?? result.url;
       if (url) {
         setAvatarPreview(url);
-        const savedUser = JSON.parse(sessionStorage.getItem('user-data') ?? '{}');
-        sessionStorage.setItem('user-data', JSON.stringify({ ...savedUser, avatar_url: url }));
+        updateUser({ avatar_url: url });
       }
       toast.success('Avatar atualizado.');
     } catch {

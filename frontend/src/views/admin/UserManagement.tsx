@@ -1,11 +1,13 @@
 // @ts-nocheck
 import { useState, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
-import { usersApi } from '../../services/api';
+import { usersApi, notificationsApi } from '../../services/api';
 import { unwrapList } from '../../lib/utils';
+import { useAuth } from '../../contexts/AuthContext';
 import { Button } from '../../components/ui/Button';
 import { Card, CardHeader } from '../../components/ui/Card';
 import { Input } from '../../components/ui/Input';
+import { Textarea } from '../../components/ui/Textarea';
 import { Select } from '../../components/ui/Select';
 import { Badge } from '../../components/ui/Badge';
 import { Avatar } from '../../components/ui/Avatar';
@@ -37,7 +39,10 @@ const ROLE_VARIANT: Record<UserRole, 'default' | 'success' | 'warning' | 'danger
 
 const EMPTY_FORM = { name: '', ra: '', email: '', password: '', role: 'STUDENT' as UserRole, title: '' };
 
+const EMPTY_NOTIFY_FORM = { title: '', message: '' };
+
 export default function UserManagement() {
+  const { user: currentUser } = useAuth();
   const [users, setUsers] = useState<ApiUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -46,6 +51,10 @@ export default function UserManagement() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [editingUser, setEditingUser] = useState<ApiUser | null>(null);
+  const [deletingUser, setDeletingUser] = useState<ApiUser | null>(null);
+  const [notifyingUser, setNotifyingUser] = useState<ApiUser | null>(null);
+  const [notifyForm, setNotifyForm] = useState(EMPTY_NOTIFY_FORM);
+  const [notifySending, setNotifySending] = useState(false);
   const csvRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -113,6 +122,47 @@ export default function UserManagement() {
       toast.error('Erro ao atualizar.');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deletingUser) return;
+    setSaving(true);
+    try {
+      await usersApi.delete(deletingUser.id);
+      toast.success('Usuário removido.');
+      setUsers((prev) => prev.filter((x) => x.id !== deletingUser.id));
+      setDeletingUser(null);
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || 'Erro ao remover usuário.';
+      toast.error(String(msg));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleNotify = async () => {
+    if (!notifyingUser) return;
+    if (!notifyForm.title.trim()) {
+      toast.error('Defina um título para a notificação.');
+      return;
+    }
+    setNotifySending(true);
+    try {
+      await notificationsApi.create({
+        user_id: notifyingUser.id,
+        title: notifyForm.title,
+        message: notifyForm.message,
+        notification_type: 'admin_message',
+      });
+      toast.success('Notificação enviada.');
+      setNotifyingUser(null);
+      setNotifyForm(EMPTY_NOTIFY_FORM);
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || 'Erro ao enviar notificação.';
+      toast.error(String(msg));
+    } finally {
+      setNotifySending(false);
     }
   };
 
@@ -246,6 +296,24 @@ export default function UserManagement() {
                           >
                             <span className="material-symbols-outlined text-[18px]">{u.status === 'blocked' ? 'lock_open' : 'block'}</span>
                           </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => { setNotifyForm(EMPTY_NOTIFY_FORM); setNotifyingUser(u); }}
+                            aria-label="Notificar"
+                          >
+                            <span className="material-symbols-outlined text-[18px]">notifications</span>
+                          </Button>
+                          {u.id !== currentUser?.id && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => setDeletingUser(u)}
+                              aria-label="Excluir"
+                            >
+                              <span className="material-symbols-outlined text-[18px]">delete</span>
+                            </Button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -295,6 +363,48 @@ export default function UserManagement() {
           <Button variant="outline" onClick={() => { setShowCreateModal(false); setEditingUser(null); }}>Cancelar</Button>
           <Button onClick={editingUser ? handleEdit : handleCreate} disabled={saving}>
             {saving ? 'Salvando...' : editingUser ? 'Atualizar' : 'Criar'}
+          </Button>
+        </Modal.Footer>
+      </Modal.Root>
+
+      {/* Delete Confirmation Modal */}
+      <Modal.Root open={!!deletingUser} onClose={() => setDeletingUser(null)} size="sm">
+        <Modal.Header title="Confirmar exclusão" onClose={() => setDeletingUser(null)} />
+        <Modal.Body>
+          <p className="text-sm text-muted-foreground">
+            Excluir o usuário &quot;{deletingUser?.name}&quot;? Essa ação não pode ser desfeita.
+          </p>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="outline" onClick={() => setDeletingUser(null)}>Cancelar</Button>
+          <Button variant="destructive" onClick={handleDelete} disabled={saving}>
+            {saving ? 'Excluindo...' : 'Excluir'}
+          </Button>
+        </Modal.Footer>
+      </Modal.Root>
+
+      {/* Notify Modal */}
+      <Modal.Root open={!!notifyingUser} onClose={() => setNotifyingUser(null)} size="md">
+        <Modal.Header title={`Notificar ${notifyingUser?.name ?? ''}`} onClose={() => setNotifyingUser(null)} />
+        <Modal.Body>
+          <div className="flex flex-col gap-4">
+            <Input
+              label="Título"
+              value={notifyForm.title}
+              onChange={(e) => setNotifyForm((f) => ({ ...f, title: e.target.value }))}
+              autoFocus
+            />
+            <Textarea
+              label="Mensagem"
+              value={notifyForm.message}
+              onChange={(e) => setNotifyForm((f) => ({ ...f, message: e.target.value }))}
+            />
+          </div>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="outline" onClick={() => setNotifyingUser(null)}>Cancelar</Button>
+          <Button onClick={handleNotify} disabled={notifySending}>
+            {notifySending ? 'Enviando...' : 'Enviar'}
           </Button>
         </Modal.Footer>
       </Modal.Root>

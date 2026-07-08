@@ -141,6 +141,16 @@ export default function SystemSettings() {
     } catch { toast.error('Erro ao exportar.'); }
   };
 
+  const handleDownloadBackup = async (id: string, filename: string) => {
+    try {
+      const blob = await adminApi.downloadBackup(id);
+      const url = URL.createObjectURL(blob as unknown as Blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename || `backup-${id}.zip`; a.click();
+      URL.revokeObjectURL(url);
+    } catch { toast.error('Erro ao baixar backup.'); }
+  };
+
   const set = (key: string, value: unknown) => setSettings((s) => ({ ...s, [key]: value }));
 
   if (loading) {
@@ -302,7 +312,7 @@ export default function SystemSettings() {
                       <td className="px-4 py-2 text-muted-foreground text-xs">{new Date(b.created_at).toLocaleString('pt-BR')}</td>
                       <td className="px-4 py-2 text-right">
                         <div className="flex justify-end gap-1">
-                          <Button variant="ghost" size="icon" onClick={() => adminApi.downloadBackup(b.id)} aria-label="Download">
+                          <Button variant="ghost" size="icon" onClick={() => handleDownloadBackup(b.id, b.filename)} aria-label="Download">
                             <span className="material-symbols-outlined text-[18px]">download</span>
                           </Button>
                           <Button variant="destructive" size="icon" onClick={async () => {

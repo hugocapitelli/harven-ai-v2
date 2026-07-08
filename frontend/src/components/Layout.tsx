@@ -85,19 +85,46 @@ function Sidebar({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) 
 }
 
 // --- Header ---
+interface NotificationItem {
+  id: string;
+  title: string;
+  message?: string | null;
+  type?: string | null;
+  link?: string | null;
+  read: boolean;
+  created_at?: string;
+}
+
 function Header({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [showMenu, setShowMenu] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
 
   useEffect(() => {
     if (!user) return;
     notificationsApi.list(user.id).then((data) => {
-      const list = unwrapList<{ read: boolean }>(data);
+      const list = unwrapList<NotificationItem>(data);
+      setNotifications(list);
       setUnreadCount(list.filter((n) => !n.read).length);
     }).catch(() => {});
   }, [user]);
+
+  const handleNotificationClick = async (item: NotificationItem) => {
+    if (!item.read) {
+      try {
+        await notificationsApi.markRead(item.id);
+        setNotifications((prev) => prev.map((n) => (n.id === item.id ? { ...n, read: true } : n)));
+        setUnreadCount((prev) => Math.max(0, prev - 1));
+      } catch {
+        // silent — optimistic update already reflected in UI intent
+      }
+    }
+    setShowNotifications(false);
+    if (item.link) navigate(item.link);
+  };
 
   return (
     <header className="h-16 bg-white border-b border-border flex items-center justify-between px-6 flex-shrink-0">
@@ -107,14 +134,48 @@ function Header({ onToggleSidebar }: { onToggleSidebar: () => void }) {
         </button>
       </div>
       <div className="flex items-center gap-4">
-        <button className="relative text-muted-foreground hover:text-foreground transition-colors" aria-label="Notificacoes">
-          <span className="material-symbols-outlined">notifications</span>
-          {unreadCount > 0 && (
-            <span className="absolute -top-1 -right-1 size-4 bg-destructive text-white text-[9px] rounded-full flex items-center justify-center font-bold">
-              {unreadCount > 9 ? '9+' : unreadCount}
-            </span>
+        <div className="relative">
+          <button
+            onClick={() => setShowNotifications((v) => !v)}
+            className="relative text-muted-foreground hover:text-foreground transition-colors"
+            aria-label="Notificacoes"
+            aria-expanded={showNotifications}
+          >
+            <span className="material-symbols-outlined">notifications</span>
+            {unreadCount > 0 && (
+              <span className="absolute -top-1 -right-1 size-4 bg-destructive text-white text-[9px] rounded-full flex items-center justify-center font-bold">
+                {unreadCount > 9 ? '9+' : unreadCount}
+              </span>
+            )}
+          </button>
+          {showNotifications && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setShowNotifications(false)} />
+              <div className="absolute right-0 top-12 w-80 max-h-96 overflow-y-auto bg-white border border-border rounded-xl shadow-lg z-50 py-2">
+                {notifications.length === 0 ? (
+                  <p className="px-4 py-6 text-sm text-muted-foreground text-center">Nenhuma notificacao</p>
+                ) : (
+                  notifications.map((n) => (
+                    <button
+                      key={n.id}
+                      onClick={() => handleNotificationClick(n)}
+                      className={cn(
+                        'w-full text-left px-4 py-2.5 text-sm hover:bg-muted transition-colors flex flex-col gap-0.5',
+                        !n.read && 'bg-primary/5',
+                      )}
+                    >
+                      <span className="font-medium text-foreground flex items-center gap-2">
+                        {!n.read && <span className="size-1.5 rounded-full bg-primary flex-shrink-0" />}
+                        {n.title}
+                      </span>
+                      {n.message && <span className="text-xs text-muted-foreground line-clamp-2">{n.message}</span>}
+                    </button>
+                  ))
+                )}
+              </div>
+            </>
           )}
-        </button>
+        </div>
         <div className="relative">
           <button onClick={() => setShowMenu(!showMenu)} className="flex items-center gap-2" aria-expanded={showMenu}>
             <div className="size-8 rounded-full bg-harven-dark flex items-center justify-center text-primary text-xs font-bold">

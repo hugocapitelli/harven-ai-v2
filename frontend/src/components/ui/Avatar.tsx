@@ -1,4 +1,4 @@
-import { useState, ImgHTMLAttributes } from 'react';
+import { useState, useEffect, ImgHTMLAttributes } from 'react';
 import { cn } from '../../lib/utils';
 
 type AvatarSize = 'sm' | 'md' | 'lg' | 'xl';
@@ -22,6 +22,11 @@ function getInitials(name: string): string {
 
 function Avatar({ src, fallback = '?', size = 'md', className, alt, ...props }: AvatarProps) {
   const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    setHasError(false);
+  }, [src]);
+
   const showImage = src && !hasError;
 
   return (

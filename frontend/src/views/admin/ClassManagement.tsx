@@ -43,12 +43,15 @@ export default function ClassManagement() {
   const [disciplines, setDisciplines] = useState<Discipline[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [semesterFilter, setSemesterFilter] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
   const [editState, setEditState] = useState<EditState>({ open: false, discipline: null, tab: 'info' });
   const [saving, setSaving] = useState(false);
 
   // Edit form state
   const [editForm, setEditForm] = useState({ name: '', code: '', semester: '', description: '' });
+  const [editImageFile, setEditImageFile] = useState<File | null>(null);
+  const [editImagePreview, setEditImagePreview] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createForm, setCreateForm] = useState({ name: '', code: '', semester: '', description: '' });
   const [courses, setCourses] = useState<Course[]>([]);
@@ -93,6 +96,8 @@ export default function ClassManagement() {
 
   const openEdit = async (disc: Discipline) => {
     setEditForm({ name: disc.name ?? disc.title ?? '', code: disc.code ?? '', semester: disc.semester ?? '', description: disc.description ?? '' });
+    setEditImageFile(null);
+    setEditImagePreview(disc.image_url ?? null);
     setEditState({ open: true, discipline: disc, tab: 'info' });
     try {
       const [c, t, s, u] = await Promise.all([
@@ -116,7 +121,12 @@ export default function ClassManagement() {
     setSaving(true);
     try {
       await disciplinesApi.update(editState.discipline.id, editForm as Record<string, unknown>);
+      if (editImageFile) {
+        await disciplinesApi.uploadImage(editState.discipline.id, editImageFile);
+        setEditImageFile(null);
+      }
       toast.success('Turma atualizada.');
+      setEditState({ open: false, discipline: null, tab: 'info' });
       const controller = new AbortController();
       loadDisciplines(controller);
     } catch { toast.error('Erro ao salvar.'); }
@@ -235,7 +245,9 @@ export default function ClassManagement() {
   };
 
   const filtered = disciplines.filter(
-    (d) => (d.name ?? d.title ?? '').toLowerCase().includes(search.toLowerCase()) || (d.code ?? '').toLowerCase().includes(search.toLowerCase()),
+    (d) =>
+      ((d.name ?? d.title ?? '').toLowerCase().includes(search.toLowerCase()) || (d.code ?? '').toLowerCase().includes(search.toLowerCase())) &&
+      (!semesterFilter || d.semester === semesterFilter),
   );
 
   const availableTeachers = allUsers.filter(
@@ -263,6 +275,14 @@ export default function ClassManagement() {
       {/* Toolbar */}
       <div className="flex items-center gap-3">
         <SearchInput placeholder="Buscar turma..." value={search} onChange={setSearch} className="flex-1 max-w-sm" />
+        <select
+          value={semesterFilter}
+          onChange={(e) => setSemesterFilter(e.target.value)}
+          className="rounded-lg border border-harven-border bg-harven-bg px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+        >
+          <option value="">Todos os semestres</option>
+          {SEMESTER_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
         <div className="flex border border-border rounded-lg overflow-hidden">
           <button onClick={() => setViewMode('grid')} className={`p-2 ${viewMode === 'grid' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}`}>
             <span className="material-symbols-outlined text-[20px]">grid_view</span>
@@ -358,6 +378,37 @@ export default function ClassManagement() {
                     </select>
                   </div>
                   <Input label="Descrição" value={editForm.description} onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))} />
+                  <div className="space-y-1.5">
+                    <label className="block text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Imagem de Capa</label>
+                    <div className="flex items-center gap-4">
+                      {editImagePreview ? (
+                        <div className="h-24 w-40 rounded-lg overflow-hidden bg-muted">
+                          <img src={editImagePreview} alt="Preview" className="h-full w-full object-cover" />
+                        </div>
+                      ) : (
+                        <div className="h-24 w-40 rounded-lg bg-muted flex items-center justify-center">
+                          <span className="material-symbols-outlined text-muted-foreground text-3xl">image</span>
+                        </div>
+                      )}
+                      <label className="cursor-pointer">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            setEditImageFile(file);
+                            setEditImagePreview(URL.createObjectURL(file));
+                          }}
+                        />
+                        <span className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-border text-sm font-medium text-foreground hover:bg-muted transition-colors">
+                          <span className="material-symbols-outlined text-[16px]">upload</span>
+                          Alterar Imagem
+                        </span>
+                      </label>
+                    </div>
+                  </div>
                   <Button onClick={handleSaveInfo} disabled={saving}>{saving ? 'Salvando...' : 'Salvar'}</Button>
                 </div>
               )}
@@ -551,6 +602,7 @@ export default function ClassManagement() {
               onChange={(e) => setCreateForm((f) => ({ ...f, description: e.target.value }))}
             />
             <p className="text-xs text-muted-foreground">Após criar, você poderá atribuir professores e alunos na tela de edição.</p>
+            <p className="text-xs text-muted-foreground">Imagem de capa pode ser adicionada após criar.</p>
           </form>
         </Modal.Body>
         <Modal.Footer>
