@@ -13,7 +13,12 @@ class BaseRepository:
     # ── READ ─────────────────────────────────────────────
     def get_by_id(self, id: str) -> Optional[Dict]:
         res = self.client.table(self.table).select("*").eq("id", id).maybe_single().execute()
-        return res.data
+        # PostgREST/supabase-py returns ``None`` (not a response with ``data=None``)
+        # from ``.maybe_single().execute()`` when ZERO rows match. Guard it so a
+        # missing row yields ``None`` per the declared ``Optional[Dict]`` contract
+        # instead of an ``AttributeError`` -> HTTP 500. This is the same defensive
+        # pattern already applied inline in routes_admin.py / routes_ai.py.
+        return res.data if res is not None else None
 
     def get_all(
         self,
@@ -40,7 +45,9 @@ class BaseRepository:
         for key, value in filters.items():
             q = q.eq(key, value)
         res = q.maybe_single().execute()
-        return res.data
+        # Same zero-row guard as ``get_by_id`` (``.maybe_single().execute()``
+        # returns ``None`` when nothing matches).
+        return res.data if res is not None else None
 
     # ── CREATE ───────────────────────────────────────────
     def create(self, data: Dict[str, Any]) -> Dict:
