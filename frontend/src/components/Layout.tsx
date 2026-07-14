@@ -12,6 +12,15 @@ const instructorNav = [
   { to: '/courses', icon: 'menu_book', label: 'Cursos' },
 ];
 
+const roleLabels: Record<string, string> = {
+  STUDENT: 'Aluno',
+  INSTRUCTOR: 'Professor',
+  TEACHER: 'Professor',
+  ADMIN: 'Administrador',
+};
+
+const APP_VERSION = 'v2.0';
+
 const navItems: Record<string, { to: string; icon: string; label: string; requireGamification?: boolean }[]> = {
   STUDENT: [
     { to: '/dashboard', icon: 'home', label: 'Dashboard' },
@@ -33,6 +42,7 @@ function Sidebar({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) 
   const { user } = useAuth();
   const { settings } = useSettings();
   const location = useLocation();
+  const navigate = useNavigate();
 
   useEffect(() => { onClose(); }, [location.pathname]);
 
@@ -44,41 +54,100 @@ function Sidebar({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) 
 
   if (!user) return null;
   const items = navItems[user.role] ?? [];
+  const roleLabel = roleLabels[user.role] ?? user.role;
+  const initials = user.name?.slice(0, 2).toUpperCase() ?? '?';
 
   return (
     <>
-      {isOpen && <div className="fixed inset-0 bg-black/50 z-40 md:hidden" onClick={onClose} />}
+      {isOpen && <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40 md:hidden" onClick={onClose} />}
       <aside
         role="navigation"
         aria-label="Menu principal"
         className={cn(
-          'fixed top-0 left-0 h-full w-64 bg-harven-sidebar text-white flex flex-col z-50 transition-transform duration-300',
+          'fixed top-0 left-0 h-full w-64 bg-harven-sidebar text-white flex flex-col z-50',
+          'border-r border-white/[0.06] shadow-2xl shadow-black/20 transition-transform duration-300 ease-out',
           'md:translate-x-0',
           isOpen ? 'translate-x-0' : '-translate-x-full',
         )}
       >
-        <div className="h-16 flex items-center px-6 border-b border-white/10">
-          <img src={settings.logo_url || '/harven-logo.svg'} alt={settings.platform_name || 'Harven'} className="h-8 object-contain" />
+        {/* Brand */}
+        <div className="h-16 flex items-center px-6 border-b border-white/[0.06] flex-shrink-0">
+          <img
+            src={settings.logo_url || '/harven-logo-white.svg'}
+            alt={settings.platform_name || 'Harven'}
+            className="h-7 w-auto object-contain"
+          />
         </div>
-        <nav className="flex-1 py-4 px-3 space-y-1 overflow-y-auto">
-          {items.map((item) => {
-            if ('requireGamification' in item && item.requireGamification && !settings.gamification_enabled) return null;
-            return (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.to === '/dashboard' || item.to === '/admin' || item.to === '/instructor'}
-                className={({ isActive }) => cn(
-                  'flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors',
-                  isActive ? 'bg-white/10 text-primary' : 'text-gray-400 hover:text-white hover:bg-white/5',
-                )}
-              >
-                <span className="material-symbols-outlined text-[20px]">{item.icon}</span>
-                {item.label}
-              </NavLink>
-            );
-          })}
+
+        {/* Navigation */}
+        <nav className="flex-1 py-5 px-3 overflow-y-auto no-scrollbar">
+          <p className="px-3 mb-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-white/30">
+            Navegação
+          </p>
+          <div className="space-y-1">
+            {items.map((item) => {
+              if ('requireGamification' in item && item.requireGamification && !settings.gamification_enabled) return null;
+              return (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.to === '/dashboard' || item.to === '/admin' || item.to === '/instructor'}
+                  className={({ isActive }) => cn(
+                    'group relative flex items-center gap-3 pl-4 pr-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150',
+                    isActive
+                      ? 'bg-primary/[0.12] text-white'
+                      : 'text-white/55 hover:text-white hover:bg-white/[0.04]',
+                  )}
+                >
+                  {({ isActive }) => (
+                    <>
+                      <span
+                        aria-hidden
+                        className={cn(
+                          'absolute left-0 top-1/2 -translate-y-1/2 h-5 w-1 rounded-r-full bg-primary transition-all duration-150',
+                          isActive ? 'opacity-100 scale-y-100' : 'opacity-0 scale-y-0',
+                        )}
+                      />
+                      <span
+                        className={cn(
+                          'material-symbols-outlined text-[20px] transition-colors flex-shrink-0',
+                          isActive ? 'text-primary fill-1' : 'text-white/45 group-hover:text-white/80',
+                        )}
+                      >
+                        {item.icon}
+                      </span>
+                      <span className="truncate">{item.label}</span>
+                    </>
+                  )}
+                </NavLink>
+              );
+            })}
+          </div>
         </nav>
+
+        {/* User footer */}
+        <div className="mt-auto border-t border-white/[0.06] p-3 flex-shrink-0">
+          <button
+            onClick={() => navigate('/profile')}
+            className="w-full flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-white/[0.05] transition-colors group text-left"
+          >
+            <span className="size-9 rounded-full bg-primary/15 ring-1 ring-primary/25 flex items-center justify-center text-primary text-xs font-bold flex-shrink-0 overflow-hidden">
+              {user.avatar_url
+                ? <img src={user.avatar_url} alt={user.name} className="size-full object-cover" />
+                : initials}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-medium text-white truncate font-display">{user.name}</span>
+              <span className="block text-xs text-white/45 truncate">{roleLabel}</span>
+            </span>
+            <span className="material-symbols-outlined text-[18px] text-white/25 group-hover:text-white/60 transition-colors flex-shrink-0">
+              chevron_right
+            </span>
+          </button>
+          <p className="mt-2.5 text-center text-[10px] tracking-wide text-white/25">
+            {settings.platform_name || 'Harven AI'} · {APP_VERSION}
+          </p>
+        </div>
       </aside>
     </>
   );
