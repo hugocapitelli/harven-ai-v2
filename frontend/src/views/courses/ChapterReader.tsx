@@ -817,7 +817,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
           <span className="material-symbols-outlined text-6xl text-gray-300">description</span>
           <p className="text-gray-500 mt-2">Conteudo nao encontrado</p>
           <button
-            onClick={() => navigate(-1)}
+            onClick={() => navigate(`/course/${courseId}/chapter/${chapterId}`)}
             className="mt-4 text-primary font-bold text-sm"
           >
             Voltar
@@ -867,7 +867,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4 min-w-0 flex-1">
             <button
-              onClick={() => navigate(-1)}
+              onClick={() => navigate(`/course/${courseId}/chapter/${chapterId}`)}
               className="text-gray-400 hover:text-foreground shrink-0"
             >
               <span className="material-symbols-outlined">arrow_back</span>

@@ -119,7 +119,7 @@ export default function ContentRevision() {
     } catch {
       toast.success('Questões salvas!');
     }
-    navigate(`/course/${courseId}/chapter/${chapterId}/content/${contentId}`);
+    navigate(`/course/${courseId}/chapter/${chapterId}/content/${contentId}`, { replace: true });
   };
 
   if (loading) return (
