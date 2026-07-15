@@ -53,7 +53,10 @@ def test_seed_is_queryable_through_fake(fake_supabase):
         .maybe_single()
         .execute()
     )
-    assert missing.data is None
+    # GRD-5: faithful to supabase-py 2.28.x — a zero-row ``.maybe_single().execute()``
+    # returns ``None`` (the whole response), NOT ``_Result(data=None)``. Callers must
+    # guard with ``res is not None`` before reading ``.data`` (precedent 5847a60).
+    assert missing is None
 
 
 def test_fake_write_chains_are_audited(fake_supabase):

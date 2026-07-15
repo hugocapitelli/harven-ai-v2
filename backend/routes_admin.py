@@ -1249,7 +1249,12 @@ async def unlock_achievement(
     assert_owner_or_role(user_id, current_user, "ADMIN", "TEACHER")
     target_user_id = _effective_write_target(user_id, current_user)
 
-    # Prevent duplicates
+    # Prevent duplicates.
+    # GRD-5: supabase-py 2.28.x returns ``None`` (not a response with ``data=None``)
+    # from ``.maybe_single().execute()`` on ZERO rows — the first unlock of an
+    # achievement has no existing row, so a bare ``existing_res.data`` raised
+    # AttributeError -> 500. The ``or type(...)`` idiom (used elsewhere in this file)
+    # normalizes the no-row case to a ``data=None`` sentinel. Precedent: commit 5847a60.
     existing_res = (
         client.table("user_achievements")
         .select("*")
@@ -1257,6 +1262,7 @@ async def unlock_achievement(
         .eq("id", achievement_id)
         .maybe_single()
         .execute()
+        or type("_R", (), {"data": None})()
     )
     if existing_res.data:
         return {
@@ -1344,7 +1350,11 @@ async def issue_certificate(
                 detail="Certificado indisponivel: curso nao concluido (100% necessario).",
             )
 
-    # Prevent duplicate
+    # Prevent duplicate.
+    # GRD-5: zero-row ``.maybe_single().execute()`` returns ``None`` on supabase-py
+    # 2.28.x — the first certificate for a course has no existing row, so a bare
+    # ``existing_res.data`` raised AttributeError -> 500. Normalize with the
+    # ``or type(...)`` sentinel (precedent 5847a60).
     existing_res = (
         client.table("certificates")
         .select("*")
@@ -1352,6 +1362,7 @@ async def issue_certificate(
         .eq("course_id", body.course_id)
         .maybe_single()
         .execute()
+        or type("_R", (), {"data": None})()
     )
     if existing_res.data:
         return {

@@ -191,18 +191,23 @@ class _QueryBuilder:
                     return _Result(data=None, count=count)
                 return _Result(data=matched[0], count=count)
             if self._maybe_single:
-                # Faithful to supabase-py: ``.maybe_single()`` expects 0-or-1 row and
-                # RAISES (PostgREST PGRST116, "JSON object requested, multiple/no rows
-                # returned") when the (post-limit/range) result set has >1 row. The old
-                # lenient "return first" masked exactly the GRD-3 bug: a bare
-                # ``.maybe_single()`` on a pair with multiple sessions must break, which
-                # is why the real fix narrows with ``.order().limit(1)``. Only raise when
-                # NOT windowed to a single row.
+                # Faithful to supabase-py / postgrest 2.28.x semantics:
+                #  * >1 row  → RAISES PGRST116 ("multiple rows returned"). The old
+                #    lenient "return first" masked the GRD-3 multi-row bug; the fix
+                #    narrows with ``.order().limit(1)``.
+                #  * 0 rows  → ``.maybe_single().execute()`` returns **None** (the whole
+                #    response object, NOT ``_Result(data=None)``). Unguarded ``res.data``
+                #    then raises ``AttributeError`` → HTTP 500 (GRD-5 / precedent commit
+                #    5847a60). The fake now mirrors this so callers that read ``.data``
+                #    without a ``res is not None`` guard fail HERE instead of only in prod.
+                #  * exactly 1 row → ``_Result(data=row)``.
                 if len(matched) > 1:
                     raise Exception(
                         "PGRST116: JSON object requested, multiple (or no) rows returned"
                     )
-                return _Result(data=(matched[0] if matched else None), count=count)
+                if not matched:
+                    return None
+                return _Result(data=matched[0], count=count)
             return _Result(data=matched, count=count)
 
         if self._op == "insert":

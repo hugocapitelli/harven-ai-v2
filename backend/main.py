@@ -468,9 +468,15 @@ async def request_password_reset(request: Request, body: PasswordResetRequest, c
     # Identical response for existing and non-existing emails — anti-enumeration.
     response = {"message": "Se o email existir, um link de redefinicao sera enviado."}
 
-    # Look up user by email
+    # Look up user by email.
+    # GRD-5 (GRD5-2): a non-existent email yields 0 rows → ``.maybe_single().execute()``
+    # returns ``None`` on supabase-py 2.28.x, so a bare ``res.data`` raised
+    # AttributeError → 500 (and, worse, a 500-vs-200 timing/status difference would
+    # LEAK account existence, breaking the anti-enumeration guarantee). Guarding
+    # ``res is not None`` keeps the non-existent path falling through to the SAME
+    # neutral 200 response below. Precedent: commit 5847a60.
     res = client.table("users").select("id, email").eq("email", body.email).maybe_single().execute()
-    if res.data:
+    if res is not None and res.data:
         token = str(uuid.uuid4())
         _password_reset_tokens[token] = {
             "user_id": res.data["id"],

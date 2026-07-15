@@ -53,8 +53,13 @@ def get_current_user(
     except JWTError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token invalido ou expirado")
 
+    # GRD-5 (GRD5-1): supabase-py 2.28.x returns ``None`` (the whole response, NOT
+    # ``_Result(data=None)``) from ``.maybe_single().execute()`` on ZERO rows. A valid
+    # token whose ``sub`` points to a DELETED user then made ``res.data`` raise
+    # AttributeError → 500 on EVERY protected endpoint, instead of the intended 401.
+    # Guard both ``res is None`` and ``res.data is None``. Precedent: commit 5847a60.
     res = client.table("users").select("*").eq("id", user_id).maybe_single().execute()
-    if res.data is None:
+    if res is None or res.data is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario nao encontrado")
     return res.data
 

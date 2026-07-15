@@ -1,6 +1,11 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
-supabase>=2.0.0
+# GRD-5 (GRD5-3): pinned to the 2.28.x line. The loose ``>=2.0.0`` let the rebuild pull
+# 2.28.x, whose ``.maybe_single().execute()`` returns ``None`` on ZERO rows (vs older
+# ``_Result(data=None)``) — the exact semantic the code + None-guards now assume (see
+# commit 5847a60 + GRD-5). Bounded below to keep that behavior and above (<3) so a major
+# bump can't silently re-change the contract again.
+supabase>=2.28,<3
 openai==1.58.1
 bcrypt==4.2.1
 python-jose[cryptography]==3.3.0

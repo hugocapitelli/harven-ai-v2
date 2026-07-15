@@ -1585,7 +1585,14 @@ async def get_session_by_content(
         "user_id", current_user["id"]
     ).order("created_at", desc=True).limit(1).maybe_single().execute()
 
-    session = result.data
+    # GRD-5 (resume 500): supabase-py 2.28.x returns ``None`` (not ``_Result(data=
+    # None)``) from ``.maybe_single().execute()`` when the student has NO session for
+    # this content. A bare ``result.data`` raised AttributeError -> HTTP 500, which the
+    # frontend's ``byContent(...).catch(() => null)`` did NOT treat as "no session"
+    # (it expects a 404), so the chapter's resume hydration failed with
+    # "Chat resume error: 500". Guard the None so the empty case yields the intended
+    # 404. Precedent: commit 5847a60 (same fix in BaseRepository.get_by_id).
+    session = result.data if result is not None else None
     if not session:
         raise HTTPException(status_code=404, detail="Sessao nao encontrada para este conteudo")
     return session
@@ -1701,7 +1708,9 @@ async def export_session_moodle(
         "id", session.get("user_id", "")
     ).maybe_single().execute()
 
-    user_data = user_result.data
+    # GRD-5: guard the zero-row ``None`` from ``.maybe_single().execute()`` (a session
+    # whose owner was deleted would otherwise 500 here). Precedent: commit 5847a60.
+    user_data = user_result.data if user_result is not None else None
     session["user_name"] = user_data.get("name", "") if user_data else ""
     session["user_email"] = user_data.get("email", "") if user_data else ""
 
