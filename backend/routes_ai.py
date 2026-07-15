@@ -1309,20 +1309,54 @@ async def ai_transcribe(
 # ===================================================================
 
 
-def _create_chat_session_row(client: Client, uid: str, content_id: str) -> dict:
+def _create_chat_session_row(
+    client: Client, uid: str, content_id: str, initial_question_text: str | None = None
+) -> dict:
     """Insert a fresh, distinct active session (used for the completed→new-attempt
-    path, where a duplicate row is the intended product behavior — SEC-CHAT-3)."""
+    path, where a duplicate row is the intended product behavior — SEC-CHAT-3).
+
+    SOC-1: ``initial_question_text`` (when provided) is written on creation so the
+    chosen "Pergunta para Reflexão" is the durable source of truth for the lock.
+    """
     new_session = {
         "user_id": uid,
         "content_id": content_id,
         "status": "active",
         "total_messages": 0,
     }
+    if initial_question_text is not None:
+        new_session["initial_question_text"] = initial_question_text
     insert_result = client.table("chat_sessions").insert(new_session).execute()
     return insert_result.data[0] if insert_result.data else new_session
 
 
-def _upsert_chat_session_row(client: Client, uid: str, content_id: str) -> dict:
+def _ensure_initial_question(
+    client: Client, session: dict, initial_question_text: str | None
+) -> dict:
+    """SOC-1 first-write-wins for ``initial_question_text`` (idempotent).
+
+    Writes the question ONLY when the stored value is still NULL (a freshly
+    upserted row, or a legacy session created before this column existed) AND the
+    request actually carries one. A non-null stored value is NEVER overwritten,
+    even if the request brings a different question — the first choice is
+    permanent while the session lives. Returns the (possibly updated) row so the
+    route always responds with the authoritative stored question.
+    """
+    if not initial_question_text:
+        return session
+    if session.get("initial_question_text"):
+        return session
+    updated = client.table("chat_sessions").update(
+        {"initial_question_text": initial_question_text}
+    ).eq("id", session["id"]).execute()
+    return updated.data[0] if getattr(updated, "data", None) else {
+        **session, "initial_question_text": initial_question_text
+    }
+
+
+def _upsert_chat_session_row(
+    client: Client, uid: str, content_id: str, initial_question_text: str | None = None
+) -> dict:
     """Race-free create-or-get for (uid, content_id) (TPP-2, bug #7).
 
     Prefers the ``upsert_chat_session`` RPC (DB ``ON CONFLICT`` — two concurrent
@@ -1342,7 +1376,10 @@ def _upsert_chat_session_row(client: Client, uid: str, content_id: str) -> dict:
             if isinstance(row, list):
                 row = row[0] if row else None
             if row:
-                return row
+                # SOC-1: the RPC signature does not carry the question, so persist
+                # it here (write-once). On the ON CONFLICT path this row may be an
+                # existing session — _ensure_initial_question keeps first-write-wins.
+                return _ensure_initial_question(client, row, initial_question_text)
         except Exception as exc:
             logger.warning(
                 "upsert_chat_session RPC failed for (%s, %s): %s; falling back",
@@ -1352,14 +1389,14 @@ def _upsert_chat_session_row(client: Client, uid: str, content_id: str) -> dict:
     # Fallback: insert, and if a concurrent insert won the race, re-read the
     # surviving row instead of propagating the unique-violation as a 500.
     try:
-        return _create_chat_session_row(client, uid, content_id)
+        return _create_chat_session_row(client, uid, content_id, initial_question_text)
     except Exception:
         existing = client.table("chat_sessions").select("*").eq(
             "user_id", uid
         ).eq("content_id", content_id).maybe_single().execute()
         row = getattr(existing, "data", None)
         if row:
-            return row
+            return _ensure_initial_question(client, row, initial_question_text)
         raise
 
 
@@ -1397,20 +1434,31 @@ async def create_or_get_chat_session(
                 updated = client.table("chat_sessions").update(
                     {"status": "active"}
                 ).eq("id", existing["id"]).execute()
-                return updated.data[0] if updated.data else existing
+                row = updated.data[0] if updated.data else existing
+                # SOC-1: a reactivated session keeps its original question; only a
+                # legacy NULL is backfilled from the request (first-write-wins).
+                return _ensure_initial_question(client, row, data.initial_question_text)
             if existing.get("status") != "completed":
-                return existing
+                # SOC-1: resuming an ``active`` session NEVER overwrites the stored
+                # question — the request may carry a different one and it is ignored;
+                # a legacy NULL is backfilled once.
+                return _ensure_initial_question(client, existing, data.initial_question_text)
             # status == "completed": fall through to create a new, distinct session.
             # (The partial unique index allows this because the completed row stays;
             # a deliberate "new attempt after completion" is a product decision —
-            # SEC-CHAT-3 — handled here at the app layer.)
-            return _create_chat_session_row(client, uid, data.content_id)
+            # SEC-CHAT-3 — handled here at the app layer.) SOC-1: the new attempt
+            # gets the NEW question written on creation.
+            return _create_chat_session_row(
+                client, uid, data.content_id, data.initial_question_text
+            )
 
         # TPP-2: no existing session → race-free create-or-get. Two concurrent
         # double-submits for the same (user_id, content_id) both resolve to the SAME
         # row via the ``upsert_chat_session`` RPC (ON CONFLICT in the DB), so neither
         # creates a duplicate nor hits the permanent-500 maybe_single() failure (#7).
-        return _upsert_chat_session_row(client, uid, data.content_id)
+        return _upsert_chat_session_row(
+            client, uid, data.content_id, data.initial_question_text
+        )
     except HTTPException:
         # Authorization decisions (e.g. the 403 spoof rejection above) must keep
         # their status code — never be masked as a 500 by the generic handler.

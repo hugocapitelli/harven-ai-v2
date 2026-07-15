@@ -244,6 +244,16 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
   const [chatLoading, setChatLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [selectedQuestion, setSelectedQuestion] = useState<string | null>(null);
+  // SOC-1: the DURABLE lock. Hydrated from the persisted session on load and kept
+  // across ``closeChat``/reload (unlike ``selectedQuestion``, which is local modal
+  // state). Non-null only while an ``active`` socratic session exists for this
+  // content; a ``completed`` session leaves it null so the questions re-enable
+  // (SEC-CHAT-3 new-attempt). It is the source of truth for which question is
+  // committed and which "Retomar Sessão" reopens.
+  const [activeSession, setActiveSession] = useState<{
+    id: string;
+    initialQuestionText: string | null;
+  } | null>(null);
   // TPP-6: pacing/finalization are now the SERVER's source of truth (TPP-5). We
   // store the last ``session_status`` returned by the socratic route instead of
   // deriving the count locally. ``null`` until the first turn resolves.
@@ -278,12 +288,27 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
         return;
       }
       try {
-        const [contentData, questionsData] = await Promise.all([
+        const [contentData, questionsData, sessionData] = await Promise.all([
           contentsApi.get(contentId),
           questionsApi.list(contentId),
+          // SOC-1: hydrate the durable question lock. ``by-content`` 404s when the
+          // student has no session for this content — that is the "unlocked" case,
+          // not an error, so it must never break the chapter load.
+          chatSessionsApi.byContent(contentId).catch(() => null),
         ]);
         if (ctrl.signal.aborted) return;
         setContent(contentData);
+        // SOC-1: only an ``active`` session locks the questions. ``completed`` (or a
+        // missing session) leaves everything enabled so a new attempt can start
+        // fresh with its own question (SEC-CHAT-3).
+        if (sessionData && sessionData.status === 'active') {
+          setActiveSession({
+            id: sessionData.id ?? sessionData.session_id,
+            initialQuestionText: sessionData.initial_question_text ?? null,
+          });
+        } else {
+          setActiveSession(null);
+        }
         // Seed the per-student completion badge from the catalog flag as a best-effort
         // hint (idempotent UI on re-entry). Authoritative per-user progress lives in the
         // progress table via completeContent; this only avoids a blank badge on load.
@@ -411,6 +436,12 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
       : Math.max(0, MAX_INTERACTIONS - localUsed);
   const sessionFinalized = sessionStatus?.should_finalize === true;
 
+  // SOC-1: the committed question, durable across close/reload. The persisted
+  // ``active`` session is the authority; ``selectedQuestion`` only covers the
+  // brief in-flight window between clicking a question and the server echoing it
+  // back on the very first start. When null, all questions are enabled.
+  const lockedQuestion = activeSession?.initialQuestionText ?? selectedQuestion;
+
   // Completion gate: when the content has socratic questions, the student must
   // exhaust ALL tutor interactions (MAX_INTERACTIONS) before marking the content
   // as completed. Contents without questions keep the legacy behavior.
@@ -433,6 +464,10 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
   useEffect(() => {
     if (sessionStatus != null && sessionStatus.interactions_remaining <= 0) {
       setTutorDone(true);
+      // SOC-1: the session reached its end (server-driven). Release the durable
+      // lock so the questions re-enable for a fresh attempt (SEC-CHAT-3) — the
+      // next ``startChat`` will create a NEW session with the newly chosen question.
+      setActiveSession(null);
       if (tutorDoneKey) {
         try {
           localStorage.setItem(tutorDoneKey, '1');
@@ -485,10 +520,14 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
     return 'Vamos explorar juntos. O que você pensa?';
   };
 
-  // H3 (bug #21): closing the chat must fully reset local session state so the
-  // socratic question buttons re-enable and a fresh dialogue can start without a page
-  // reload. The buttons are gated by `selectedQuestion`; leaving it set after close
-  // left every button permanently disabled. This is the single teardown path.
+  // SOC-1 (revises H3 / bug #21): closing the chat tears down the MODAL state
+  // (messages, input, pacing, transient selection) but NO LONGER clears the
+  // DURABLE lock. Bug #21's original fix re-enabled every question on close by
+  // resetting the local ``selectedQuestion`` gate; that is exactly what this goal
+  // reverts — while an ``active`` session exists (``activeSession``), the other
+  // questions stay disabled and the chosen one offers "Retomar Sessão" after
+  // close. The lock lives in ``activeSession`` (persisted), so it survives close
+  // and reload; it is cleared only when the session completes (see below).
   const closeChat = () => {
     setChatOpen(false);
     setSelectedQuestion(null);
@@ -506,21 +545,29 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
     setChatOpen(true);
     setChatLoading(true);
     try {
+      // SOC-1: send the committed question so it is persisted on creation.
       const session = await chatSessionsApi.createOrGet({
         content_id: contentId,
         chapter_id: chapterId,
         course_id: courseId,
+        initial_question_text: questionText,
       });
       const sid = session?.id ?? session?.session_id;
       setSessionId(sid);
+      // SOC-1: the SERVER's stored question is the source of truth (first-write-wins
+      // means a returning session may echo a DIFFERENT, original question than the
+      // one just clicked). Adopt it and register the durable lock.
+      const serverQuestion = session?.initial_question_text ?? questionText;
+      setSelectedQuestion(serverQuestion);
+      setActiveSession({ id: sid, initialQuestionText: serverQuestion });
 
       // AI starts the dialogue — student doesn't send the question as a message.
       // TPP-6: do NOT hardcode interactions_remaining — the server derives pacing
       // from the persisted message count (TPP-5).
       const aiResponse = await aiApi.socraticDialogue({
-        student_message: `Quero explorar a seguinte questão: ${questionText}`,
+        student_message: `Quero explorar a seguinte questão: ${serverQuestion}`,
         chapter_content: content?.body || content?.extracted_text || '',
-        initial_question: { text: questionText },
+        initial_question: { text: serverQuestion },
         session_id: sid,
       });
       // TPP-6: adopt the server's pacing/finalization as the source of truth.
@@ -546,6 +593,45 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
           is_ai: true,
         },
       ]);
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
+  // SOC-1: reopen the EXISTING active session with its persisted transcript. This
+  // is the "Retomar Sessão" path — it must NOT fire the socratic kickoff ("Quero
+  // explorar a seguinte questão...") again and must NOT create a new session. The
+  // kickoff runs ONLY in ``startChat`` for a freshly created session; here we just
+  // hydrate history via ``getMessages``. Pacing/finalization are re-derived by the
+  // server on the student's NEXT turn (TPP-5/TPP-6), so we don't fabricate them.
+  const resumeChat = async () => {
+    const sid = activeSession?.id;
+    if (!sid) return;
+    setChatMessages([]);
+    setSessionStatus(null);
+    setSelectedQuestion(activeSession?.initialQuestionText ?? null);
+    setSessionId(sid);
+    setChatOpen(true);
+    setChatLoading(true);
+    try {
+      const history = await chatSessionsApi.getMessages(sid);
+      const rows = Array.isArray(history) ? history : [];
+      setChatMessages(
+        rows.map((raw): ChatMessage => {
+          const m = raw as Record<string, unknown>;
+          const role = m.role === 'assistant' ? 'assistant' : 'user';
+          return {
+            id: String(m.id ?? `${role}-${m.created_at ?? Date.now()}`),
+            role,
+            content: String(m.content ?? ''),
+            created_at: String(m.created_at ?? new Date().toISOString()),
+            is_ai: role === 'assistant',
+          };
+        }),
+      );
+    } catch (err) {
+      console.error('Chat resume error:', err);
+      toast.error('Erro ao retomar a sessão');
     } finally {
       setChatLoading(false);
     }
@@ -1223,17 +1309,32 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                               ? 'bg-red-100 text-red-700 border-red-200'
                               : 'bg-orange-100 text-orange-700 border-orange-200';
                         const diffIcon = diff === 'easy' ? 'sentiment_satisfied' : diff === 'hard' ? 'local_fire_department' : 'psychology';
-                        const isSelected = selectedQuestion === q.question;
+                        // SOC-1: gate on the DURABLE lock (``lockedQuestion``), not the
+                        // transient local selection. ``isSelected`` = this is the
+                        // committed question. ``isDisabledByLock`` = another question is
+                        // committed, so this one is blocked. ``canResume`` = the committed
+                        // question, with a live session, while the chat is closed → offer
+                        // "Retomar Sessão" instead of a fresh dialogue.
+                        const isSelected = lockedQuestion === q.question;
+                        const isDisabledByLock = Boolean(lockedQuestion && lockedQuestion !== q.question);
+                        const canResume = isSelected && Boolean(activeSession) && !chatOpen;
                         return (
                           <button
                             key={q.id}
-                            onClick={() => !selectedQuestion && startChat(q.question)}
-                            disabled={Boolean(selectedQuestion && selectedQuestion !== q.question)}
+                            onClick={() => {
+                              if (isDisabledByLock) return;
+                              if (canResume) {
+                                resumeChat();
+                              } else if (!lockedQuestion) {
+                                startChat(q.question);
+                              }
+                            }}
+                            disabled={isDisabledByLock}
                             className={cn(
                               'w-full text-left px-5 py-4 rounded-xl border-2 transition-all group',
                               isSelected
                                 ? 'border-primary bg-primary/5 shadow-sm'
-                                : selectedQuestion
+                                : lockedQuestion
                                   ? 'border-harven-border bg-gray-50 opacity-40 cursor-not-allowed'
                                   : 'border-harven-border hover:border-primary/40 hover:shadow-sm bg-white',
                             )}
@@ -1256,12 +1357,22 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                                   <span className="material-symbols-outlined text-[12px]">{diffIcon}</span>
                                   {diffLabel}
                                 </span>
-                                <span className={cn(
-                                  'material-symbols-outlined text-[18px] transition-colors',
-                                  isSelected ? 'text-primary' : 'text-gray-300 group-hover:text-primary/60'
-                                )}>
-                                  arrow_forward
-                                </span>
+                                {/* SOC-1: the committed question, chat closed → the CTA
+                                    is "Retomar Sessão" (reopens the same session), not a
+                                    fresh-dialogue arrow. */}
+                                {canResume ? (
+                                  <span className="flex items-center gap-1 text-[11px] font-bold px-2 py-1 rounded-full bg-primary/10 text-primary border border-primary/30">
+                                    <span className="material-symbols-outlined text-[13px]">history</span>
+                                    Retomar Sessão
+                                  </span>
+                                ) : (
+                                  <span className={cn(
+                                    'material-symbols-outlined text-[18px] transition-colors',
+                                    isSelected ? 'text-primary' : 'text-gray-300 group-hover:text-primary/60'
+                                  )}>
+                                    arrow_forward
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </button>

@@ -297,24 +297,26 @@ class TestTpp4InitialQuestionContract:
 class TestTpp5Pacing:
     async def test_remaining_derived_from_persisted_count_not_client(self):
         fake_db = _fake_with_rpc()
-        # Seed 4 prior user turns already persisted.
-        repo = ChatRepository(fake_db)
-        for i in range(4):
-            repo.persist_turn(SESSION_A_ID, {"role": "user", "content": f"prev{i}"})
-
+        # Under the current MAX_INTERACTIONS=3 contract (commit 9c47d11) the mid-
+        # conversation, not-yet-finalized window is used < MAX-1 (i.e. used <= 1),
+        # so this oracle uses ZERO prior turns; the single turn below makes used=1.
+        # The point of the test is unchanged: the server derives pacing from the
+        # PERSISTED count, never from the client-supplied field.
         svc, _ = _svc("E entao? ")
-        # Client LIES with interactions_remaining=3; server must ignore it.
+        # Client LIES with an absurd interactions_remaining=99; server must ignore
+        # it and report the value derived from the real persisted count (used=1).
         out = await svc.socratic_dialogue(
             student_message="nova mensagem",
             chapter_content="c",
             initial_question={"text": "Q?"},
-            interactions_remaining=3,           # client-supplied — must be ignored
+            interactions_remaining=99,          # client-supplied — must be ignored
             session_id=SESSION_A_ID,
             user_id=STUDENT_A_ID,
             db=fake_db,
         )
-        # used = 4 prior + this turn = 5 → remaining = 20 - 5 = 15 (NOT the client 3-1).
-        assert out["session_status"]["interactions_remaining"] == MAX_INTERACTIONS - 5
+        # used = 0 prior + this turn = 1 → remaining = MAX - 1 (NOT the client's 99-1),
+        # and not finalized yet (used=1 < MAX-1=2).
+        assert out["session_status"]["interactions_remaining"] == MAX_INTERACTIONS - 1
         assert out["session_status"]["should_finalize"] is False
 
     async def test_not_stuck_at_three(self):
@@ -348,15 +350,16 @@ class TestTpp5Pacing:
 
     async def test_not_finalize_before_the_end(self):
         fake_db = _fake_with_rpc()
-        repo = ChatRepository(fake_db)
-        for i in range(5):
-            repo.persist_turn(SESSION_A_ID, {"role": "user", "content": f"u{i}"})
+        # MAX_INTERACTIONS=3 (commit 9c47d11): finalization fires at used >= MAX-1
+        # (=2). To prove "does NOT finalize BEFORE the end", the current turn must
+        # land strictly before that threshold, i.e. used=1 → zero prior turns.
         svc, _ = _svc("? ")
         out = await svc.socratic_dialogue(
             student_message="meio", chapter_content="c",
             initial_question={"text": "Q?"}, interactions_remaining=20,
             session_id=SESSION_A_ID, user_id=STUDENT_A_ID, db=fake_db,
         )
+        # used = 1 (< MAX-1 = 2) → not the last permitted turn yet, no finalize.
         assert out["session_status"]["should_finalize"] is False
 
 
