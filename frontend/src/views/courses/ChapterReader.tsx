@@ -1286,8 +1286,12 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                       <div className="border-t-4 border-harven-gold" />
                       <div className="p-4">
                         <div className="mb-3 flex items-center gap-2">
-                          <span className="material-symbols-outlined text-harven-gold">mic</span>
-                          <p className="text-sm font-bold">Gerar audio</p>
+                          <span className="material-symbols-outlined text-harven-gold">
+                            {isStudentExperience ? 'headphones' : 'mic'}
+                          </span>
+                          <p className="text-sm font-bold">
+                            {isStudentExperience ? 'Audio do conteudo' : 'Gerar audio'}
+                          </p>
                         </div>
                         <p className="mb-3 text-xs text-muted-foreground">
                           Escute o conteudo em diferentes formatos.
@@ -1317,7 +1321,21 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                                         </button>
                                       )}
                                     </div>
-                                    <audio src={url.startsWith('http') ? url : `${import.meta.env.VITE_API_URL || ''}${url}`} controls className="w-full h-8" />
+                                    <audio
+                                      src={url.startsWith('http') ? url : `${import.meta.env.VITE_API_URL || ''}${url}`}
+                                      controls
+                                      className="w-full h-8"
+                                      onError={() => {
+                                        // Dead file (e.g. container redeploy wiped /uploads):
+                                        // drop the slot so students never see a broken player
+                                        // and instructors get the generate button back.
+                                        setTtsUrls((prev) => {
+                                          const next = { ...prev };
+                                          delete next[style];
+                                          return next;
+                                        });
+                                      }}
+                                    />
                                   </div>
                                 ) : (
                                   <button
