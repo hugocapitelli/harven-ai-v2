@@ -23,7 +23,7 @@ interface ChapterReaderProps {
 type ViewMode = 'text' | 'file';
 type TtsStyle = 'podcast' | 'summary' | 'explanation';
 
-const MAX_INTERACTIONS = 20;
+const MAX_INTERACTIONS = 3;
 const STUDY_SAVE_INTERVAL_MS = 5 * 60 * 1000; // 5 min
 
 // Keys are the NORMALIZED (lowercase) content types from the shared contract.
@@ -251,6 +251,10 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
     interactions_remaining: number;
     should_finalize: boolean;
   } | null>(null);
+  // Completion gate: "the student exhausted all socratic interactions for this
+  // content". Persisted per user+content in localStorage so the unlock survives
+  // a page reload (chat history is not re-hydrated on mount).
+  const [tutorDone, setTutorDone] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // TTS
@@ -406,6 +410,41 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
       ? sessionStatus.interactions_remaining
       : Math.max(0, MAX_INTERACTIONS - localUsed);
   const sessionFinalized = sessionStatus?.should_finalize === true;
+
+  // Completion gate: when the content has socratic questions, the student must
+  // exhaust ALL tutor interactions (MAX_INTERACTIONS) before marking the content
+  // as completed. Contents without questions keep the legacy behavior.
+  const tutorDoneKey = user?.id && contentId ? `harven_socratic_done:${user.id}:${contentId}` : null;
+
+  // Seed the persisted flag when user/content resolve (and on content change).
+  useEffect(() => {
+    if (!tutorDoneKey) {
+      setTutorDone(false);
+      return;
+    }
+    try {
+      setTutorDone(localStorage.getItem(tutorDoneKey) === '1');
+    } catch {
+      setTutorDone(false);
+    }
+  }, [tutorDoneKey]);
+
+  // Persist the unlock the moment the server reports zero interactions left.
+  useEffect(() => {
+    if (sessionStatus != null && sessionStatus.interactions_remaining <= 0) {
+      setTutorDone(true);
+      if (tutorDoneKey) {
+        try {
+          localStorage.setItem(tutorDoneKey, '1');
+        } catch {
+          // best-effort only — the in-memory flag still unlocks this visit
+        }
+      }
+    }
+  }, [sessionStatus, tutorDoneKey]);
+
+  const tutorPending = questions.length > 0 && !tutorDone && remainingInteractions > 0;
+  const tutorUsed = Math.min(MAX_INTERACTIONS, MAX_INTERACTIONS - remainingInteractions);
 
   // Pull the server ``session_status`` out of a socratic response, tolerating the
   // same nesting variants ``extractAiText`` handles.
@@ -713,6 +752,10 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
 
   const markComplete = async () => {
     if (!contentId || !courseId || !user?.id || completing || completed) return;
+    if (tutorPending) {
+      toast.error(`Finalize as ${MAX_INTERACTIONS} interacoes com o Tutor Socratico antes de concluir (${tutorUsed}/${MAX_INTERACTIONS}).`);
+      return;
+    }
     setCompleting(true);
     try {
       await userStatsApi.completeContent(user.id, courseId, contentId);
@@ -968,15 +1011,20 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
             {!completed && !editing && (
               <button
                 onClick={markComplete}
-                disabled={completing}
+                disabled={completing || tutorPending}
+                title={tutorPending ? `Finalize as ${MAX_INTERACTIONS} interacoes com o Tutor Socratico para liberar a conclusao` : undefined}
                 className={cn(
-                  'bg-primary hover:bg-primary-dark text-harven-dark font-bold rounded-lg text-xs uppercase tracking-widest transition-colors disabled:opacity-50',
+                  'bg-primary hover:bg-primary-dark text-harven-dark font-bold rounded-lg text-xs uppercase tracking-widest transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
                   isStudentExperience
                     ? 'px-8 py-2.5 text-sm'
                     : 'px-4 py-2',
                 )}
               >
-                {completing ? 'Concluindo...' : 'Concluir'}
+                {completing
+                  ? 'Concluindo...'
+                  : tutorPending
+                    ? `Tutor Socratico ${tutorUsed}/${MAX_INTERACTIONS} para concluir`
+                    : 'Concluir'}
               </button>
             )}
             {completed && (

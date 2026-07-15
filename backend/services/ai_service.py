@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # the finalize flag are derived from the PERSISTED ``role='user'`` message count
 # of the session (server-side source of truth), never from a client-supplied
 # value. The closing synthesis fires on the final permitted turn.
-MAX_INTERACTIONS = 20
+MAX_INTERACTIONS = 3
 
 # ---------------------------------------------------------------------------
 # Socratic prompt fidelity (AI-HARD-5 — bugs #28/#57)
