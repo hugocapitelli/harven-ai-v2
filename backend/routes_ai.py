@@ -111,6 +111,11 @@ class SocraticDialogueRequest(BaseModel):
     interactions_remaining: Optional[int] = Field(3, ge=0, le=20)
     session_id: Optional[str] = None
     chapter_id: Optional[str] = None
+    # GRD-4: the opening trigger ("Quero explorar a questão ...") is NOT a student
+    # turn. When true the backend generates the first question WITHOUT counting it
+    # against the student's interaction limit (kickoff never consumes limit). Older
+    # clients omit it → defaults to False (a real turn, unchanged behavior).
+    is_kickoff: bool = False
 
 
 class AIDetectionRequest(BaseModel):
@@ -260,6 +265,7 @@ async def ai_socrates_dialogue(
             session_id=req.session_id,
             user_id=current_user["id"],
             db=client,
+            is_kickoff=req.is_kickoff,
         )
     except AIServiceError as e:
         raise HTTPException(status_code=503, detail=sanitize_ai_error(e))
@@ -1388,12 +1394,17 @@ def _upsert_chat_session_row(
 
     # Fallback: insert, and if a concurrent insert won the race, re-read the
     # surviving row instead of propagating the unique-violation as a 500.
+    # GRD-3 it3 (twin of the it2 fix): ``(user_id, content_id)`` is NOT unique after
+    # any restart / GRD-2 phantom (SEC-CHAT-3 keeps completed rows alongside new
+    # attempts), so this re-read must ALSO resolve the MOST RECENT row via
+    # ``.order().limit(1)`` — a bare ``.maybe_single()`` here would raise PGRST116 on
+    # >1 row and re-surface the exact 500 the it2 fix removed, only on the race path.
     try:
         return _create_chat_session_row(client, uid, content_id, initial_question_text)
     except Exception:
         existing = client.table("chat_sessions").select("*").eq(
             "user_id", uid
-        ).eq("content_id", content_id).maybe_single().execute()
+        ).eq("content_id", content_id).order("created_at", desc=True).limit(1).maybe_single().execute()
         row = getattr(existing, "data", None)
         if row:
             return _ensure_initial_question(client, row, initial_question_text)
@@ -1416,11 +1427,21 @@ async def create_or_get_chat_session(
         if data.user_id is not None:
             assert_owner_or_role(data.user_id, current_user, "ADMIN", "TEACHER", "INSTRUCTOR")
 
+        # GRD-3 (refazer loop fix): resolve the MOST RECENT session for this pair, not
+        # a bare ``.maybe_single()``. After any "Refazer sessão" or a GRD-2 phantom,
+        # ``(user_id, content_id)`` legitimately has ≥2 rows (SEC-CHAT-3 keeps the
+        # completed one alongside the new attempt). A bare ``.maybe_single()`` raises
+        # on >1 row (PGRST116) → the endpoint 500s or resolves an ambiguous/stale
+        # completed row, so the kickoff runs against a FINISHED session
+        # (count_user_messages >= MAX → remaining 0 / finalized) and the UI snaps back
+        # to "Sessão concluída" — the dead loop Hugo hit. Ordering by newest and taking
+        # one mirrors ``get_session_by_content`` (see the note at that endpoint) so the
+        # newest session (the fresh active attempt) is the one evaluated.
         result = client.table("chat_sessions").select("*").eq(
             "user_id", uid
         ).eq(
             "content_id", data.content_id
-        ).maybe_single().execute()
+        ).order("created_at", desc=True).limit(1).maybe_single().execute()
 
         existing = result.data if result else None
 

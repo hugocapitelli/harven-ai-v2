@@ -791,25 +791,60 @@ class AIService:
         session_id: Optional[str] = None,
         user_id: Optional[str] = None,
         db=None,
+        is_kickoff: bool = False,
     ) -> Dict[str, Any]:
         self.check_token_budget(user_id, db)
 
         iq = self._normalize_initial_question(initial_question)
 
-        # --- TPP-4: persist the student turn server-side (backend = source of
-        # truth). Only when a real session + db are present. The frontend always
-        # sends the real opening text (AI-HARD-5 removed the ``__INIT__``
-        # sentinel), so every inbound message is a genuine student turn. ---
+        # --- TPP-4 + GRD-4: persist the student turn server-side (backend = source
+        # of truth). Only when a real session + db are present. ---
+        # GRD-4 (limite de interações): the KICKOFF is the tutor's opening trigger,
+        # not a student answer — the frontend sends a synthetic "Quero explorar a
+        # questão ..." string only to make the model produce the FIRST question. It
+        # must NOT be persisted as a ``role='user'`` turn, otherwise
+        # ``count_user_messages`` reads 1 on a brand-new session and the student
+        # silently loses one interaction (fresh session shows 2/3 instead of 3/3, and
+        # combined with the it2/it3 stale-session bug, 0/3 "concluída" on open). When
+        # the kickoff is honored we skip the user-turn persist; the assistant reply is
+        # still persisted below (line ~940), so the transcript keeps the opening
+        # question and pacing correctly starts at ``used=0`` (remaining = MAX).
+        #
+        # GRD4-1 [ALTA, server-side guard]: ``is_kickoff`` is CLIENT-controlled — a
+        # student hitting the API directly could set it on EVERY message to chat
+        # unlimited (``remaining`` never decrements) AND have none of their answers
+        # persisted (evading the teacher's transcript/grade). So ``is_kickoff`` is
+        # honored ONLY on a genuinely FRESH session — one with NO messages at all yet.
+        # ``count_user_messages`` alone is insufficient here: an honored kickoff
+        # persists ZERO user turns, so a replayed ``is_kickoff`` would still read
+        # ``count_user_messages == 0`` and be honored forever. The real "has the
+        # session started?" signal is the TOTAL transcript: after the first honored
+        # kickoff the assistant's opening reply (persisted at line ~940) makes the
+        # transcript non-empty, so every subsequent message — even one flagged
+        # ``is_kickoff`` — is treated as a REAL student turn: persisted and counted.
         repo = None
+        # Defensive default if the DB read/write below fails: fall back to the
+        # client-supplied pacing (legacy behavior), never crash the tutor turn.
+        used = max(0, MAX_INTERACTIONS - interactions_remaining)
         if session_id and db is not None:
             try:
                 repo = ChatRepository(db)
-                await run_in_threadpool(
-                    repo.persist_turn,
-                    session_id,
-                    {"role": "user", "content": student_message, "agent_type": None,
-                     "metadata": None},
-                )
+                # Authoritative, server-side truth for "how many student turns exist"
+                # (drives pacing) and "is the session brand-new" (guards the kickoff).
+                used = await run_in_threadpool(repo.count_user_messages, session_id)
+                transcript = await run_in_threadpool(repo.get_session_messages, session_id)
+                session_is_fresh = len(transcript) == 0
+                # A kickoff is only real on a fresh (empty-transcript) session; a
+                # replayed flag on a started session is ignored → treated as a turn.
+                effective_kickoff = is_kickoff and session_is_fresh
+                if not effective_kickoff:
+                    await run_in_threadpool(
+                        repo.persist_turn,
+                        session_id,
+                        {"role": "user", "content": student_message, "agent_type": None,
+                         "metadata": None},
+                    )
+                    used += 1  # reflect the turn we just persisted
             except Exception as exc:  # pragma: no cover - persistence is best-effort
                 logger.warning("socratic_dialogue: student-turn persist failed (%s): %s",
                                session_id, exc)
@@ -818,13 +853,10 @@ class AIService:
         # --- TPP-5: derive pacing from the PERSISTED user-message count when a
         # session exists; otherwise fall back to the client-supplied value
         # (ephemeral/no-session path, e.g. the concurrency suite). ---
+        # GRD4-1: ``used`` was already resolved above (count read + the +1 for a
+        # persisted real turn / kickoff guard), so we reuse it here instead of a
+        # second round-trip — the two must never disagree.
         if repo is not None and session_id:
-            try:
-                used = await run_in_threadpool(repo.count_user_messages, session_id)
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning("socratic_dialogue: count_user_messages failed (%s): %s",
-                               session_id, exc)
-                used = max(0, MAX_INTERACTIONS - interactions_remaining)
             pacing = self._derive_pacing(used)
             remaining = pacing["remaining"]
             should_finalize = pacing["should_finalize"]

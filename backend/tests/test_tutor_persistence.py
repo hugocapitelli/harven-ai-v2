@@ -219,10 +219,11 @@ class TestTpp4BothTurnsPersisted:
         assert any(m["role"] == "user" for m in transcript)
 
     async def test_opening_message_persists_both_turns(self):
-        # AI-HARD-5: the ``__INIT__`` sentinel was removed. The frontend now sends
-        # the real opening text ("Quero explorar a seguinte questao: ..."), which is
-        # a genuine student turn — so the opening persists BOTH the user message and
-        # the assistant reply (no special-cased assistant-only path anymore).
+        # AI-HARD-5 + GRD-4: without the ``is_kickoff`` flag (default False), an
+        # inbound message is treated as a genuine student turn, so BOTH the user
+        # message and the assistant reply persist — this default path is unchanged.
+        # (The GRD-4 kickoff path, which sets ``is_kickoff=True`` to NOT count the
+        # opening trigger, is covered in ``test_kickoff_no_limit.py``.)
         fake_db = _fake_with_rpc()
         svc, _ = _svc("Ola! Vamos comecar. O que voce ja sabe? ")
         await svc.socratic_dialogue(

@@ -191,6 +191,17 @@ class _QueryBuilder:
                     return _Result(data=None, count=count)
                 return _Result(data=matched[0], count=count)
             if self._maybe_single:
+                # Faithful to supabase-py: ``.maybe_single()`` expects 0-or-1 row and
+                # RAISES (PostgREST PGRST116, "JSON object requested, multiple/no rows
+                # returned") when the (post-limit/range) result set has >1 row. The old
+                # lenient "return first" masked exactly the GRD-3 bug: a bare
+                # ``.maybe_single()`` on a pair with multiple sessions must break, which
+                # is why the real fix narrows with ``.order().limit(1)``. Only raise when
+                # NOT windowed to a single row.
+                if len(matched) > 1:
+                    raise Exception(
+                        "PGRST116: JSON object requested, multiple (or no) rows returned"
+                    )
                 return _Result(data=(matched[0] if matched else None), count=count)
             return _Result(data=matched, count=count)
 

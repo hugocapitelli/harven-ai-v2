@@ -587,6 +587,9 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
         chapter_content: content?.body || content?.extracted_text || '',
         initial_question: { text: serverQuestion },
         session_id: sid,
+        // GRD-4: this is the opening trigger, not a student answer — it must NOT
+        // consume an interaction. The server skips counting the kickoff turn.
+        is_kickoff: true,
       });
       // TPP-6: adopt the server's pacing/finalization as the source of truth.
       setSessionStatus(extractSessionStatus(aiResponse));
