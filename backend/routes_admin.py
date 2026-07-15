@@ -1803,6 +1803,54 @@ async def reply_review(
     }
 
 
+def _build_discipline_content_maps(client: Client, discipline_id: str) -> dict:
+    """Resolve the ``content_id -> chapter -> course`` chain for a discipline.
+
+    Shared helper mirroring the mapping the gradebook (``discipline_gradebook``)
+    and the export (``export_discipline_grades``) already build inline. Returns a
+    dict with:
+      * ``course_titles``:   course_id -> course title
+      * ``chapter_titles``:  chapter_id -> chapter title
+      * ``content_titles``:  content_id -> content title
+      * ``content_chapter``: content_id -> chapter_id
+      * ``chapter_course``:  chapter_id -> course_id
+      * ``content_ids``:     list of all content_ids under the discipline
+
+    No server-side join exists in Supabase, so the walk is done in batched reads,
+    exactly like the two existing consumers.
+    """
+    courses_res = client.table("courses").select("id, title").eq("discipline_id", discipline_id).execute()
+    courses = courses_res.data or []
+    course_titles = {c["id"]: c.get("title") for c in courses}
+    course_ids = [c["id"] for c in courses]
+
+    chapter_course: dict[str, str] = {}
+    chapter_titles: dict[str, str] = {}
+    if course_ids:
+        chapters_res = client.table("chapters").select("id, course_id, title").in_("course_id", course_ids).execute()
+        for ch in (chapters_res.data or []):
+            chapter_course[ch["id"]] = ch["course_id"]
+            chapter_titles[ch["id"]] = ch.get("title")
+
+    content_chapter: dict[str, str] = {}
+    content_titles: dict[str, str] = {}
+    if chapter_course:
+        chapter_ids = list(chapter_course.keys())
+        contents_res = client.table("contents").select("id, chapter_id, title").in_("chapter_id", chapter_ids).execute()
+        for ct in (contents_res.data or []):
+            content_chapter[ct["id"]] = ct.get("chapter_id", "")
+            content_titles[ct["id"]] = ct.get("title")
+
+    return {
+        "course_titles": course_titles,
+        "chapter_titles": chapter_titles,
+        "content_titles": content_titles,
+        "content_chapter": content_chapter,
+        "chapter_course": chapter_course,
+        "content_ids": list(content_chapter.keys()),
+    }
+
+
 @router.get(
     "/disciplines/{discipline_id}/sessions",
     tags=["Session Review"],
@@ -1811,6 +1859,7 @@ async def reply_review(
 async def discipline_sessions(
     discipline_id: str,
     status_filter: Optional[str] = Query(None, alias="status"),
+    student_id: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     current_user: dict = Depends(require_role("ADMIN", "TEACHER")),
@@ -1820,21 +1869,11 @@ async def discipline_sessions(
     # any read of peer tutoring sessions — SEC-SCOPE-1. ADMIN bypasses scoping.
     assert_teacher_owns_discipline(discipline_id, current_user, DisciplineRepository(client))
 
-    # Get course IDs for this discipline
-    courses_res = client.table("courses").select("id").eq("discipline_id", discipline_id).execute()
-    course_ids = [c["id"] for c in (courses_res.data or [])]
-    if not course_ids:
-        return {"data": [], "total": 0, "page": page, "per_page": per_page, "has_more": False}
-
-    # Get chapter IDs for those courses
-    chapters_res = client.table("chapters").select("id").in_("course_id", course_ids).execute()
-    chapter_ids = [ch["id"] for ch in (chapters_res.data or [])]
-    if not chapter_ids:
-        return {"data": [], "total": 0, "page": page, "per_page": per_page, "has_more": False}
-
-    # Get content IDs for those chapters
-    contents_res = client.table("contents").select("id").in_("chapter_id", chapter_ids).execute()
-    content_ids = [c["id"] for c in (contents_res.data or [])]
+    # Resolve the content -> chapter -> course chain (shared helper). GRD-1 also
+    # surfaces course/chapter/content titles + the per-session rating so the
+    # student drill-down can group by course/chapter without extra round trips.
+    maps = _build_discipline_content_maps(client, discipline_id)
+    content_ids = maps["content_ids"]
     if not content_ids:
         return {"data": [], "total": 0, "page": page, "per_page": per_page, "has_more": False}
 
@@ -1842,6 +1881,10 @@ async def discipline_sessions(
     q = client.table("chat_sessions").select("*", count="exact").in_("content_id", content_ids)
     if status_filter:
         q = q.eq("status", status_filter)
+    # GRD-1: optional per-student drill-down filter (additive; unfiltered path
+    # unchanged for the discipline-wide "Conversas" tab).
+    if student_id:
+        q = q.eq("user_id", student_id)
 
     sessions_res = q.order("created_at", desc=True).range((page - 1) * per_page, page * per_page - 1).execute()
     total = sessions_res.count or 0
@@ -1857,26 +1900,35 @@ async def discipline_sessions(
         users_res = client.table("users").select("id, name").in_("id", user_ids).execute()
         users_map = {u["id"]: u for u in (users_res.data or [])}
 
-    # Batch fetch reviews
+    # Batch fetch reviews (status + rating — rating powers the drill-down cell)
     reviews_map: dict[str, dict] = {}
     if session_ids:
-        reviews_res = client.table("session_reviews").select("session_id, status").in_("session_id", session_ids).execute()
+        reviews_res = client.table("session_reviews").select("session_id, status, rating").in_("session_id", session_ids).execute()
         reviews_map = {r["session_id"]: r for r in (reviews_res.data or [])}
 
     result = []
     for s in rows:
         u = users_map.get(s.get("user_id", ""), {})
         review = reviews_map.get(s.get("id", ""))
+        content_id = s.get("content_id") or ""
+        chapter_id = maps["content_chapter"].get(content_id, "")
+        course_id = maps["chapter_course"].get(chapter_id, "")
         result.append(
             {
                 "id": s.get("id"),
                 "user_id": s.get("user_id"),
                 "user_name": u.get("name"),
                 "content_id": s.get("content_id"),
+                "content_title": maps["content_titles"].get(content_id),
+                "chapter_id": chapter_id or None,
+                "chapter_title": maps["chapter_titles"].get(chapter_id),
+                "course_id": course_id or None,
+                "course_title": maps["course_titles"].get(course_id),
                 "status": s.get("status"),
                 "total_messages": s.get("total_messages"),
                 "performance_score": s.get("performance_score"),
                 "review_status": review.get("status") if review else None,
+                "rating": review.get("rating") if review else None,
                 "created_at": s.get("created_at"),
             }
         )

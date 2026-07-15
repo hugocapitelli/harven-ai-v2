@@ -99,8 +99,17 @@ export const disciplinesApi = {
   addStudent:       (id: string, studentId: string)             => api.post(`/disciplines/${id}/students`, { student_id: studentId }).then(d),
   removeStudent:    (id: string, studentId: string)             => api.delete(`/disciplines/${id}/students/${studentId}`).then(d),
   addStudentsBatch: (id: string, studentIds: string[])          => api.post(`/disciplines/${id}/students/batch`, { student_ids: studentIds }).then(d),
-  // Sessions (review flow)
-  getSessions:      (id: string, status?: string)               => api.get(`/disciplines/${id}/sessions`, { params: status ? { status } : undefined }).then(d),
+  // Sessions (review flow). ``studentId`` (GRD-1) scopes the list to one student
+  // for the grade drill-down; omitting it returns the discipline-wide list.
+  getSessions:      (id: string, opts?: { status?: string; studentId?: string }) => {
+    const params: Record<string, string> = {};
+    if (opts?.status) params.status = opts.status;
+    if (opts?.studentId) params.student_id = opts.studentId;
+    return api.get(`/disciplines/${id}/sessions`, { params: Object.keys(params).length ? params : undefined }).then(d);
+  },
+  // Gradebook (GRD-1) — composed grades: avg_rating/final_grade per course +
+  // overall_avg per student, aggregated from session_reviews.rating server-side.
+  getGradebook:     (id: string)                                => api.get(`/disciplines/${id}/gradebook`).then(d),
 };
 
 // ---------------------------------------------------------------------------

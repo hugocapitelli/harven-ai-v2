@@ -17,6 +17,10 @@ class ChatSessionCreate(BaseModel):
     course_id: Optional[str] = None
     discipline_id: Optional[str] = None
     mode: str = Field("socratic", pattern="^(socratic|free|guided)$")
+    # SOC-1: the "Pergunta para Reflexão" the student committed to. Written ONCE
+    # on session creation; on resume the stored value is never overwritten
+    # (first-write-wins), so the frontend can derive a durable lock from it.
+    initial_question_text: Optional[str] = None
 
 
 class ChatMessageCreate(BaseModel):
@@ -25,9 +29,16 @@ class ChatMessageCreate(BaseModel):
 
 
 class SessionReviewCreate(BaseModel):
+    """Per-session teacher review payload.
+
+    GRD-1: the rating scale is 0–10 (matching ``session_reviews.rating`` and the
+    gradebook aggregation), NOT 1–5. The live review routes use the equivalent
+    model declared inline in ``routes_admin.py`` (``rating`` 0–10 + ``feedback``);
+    this schema is kept in sync with that contract so the two never diverge again.
+    """
     session_id: str
-    review: str = Field(..., min_length=1)
-    rating: Optional[int] = Field(None, ge=1, le=5)
+    feedback: Optional[str] = None
+    rating: Optional[float] = Field(None, ge=0, le=10)
 
 
 class ReviewReplyCreate(BaseModel):

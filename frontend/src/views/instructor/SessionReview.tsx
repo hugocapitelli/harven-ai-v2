@@ -31,29 +31,47 @@ const statusLabel = (status: string) => {
   }
 };
 
-function StarInput({ value, onChange }: { value: number; onChange: (v: number) => void }) {
-  const [hover, setHover] = useState(0);
+// GRD-1: the per-session grade is 0–10 (step 0.5), matching
+// ``session_reviews.rating`` and the gradebook composition. The old 1–5 star
+// picker silently capped every grade at 5.0/10 and deflated the composed grade.
+function GradeInput({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+  const quick = [0, 2, 4, 6, 8, 10];
+  const clamp = (v: number) => Math.min(10, Math.max(0, v));
   return (
-    <div className="flex gap-1" role="radiogroup" aria-label="Avaliação">
-      {[1, 2, 3, 4, 5].map((star) => (
-        <button
-          key={star}
-          type="button"
-          onMouseEnter={() => setHover(star)}
-          onMouseLeave={() => setHover(0)}
-          onClick={() => onChange(star)}
-          className="p-0.5 transition-transform hover:scale-110"
-          aria-label={`${star} estrela${star !== 1 ? 's' : ''}`}
-        >
-          <span
-            className={`material-symbols-outlined text-[28px] transition-colors ${
-              star <= (hover || value) ? 'fill-1 text-harven-gold' : 'text-muted'
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-3">
+        <input
+          type="number"
+          min="0"
+          max="10"
+          step="0.5"
+          value={Number.isFinite(value) ? value : 0}
+          onChange={(e) => {
+            const parsed = parseFloat(e.target.value);
+            onChange(Number.isNaN(parsed) ? 0 : clamp(parsed));
+          }}
+          className="w-24 text-center text-2xl font-bold border border-harven-border rounded-lg px-3 py-2 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          aria-label="Nota de 0 a 10"
+        />
+        <span className="text-sm text-muted-foreground">/ 10</span>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {quick.map((n) => (
+          <button
+            key={n}
+            type="button"
+            onClick={() => onChange(n)}
+            className={`h-7 min-w-[28px] px-2 rounded-md text-xs font-medium transition-colors ${
+              value === n
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground'
             }`}
+            aria-label={`Nota ${n}`}
           >
-            star
-          </span>
-        </button>
-      ))}
+            {n}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -70,7 +88,9 @@ export default function SessionReview() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
-  const [rating, setRating] = useState(0);
+  // GRD-1: null = "not graded yet"; 0 is a VALID grade on the 0–10 scale, so it
+  // can no longer double as the empty sentinel.
+  const [rating, setRating] = useState<number | null>(null);
   const [feedback, setFeedback] = useState('');
   const [instructorMessage, setInstructorMessage] = useState('');
 
@@ -93,7 +113,7 @@ export default function SessionReview() {
           const r = Array.isArray(reviewData) ? reviewData[0] : reviewData;
           if (r) {
             setReview(r as SessionReviewType);
-            setRating(r.rating ?? 0);
+            setRating(r.rating ?? null);
             setFeedback(r.feedback ?? '');
           }
         }
@@ -117,7 +137,7 @@ export default function SessionReview() {
   }, [messages]);
 
   const handleSubmitReview = async () => {
-    if (!sessionId || rating === 0) { toast.error('Selecione uma avaliação.'); return; }
+    if (!sessionId || rating == null) { toast.error('Informe uma nota de 0 a 10.'); return; }
     setSubmitting(true);
     try {
       const payload = { rating, feedback };
@@ -244,8 +264,8 @@ export default function SessionReview() {
             </CardHeader>
             <CardContent className="flex flex-col gap-5">
               <div>
-                <label className="block text-[11px] font-medium text-muted-foreground uppercase tracking-wide mb-2">Nota</label>
-                <StarInput value={rating} onChange={setRating} />
+                <label className="block text-[11px] font-medium text-muted-foreground uppercase tracking-wide mb-2">Nota (0–10)</label>
+                <GradeInput value={rating ?? 0} onChange={setRating} />
               </div>
 
               <Textarea
@@ -256,7 +276,7 @@ export default function SessionReview() {
                 placeholder="Observações sobre a performance do aluno nesta sessão socrática..."
               />
 
-              <Button onClick={handleSubmitReview} disabled={submitting || rating === 0} fullWidth>
+              <Button onClick={handleSubmitReview} disabled={submitting || rating == null} fullWidth>
                 {submitting ? 'Enviando...' : review ? 'Atualizar Avaliação' : 'Enviar Avaliação'}
               </Button>
             </CardContent>

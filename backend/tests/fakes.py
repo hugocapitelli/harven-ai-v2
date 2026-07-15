@@ -57,11 +57,14 @@ class _QueryBuilder:
         self._op = "select"          # select | insert | update | delete
         self._filters: List[tuple] = []  # list of (col, value) for .eq
         self._in_filters: List[tuple] = []  # list of (col, values) for .in_
+        self._not_is_filters: List[str] = []  # cols required NOT NULL via .not_.is_(col,"null")
         self._payload: Any = None        # insert/update payload
         self._single = False             # .single() -> dict or raise
         self._maybe_single = False       # .maybe_single() -> dict or None
         self._count_mode: Optional[str] = None
         self._limit: Optional[int] = None
+        self._range: Optional[tuple] = None  # (start, end) inclusive, PostgREST-style
+        self._negate_next_is = False     # armed by .not_, consumed by .is_
         self._order: Optional[str] = None
         # Accumulated (column, descending) sort keys, applied left-to-right so a
         # chained ``.order("created_at").order("sequence").order("id")`` produces a
@@ -84,6 +87,30 @@ class _QueryBuilder:
         self._in_filters.append((col, list(values)))
         return self
 
+    @property
+    def not_(self) -> "_QueryBuilder":
+        # Mirrors supabase-py's ``.not_.is_(col, "null")`` negation entry point.
+        # The only negation the production code uses is IS NOT NULL, so ``not_``
+        # simply arms the next ``.is_(col, "null")`` to filter out NULLs.
+        self._negate_next_is = True
+        return self
+
+    def is_(self, col: str, value: Any) -> "_QueryBuilder":
+        # Only ``.not_.is_(col, "null")`` (rating IS NOT NULL) is used in prod.
+        # A bare ``.is_`` without a preceding ``.not_`` is not exercised, so we
+        # keep the fake honest and reject it loudly rather than guess semantics.
+        if not getattr(self, "_negate_next_is", False):
+            raise NotImplementedError(
+                "FakeSupabaseClient: bare .is_() is not supported; only .not_.is_(col, 'null')"
+            )
+        self._negate_next_is = False
+        if str(value).lower() != "null":
+            raise NotImplementedError(
+                "FakeSupabaseClient: .not_.is_() only supports the 'null' sentinel"
+            )
+        self._not_is_filters.append(col)
+        return self
+
     def order(self, col: str, *_a, **kwargs) -> "_QueryBuilder":
         self._order = col
         self._orders.append((col, bool(kwargs.get("desc", False))))
@@ -91,6 +118,11 @@ class _QueryBuilder:
 
     def limit(self, n: int) -> "_QueryBuilder":
         self._limit = n
+        return self
+
+    def range(self, start: int, end: int) -> "_QueryBuilder":
+        # PostgREST ``.range(start, end)`` is INCLUSIVE on both ends.
+        self._range = (start, end)
         return self
 
     def single(self) -> "_QueryBuilder":
@@ -124,6 +156,10 @@ class _QueryBuilder:
             str_values = {str(v) for v in values}
             if str(row.get(col)) not in str_values:
                 return False
+        # .not_.is_(col, "null") -> the column must be present AND non-null.
+        for col in self._not_is_filters:
+            if row.get(col) is None:
+                return False
         return True
 
     def execute(self) -> _Result:
@@ -141,9 +177,14 @@ class _QueryBuilder:
                     )
             elif self._order:
                 matched.sort(key=lambda r: (r.get(self._order) is None, r.get(self._order)))
+            # count (when requested) reflects the total matched set BEFORE range/limit
+            # windowing — mirrors PostgREST's exact count semantics.
+            count = len(matched) if self._count_mode else None
+            if self._range is not None:
+                start, end = self._range
+                matched = matched[start : end + 1]  # inclusive upper bound
             if self._limit is not None:
                 matched = matched[: self._limit]
-            count = len(matched) if self._count_mode else None
             if self._single:
                 if not matched:
                     # supabase-py raises on .single() with no row; mirror "empty".

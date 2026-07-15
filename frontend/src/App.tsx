@@ -20,6 +20,7 @@ const InstructorList = lazy(() => import('./views/instructor/InstructorList'));
 const InstructorDetail = lazy(() => import('./views/instructor/InstructorDetail'));
 const DisciplineEdit = lazy(() => import('./views/instructor/DisciplineEdit'));
 const SessionReview = lazy(() => import('./views/instructor/SessionReview'));
+const StudentGradeDetail = lazy(() => import('./views/instructor/StudentGradeDetail'));
 const AdminConsole = lazy(() => import('./views/admin/AdminConsole'));
 const UserManagement = lazy(() => import('./views/admin/UserManagement'));
 const ClassManagement = lazy(() => import('./views/admin/ClassManagement'));
@@ -118,6 +119,7 @@ function AppRoutes() {
           {/* Instructor */}
           <Route path="/instructor" element={<InstructorList />} />
           <Route path="/instructor/class/:id" element={<InstructorDetail />} />
+          <Route path="/instructor/class/:id/student/:studentId" element={<StudentGradeDetail />} />
           <Route path="/instructor/discipline/:disciplineId/edit" element={<DisciplineEdit />} />
           <Route path="/session/:sessionId/review" element={<SessionReview />} />
           {/* Admin */}
