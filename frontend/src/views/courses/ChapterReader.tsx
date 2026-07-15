@@ -254,6 +254,14 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
     id: string;
     initialQuestionText: string | null;
   } | null>(null);
+  // GRD-3 (refazer): when the content's most-recent session is ``completed`` (a real
+  // finished attempt OR a phantom completed-with-0-turns — GRD-2), we remember it so
+  // the panel can offer "Refazer sessão". Its ``initialQuestionText`` lets the new
+  // attempt reuse the same fixed question (SOC-1 contract) without a re-pick.
+  const [completedSession, setCompletedSession] = useState<{
+    id: string;
+    initialQuestionText: string | null;
+  } | null>(null);
   // TPP-6: pacing/finalization are now the SERVER's source of truth (TPP-5). We
   // store the last ``session_status`` returned by the socratic route instead of
   // deriving the count locally. ``null`` until the first turn resolves.
@@ -306,8 +314,18 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
             id: sessionData.id ?? sessionData.session_id,
             initialQuestionText: sessionData.initial_question_text ?? null,
           });
+          setCompletedSession(null);
+        } else if (sessionData && sessionData.status === 'completed') {
+          // GRD-3: the latest attempt is done — remember it so the panel offers
+          // "Refazer sessão" (works for a phantom completed-0-turns session too).
+          setActiveSession(null);
+          setCompletedSession({
+            id: sessionData.id ?? sessionData.session_id,
+            initialQuestionText: sessionData.initial_question_text ?? null,
+          });
         } else {
           setActiveSession(null);
+          setCompletedSession(null);
         }
         // Seed the per-student completion badge from the catalog flag as a best-effort
         // hint (idempotent UI on re-entry). Authoritative per-user progress lives in the
@@ -595,6 +613,47 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
       ]);
     } finally {
       setChatLoading(false);
+    }
+  };
+
+  // GRD-3: "Refazer sessão" — the student is trapped on a ``completed`` session (a
+  // finished attempt OR a phantom completed-with-0-turns) with no path back to the
+  // questions. This starts a FRESH attempt: it clears the durable + local "done"
+  // state (including the ``tutorDone`` localStorage flag that would otherwise keep
+  // the panel in a finished state), then delegates to ``startChat`` — which hits the
+  // create-or-get endpoint. Because the most-recent session is ``completed``, the
+  // backend creates a NEW session row (SEC-CHAT-3 new-attempt), preserving the old
+  // one in history for the teacher's grading drill-down (GRD-1). SOC-1 contract: the
+  // question is fixed per content, so the new attempt reuses the completed session's
+  // ``initialQuestionText`` when known; otherwise the student picks from the list.
+  const restartChat = async (questionOverride?: string) => {
+    const question =
+      questionOverride ??
+      completedSession?.initialQuestionText ??
+      activeSession?.initialQuestionText ??
+      selectedQuestion;
+    // Clear the durable "done" state so the panel leaves the finished view.
+    setTutorDone(false);
+    if (tutorDoneKey) {
+      try {
+        localStorage.removeItem(tutorDoneKey);
+      } catch {
+        // best-effort — the in-memory flag reset already unlocks this visit
+      }
+    }
+    setCompletedSession(null);
+    setActiveSession(null);
+    setSelectedQuestion(null);
+    setSessionStatus(null);
+    setChatMessages([]);
+    // With a completed most-recent session, startChat's create-or-get yields a NEW
+    // session (never reactivating the completed one — SEC-CHAT-3). If we know the
+    // fixed question, reuse it and open the chat straight away; otherwise fall back
+    // to the question list (close the chat so the buttons show, unlocked).
+    if (question) {
+      await startChat(question);
+    } else {
+      setChatOpen(false);
     }
   };
 
@@ -1298,6 +1357,30 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                         Selecione uma pergunta para iniciar o diálogo com o tutor IA.
                       </p>
                     </div>
+
+                    {/* GRD-3: the content's most-recent session is completed (a finished
+                        attempt or a phantom completed-with-0-turns) and the chat is closed
+                        — surface an explicit "Refazer sessão" so the student is never
+                        trapped without a path back to the tutor. Starts a fresh attempt
+                        (new session row) with the same fixed question when known. */}
+                    {completedSession && !activeSession && !chatOpen && (
+                      <div className="flex items-center justify-between gap-3 rounded-xl border border-primary/30 bg-primary/5 px-4 py-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-foreground">Sessão anterior concluída</p>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            Você já concluiu esta sessão. Refaça para conversar novamente com o tutor.
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => restartChat()}
+                          disabled={chatLoading}
+                          className="flex items-center gap-1.5 shrink-0 bg-primary hover:bg-primary-dark text-harven-dark font-bold rounded-lg text-xs uppercase tracking-widest px-4 py-2.5 transition-colors disabled:opacity-50"
+                        >
+                          <span className="material-symbols-outlined text-[16px]">restart_alt</span>
+                          Refazer sessao
+                        </button>
+                      </div>
+                    )}
                     <div className="space-y-3">
                       {questions.slice(0, 5).map((q, idx) => {
                         const diff = q.difficulty ?? 'medium';
@@ -1589,10 +1672,24 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                 // TPP-6: the server signalled the end of the session (should_finalize)
                 // — the closing synthesis is the last assistant bubble above; disable
                 // further input. No new turns once the server finalizes.
-                <div className="rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive text-center">
-                  {sessionFinalized
-                    ? 'Sessao concluida. Veja a sintese de fechamento acima.'
-                    : 'Limite de interacoes atingido nesta sessao.'}
+                // GRD-3: offer "Refazer sessão" so the student is never trapped on a
+                // finished (or phantom) session — it starts a fresh attempt with the
+                // same fixed question (the current ``selectedQuestion``), preserving
+                // the completed session in the teacher's history.
+                <div className="flex flex-col gap-2">
+                  <div className="rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive text-center">
+                    {sessionFinalized
+                      ? 'Sessao concluida. Veja a sintese de fechamento acima.'
+                      : 'Limite de interacoes atingido nesta sessao.'}
+                  </div>
+                  <button
+                    onClick={() => restartChat(selectedQuestion ?? undefined)}
+                    disabled={chatLoading}
+                    className="flex items-center justify-center gap-1.5 w-full bg-primary hover:bg-primary-dark text-harven-dark font-bold rounded-lg text-xs uppercase tracking-widest px-4 py-2.5 transition-colors disabled:opacity-50"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">restart_alt</span>
+                    Refazer sessao
+                  </button>
                 </div>
               ) : (
                 <div className="flex gap-2">
