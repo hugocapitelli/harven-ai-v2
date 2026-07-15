@@ -60,7 +60,9 @@ export default function StudentGradeDetail() {
     try {
       setLoading(true);
       const [sessionsRes, gradebook] = await Promise.all([
-        disciplinesApi.getSessions(id, { studentId }),
+        // GRD-2: the teacher must see EVERY session of this student to grade — request
+        // the endpoint's max page so older sessions aren't hidden behind default pagination.
+        disciplinesApi.getSessions(id, { studentId, perPage: 100 }),
         disciplinesApi.getGradebook(id).catch(() => null),
       ]);
       if (controller.signal.aborted) return;

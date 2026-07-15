@@ -1609,6 +1609,21 @@ async def complete_chat_session(
     if session.get("status") == "completed":
         return session
 
+    # GRD-2 (phantom session): a session may only be completed AFTER at least one real
+    # student turn. The completion authority is server-side — never the frontend's
+    # localStorage ``tutorDone`` flag, which could be stale from a prior attempt and let
+    # "Concluir" fire on a fresh 0-turn session (bug: sessions marked completed at 0/3,
+    # only the tutor's opening message). ``count_user_messages`` is the canonical on-read
+    # count of ``role='user'`` turns; zero → no completion, the session stays as-is.
+    user_turns = await run_in_threadpool(
+        ChatRepository(client).count_user_messages, session_id
+    )
+    if user_turns <= 0:
+        # Not an error — the client may legitimately try to close early; we simply
+        # refuse to mark an interaction-less session as completed. Return the session
+        # unchanged (still ``active``) so no phantom completion is ever persisted.
+        return session
+
     # DATA-GAM-3: additive hook on the completion edge. Load the turns persisted by
     # TPP-4, compute the gamification/progress ``performance_score`` from them, and
     # persist it together with the status flip — once, on this transition only.

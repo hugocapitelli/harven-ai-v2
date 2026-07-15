@@ -101,10 +101,13 @@ export const disciplinesApi = {
   addStudentsBatch: (id: string, studentIds: string[])          => api.post(`/disciplines/${id}/students/batch`, { student_ids: studentIds }).then(d),
   // Sessions (review flow). ``studentId`` (GRD-1) scopes the list to one student
   // for the grade drill-down; omitting it returns the discipline-wide list.
-  getSessions:      (id: string, opts?: { status?: string; studentId?: string }) => {
-    const params: Record<string, string> = {};
+  // ``perPage`` (GRD-2) lets the grading drill-down pull ALL of a student's sessions
+  // in one page — the default 20 hid older sessions from the teacher (phantom bug §2).
+  getSessions:      (id: string, opts?: { status?: string; studentId?: string; perPage?: number }) => {
+    const params: Record<string, string | number> = {};
     if (opts?.status) params.status = opts.status;
     if (opts?.studentId) params.student_id = opts.studentId;
+    if (opts?.perPage) params.per_page = opts.perPage;
     return api.get(`/disciplines/${id}/sessions`, { params: Object.keys(params).length ? params : undefined }).then(d);
   },
   // Gradebook (GRD-1) — composed grades: avg_rating/final_grade per course +

@@ -146,7 +146,8 @@ export default function InstructorDetail() {
   useEffect(() => {
     if (activeTab !== 'conversas' || !id) return;
     const controller = new AbortController();
-    disciplinesApi.getSessions(id).then((data) => {
+    // GRD-2: pull the max page so sessions aren't hidden behind the default 20.
+    disciplinesApi.getSessions(id, { perPage: 100 }).then((data) => {
       if (!controller.signal.aborted) setSessions(unwrapList(data));
     }).catch(() => {});
     return () => controller.abort();

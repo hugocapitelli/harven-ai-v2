@@ -58,13 +58,20 @@ class TestScoreOnCompletion:
     def test_completing_session_with_no_student_signal_leaves_score_null(
         self, client, as_student, fake_supabase
     ):
-        # Session A owned by STUDENT_A, but only tutor turns -> no scorable signal.
+        # Session A owned by STUDENT_A. GRD-2: completion now REQUIRES at least one
+        # real student turn (a 0-user-turn session can no longer be completed — that
+        # was the phantom-session bug). So the "no scorable signal" case is a session
+        # where the student DID interact but the turn carries no substantive content
+        # (empty answer) — scoring honestly yields NULL, yet completion is allowed
+        # because a real ``role='user'`` turn exists.
         fake_supabase.seed(
             "chat_messages",
             [
                 {"id": "t1", "session_id": SESSION_A_ID, "role": "assistant",
                  "content": "Qual sua leitura?", "agent_type": "socrates",
                  "created_at": "2026-01-01T00:00:01Z"},
+                {"id": "t2", "session_id": SESSION_A_ID, "role": "user",
+                 "content": "   ", "created_at": "2026-01-01T00:00:02Z"},
             ],
         )
 
@@ -73,7 +80,7 @@ class TestScoreOnCompletion:
 
         row = fake_supabase.find("chat_sessions", id=SESSION_A_ID)
         assert row["status"] == "completed"
-        # Honest absence: NULL, not a forced 0.
+        # Honest absence: NULL, not a forced 0 (empty student content is unscorable).
         assert row.get("performance_score") is None
 
     def test_second_complete_does_not_recompute_score(
