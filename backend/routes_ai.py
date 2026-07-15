@@ -253,7 +253,7 @@ async def ai_socrates_dialogue(
     client: Client = Depends(get_supabase),
 ):
     try:
-        return await get_ai_service().socratic_dialogue(
+        result = await get_ai_service().socratic_dialogue(
             student_message=req.student_message,
             chapter_content=req.chapter_content,
             # InitialQuestion (TPP-4) -> dict for the service's typed accessors.
@@ -272,6 +272,32 @@ async def ai_socrates_dialogue(
     except Exception as e:
         logger.error(f"Socrates error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Erro interno do servidor")
+
+    # SOC-2 (zombie fix): when this turn is the 3rd (finalizing) one, mark the
+    # session ``completed`` SERVER-SIDE so it never lingers as an exhausted ``active``
+    # zombie that a later create-or-get resumes (consuming the kickoff as a real turn
+    # and finalizing on the 1st message — the 0/3 screenshot). This reuses the SAME
+    # completion authority as ``PUT .../complete`` (``_apply_session_completion``:
+    # idempotent + GRD-2 guard + DATA-GAM-3 score), so there is no duplicate logic and
+    # no double conclusion. It is BEST-EFFORT: a failure here is logged and must NEVER
+    # derail the tutor reply the student is waiting on (house pattern for the additive
+    # completion edge). Ownership is re-gated (the caller is the student who owns the
+    # session; a spoofed session_id is caught before any write).
+    if result.get("session_status", {}).get("should_finalize") and req.session_id:
+        try:
+            session = load_session_or_404(client, req.session_id)
+            assert_owner_or_role(
+                session.get("user_id"), current_user, "ADMIN", "TEACHER", "INSTRUCTOR"
+            )
+            await _apply_session_completion(client, session)
+        except Exception as exc:  # pragma: no cover - additive edge, never blocking
+            logger.warning(
+                "ai_socrates_dialogue: server-side completion on finalize failed "
+                "(session=%s): %s",
+                req.session_id, exc,
+            )
+
+    return result
 
 
 @router.post("/api/ai/analyst/detect", tags=["AI"], response_model=AIDetectionResponse)
@@ -1616,6 +1642,69 @@ async def get_user_chat_sessions(
     return result.data or []
 
 
+async def _apply_session_completion(client: Client, session: dict) -> dict:
+    """Server-side active→completed transition for a socratic session (SOC-2/GRD-2).
+
+    Single source of truth for "mark this session completed", shared by the
+    ``PUT .../complete`` endpoint AND the socratic finalizer path (SOC-2: the turn
+    that returns ``should_finalize`` must not leave a zombie ``active`` session).
+    Ownership MUST already be gated by the caller — this helper only performs the
+    transition and NEVER makes an authorization decision.
+
+    Guarantees (unchanged from the endpoint that formerly inlined this):
+      * Idempotent: an already-``completed`` session is a no-op (no redundant write,
+        so the DATA-GAM-3 score edge below runs exactly once — never on re-complete).
+      * GRD-2 phantom guard: refuses to complete a session with zero real student
+        turns; the session is returned unchanged (still ``active``).
+      * DATA-GAM-3: computes ``performance_score`` best-effort and persists it with
+        the status flip on this transition only; a computation failure leaves the
+        score NULL and NEVER blocks completion.
+
+    Returns the (possibly updated) session row.
+    """
+    session_id = session["id"]
+
+    # Idempotency: a 2nd complete on an already-completed session is a no-op — no
+    # redundant write is issued, so the score is computed/persisted ONLY on the first
+    # active->completed transition (DATA-GAM-3 AC: score written exactly once).
+    if session.get("status") == "completed":
+        return session
+
+    # GRD-2 (phantom session): a session may only be completed AFTER at least one real
+    # student turn. The completion authority is server-side — never the frontend's
+    # localStorage ``tutorDone`` flag. ``count_user_messages`` is the canonical on-read
+    # count of ``role='user'`` turns; zero → no completion, the session stays as-is.
+    user_turns = await run_in_threadpool(
+        ChatRepository(client).count_user_messages, session_id
+    )
+    if user_turns <= 0:
+        return session
+
+    # DATA-GAM-3: additive hook on the completion edge. Load the persisted turns,
+    # compute the gamification/progress ``performance_score`` from them, and persist
+    # it together with the status flip — once, on this transition only. Best-effort:
+    # any failure leaves ``performance_score`` NULL and NEVER blocks completion.
+    update_payload: Dict[str, Any] = {"status": "completed"}
+    try:
+        turns = await run_in_threadpool(
+            ChatRepository(client).get_session_messages, session_id
+        )
+        score = compute_performance_score(turns)
+        if score is not None:
+            update_payload["performance_score"] = score
+    except Exception as exc:  # pragma: no cover - score is additive, never blocking
+        logger.warning(
+            "_apply_session_completion: performance_score computation failed (%s): %s",
+            session_id, exc,
+        )
+
+    updated = client.table("chat_sessions").update(
+        update_payload
+    ).eq("id", session_id).execute()
+
+    return updated.data[0] if updated.data else {"id": session_id, **update_payload}
+
+
 @router.put("/chat-sessions/{session_id}/complete", tags=["Chat Sessions"])
 async def complete_chat_session(
     session_id: str,
@@ -1630,55 +1719,10 @@ async def complete_chat_session(
         session.get("user_id"), current_user, "ADMIN", "TEACHER", "INSTRUCTOR"
     )
 
-    # Idempotency: a 2nd complete on an already-completed session is a 200 no-op —
-    # no redundant write is issued. Because the score is computed and persisted ONLY
-    # on this first active->completed transition (below), a re-complete never
-    # recomputes it (DATA-GAM-3 AC: score written exactly once; DATA-GAM-4 compat).
-    if session.get("status") == "completed":
-        return session
-
-    # GRD-2 (phantom session): a session may only be completed AFTER at least one real
-    # student turn. The completion authority is server-side — never the frontend's
-    # localStorage ``tutorDone`` flag, which could be stale from a prior attempt and let
-    # "Concluir" fire on a fresh 0-turn session (bug: sessions marked completed at 0/3,
-    # only the tutor's opening message). ``count_user_messages`` is the canonical on-read
-    # count of ``role='user'`` turns; zero → no completion, the session stays as-is.
-    user_turns = await run_in_threadpool(
-        ChatRepository(client).count_user_messages, session_id
-    )
-    if user_turns <= 0:
-        # Not an error — the client may legitimately try to close early; we simply
-        # refuse to mark an interaction-less session as completed. Return the session
-        # unchanged (still ``active``) so no phantom completion is ever persisted.
-        return session
-
-    # DATA-GAM-3: additive hook on the completion edge. Load the turns persisted by
-    # TPP-4, compute the gamification/progress ``performance_score`` from them, and
-    # persist it together with the status flip — once, on this transition only.
-    # The computation is best-effort: any failure leaves ``performance_score`` NULL
-    # and NEVER blocks completion (completion is the primary op; the score is
-    # additive). ``None`` (insufficient signal) is left as NULL, not forced to 0, so
-    # dashboard averages are not polluted with false zeros. The gradebook (official
-    # grade) does not read this field and is unaffected.
-    update_payload: Dict[str, Any] = {"status": "completed"}
-    try:
-        turns = await run_in_threadpool(
-            ChatRepository(client).get_session_messages, session_id
-        )
-        score = compute_performance_score(turns)
-        if score is not None:
-            update_payload["performance_score"] = score
-    except Exception as exc:  # pragma: no cover - score is additive, never blocking
-        logger.warning(
-            "complete_chat_session: performance_score computation failed (%s): %s",
-            session_id, exc,
-        )
-
-    updated = client.table("chat_sessions").update(
-        update_payload
-    ).eq("id", session_id).execute()
-
-    return updated.data[0] if updated.data else {"id": session_id, **update_payload}
+    # The transition (idempotency + GRD-2 guard + DATA-GAM-3 score + status flip) is
+    # centralized in ``_apply_session_completion`` so this endpoint and the socratic
+    # finalizer path share ONE completion authority (SOC-2). Ownership is gated above.
+    return await _apply_session_completion(client, session)
 
 
 @router.post("/chat-sessions/{session_id}/export-moodle", tags=["Chat Sessions"])

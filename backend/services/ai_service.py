@@ -743,11 +743,19 @@ class AIService:
     def _derive_pacing(self, used: int) -> Dict[str, int]:
         """Server-side pacing from the persisted ``used`` student-turn count (TPP-5).
 
-        ``remaining = MAX - used`` (clamped >= 0); ``should_finalize`` once the
-        current turn is the last permitted one (``used >= MAX - 1``).
+        ``used`` is the count AFTER the current turn was persisted (the caller does
+        the ``+1`` before calling this), so it is the 1-based index of the turn in
+        flight: turn 1 → used=1, turn 2 → used=2, turn 3 → used=3.
+
+        SOC-2 (off-by-one fix): finalize when the CURRENT turn is the last permitted
+        one, i.e. ``used >= MAX`` (turn 3 of 3). The previous ``used >= MAX - 1``
+        finalized one turn early — on the student's 2nd real message — because
+        ``used`` already includes the current turn (the screenshot: session closing
+        before the 3 interactions were spent). ``remaining = MAX - used`` (clamped
+        >= 0) then reads 2 → 1 → 0 across turns 1 → 2 → 3, matching the N/3 counter.
         """
         remaining = max(0, MAX_INTERACTIONS - used)
-        should_finalize = used >= (MAX_INTERACTIONS - 1)
+        should_finalize = used >= MAX_INTERACTIONS
         return {"remaining": remaining, "should_finalize": should_finalize}
 
     def _select_reference_context(

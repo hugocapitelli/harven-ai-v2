@@ -298,11 +298,10 @@ class TestTpp4InitialQuestionContract:
 class TestTpp5Pacing:
     async def test_remaining_derived_from_persisted_count_not_client(self):
         fake_db = _fake_with_rpc()
-        # Under the current MAX_INTERACTIONS=3 contract (commit 9c47d11) the mid-
-        # conversation, not-yet-finalized window is used < MAX-1 (i.e. used <= 1),
-        # so this oracle uses ZERO prior turns; the single turn below makes used=1.
-        # The point of the test is unchanged: the server derives pacing from the
-        # PERSISTED count, never from the client-supplied field.
+        # SOC-2 (MAX_INTERACTIONS=3): the not-yet-finalized window is used < MAX
+        # (turns 1 and 2); this oracle uses ZERO prior turns so the single turn below
+        # makes used=1 (turn 1). The point of the test is unchanged: the server
+        # derives pacing from the PERSISTED count, never from the client-supplied field.
         svc, _ = _svc("E entao? ")
         # Client LIES with an absurd interactions_remaining=99; server must ignore
         # it and report the value derived from the real persisted count (used=1).
@@ -316,7 +315,7 @@ class TestTpp5Pacing:
             db=fake_db,
         )
         # used = 0 prior + this turn = 1 → remaining = MAX - 1 (NOT the client's 99-1),
-        # and not finalized yet (used=1 < MAX-1=2).
+        # and not finalized yet (used=1 < MAX=3).
         assert out["session_status"]["interactions_remaining"] == MAX_INTERACTIONS - 1
         assert out["session_status"]["should_finalize"] is False
 
@@ -335,32 +334,39 @@ class TestTpp5Pacing:
     async def test_closing_synthesis_reachable_at_max(self):
         fake_db = _fake_with_rpc()
         repo = ChatRepository(fake_db)
-        # Pre-seed MAX-2 user turns; the NEXT turn becomes used = MAX-1 → finalize.
-        for i in range(MAX_INTERACTIONS - 2):
+        # SOC-2 (off-by-one fix): ``used`` includes the current turn, so finalize
+        # fires at used >= MAX (the 3rd real turn), not used >= MAX-1. Pre-seed
+        # MAX-1 user turns; the NEXT turn becomes used = MAX → finalize exactly once.
+        for i in range(MAX_INTERACTIONS - 1):
             repo.persist_turn(SESSION_A_ID, {"role": "user", "content": f"u{i}"})
 
         svc, _ = _svc("Sintese final. O que voce conclui? ")
         out = await svc.socratic_dialogue(
-            student_message="penultima", chapter_content="c",
+            student_message="ultima", chapter_content="c",
             initial_question={"text": "Q?"}, interactions_remaining=3,
             session_id=SESSION_A_ID, user_id=STUDENT_A_ID, db=fake_db,
         )
-        # used = MAX-1 → should_finalize True exactly once at the real end.
+        # used = MAX → should_finalize True exactly once at the real end (3rd turn).
         assert out["session_status"]["should_finalize"] is True
         assert out["response"]["is_final_interaction"] is True
 
     async def test_not_finalize_before_the_end(self):
         fake_db = _fake_with_rpc()
-        # MAX_INTERACTIONS=3 (commit 9c47d11): finalization fires at used >= MAX-1
-        # (=2). To prove "does NOT finalize BEFORE the end", the current turn must
-        # land strictly before that threshold, i.e. used=1 → zero prior turns.
+        # SOC-2 (off-by-one fix): finalization fires at used >= MAX (the 3rd real
+        # turn). To prove "does NOT finalize BEFORE the end", pre-seed MAX-2 turns so
+        # the current turn lands at used = MAX-1 (the 2nd real turn under MAX=3) —
+        # strictly before the threshold. This is the exact turn the OLD contract
+        # finalized early (the screenshot bug); it must NOT finalize now.
+        repo = ChatRepository(fake_db)
+        for i in range(MAX_INTERACTIONS - 2):
+            repo.persist_turn(SESSION_A_ID, {"role": "user", "content": f"u{i}"})
         svc, _ = _svc("? ")
         out = await svc.socratic_dialogue(
             student_message="meio", chapter_content="c",
             initial_question={"text": "Q?"}, interactions_remaining=20,
             session_id=SESSION_A_ID, user_id=STUDENT_A_ID, db=fake_db,
         )
-        # used = 1 (< MAX-1 = 2) → not the last permitted turn yet, no finalize.
+        # used = MAX-1 (< MAX) → not the last permitted turn yet, no finalize.
         assert out["session_status"]["should_finalize"] is False
 
 
