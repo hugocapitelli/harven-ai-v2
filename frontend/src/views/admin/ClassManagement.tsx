@@ -39,6 +39,22 @@ const SEMESTER_OPTIONS = (() => {
   return years.flatMap((y) => [`${y}.1`, `${y}.2`]);
 })();
 
+// GET /users é paginado no backend (per_page max 100, default 20); agrega
+// todas as páginas para que vínculos e resolução de RAs do CSV enxerguem
+// todos os usuários, não só os 20 primeiros.
+async function fetchAllUsers(params?: Record<string, unknown>): Promise<User[]> {
+  const all: User[] = [];
+  const perPage = 100;
+  for (let page = 1; page <= 100; page += 1) {
+    const res = await usersApi.list({ ...(params ?? {}), page, per_page: perPage });
+    const chunk = unwrapList<User>(res);
+    all.push(...chunk);
+    const total = (res as { total?: number })?.total;
+    if (chunk.length < perPage || (typeof total === 'number' && all.length >= total)) break;
+  }
+  return all;
+}
+
 export default function ClassManagement() {
   const [disciplines, setDisciplines] = useState<Discipline[]>([]);
   const [loading, setLoading] = useState(true);
@@ -104,7 +120,7 @@ export default function ClassManagement() {
         coursesApi.listByClass(disc.id).catch(() => []),
         disciplinesApi.getTeachers(disc.id).catch(() => []),
         disciplinesApi.getStudents(disc.id).catch(() => []),
-        usersApi.list().catch(() => []),
+        fetchAllUsers().catch(() => []),
       ]);
       setCourses(unwrapList(c));
       // Teachers/students endpoints return array of link objects with nested teacher/student
@@ -112,7 +128,7 @@ export default function ClassManagement() {
       const studentList = unwrapList(s).map((link: any) => link.student ?? link).filter(Boolean);
       setTeachers(teacherList);
       setStudents(studentList);
-      setAllUsers(unwrapList(u));
+      setAllUsers(u);
     } catch {}
   };
 

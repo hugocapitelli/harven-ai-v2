@@ -41,6 +41,21 @@ const EMPTY_FORM = { name: '', ra: '', email: '', password: '', role: 'STUDENT' 
 
 const EMPTY_NOTIFY_FORM = { title: '', message: '' };
 
+// GET /users é paginado no backend (per_page max 100, default 20); agrega
+// todas as páginas para exibir a lista completa de usuários.
+async function fetchAllUsers(params?: Record<string, unknown>): Promise<ApiUser[]> {
+  const all: ApiUser[] = [];
+  const perPage = 100;
+  for (let page = 1; page <= 100; page += 1) {
+    const res = await usersApi.list({ ...(params ?? {}), page, per_page: perPage });
+    const chunk = unwrapList<ApiUser>(res);
+    all.push(...chunk);
+    const total = (res as { total?: number })?.total;
+    if (chunk.length < perPage || (typeof total === 'number' && all.length >= total)) break;
+  }
+  return all;
+}
+
 export default function UserManagement() {
   const { user: currentUser } = useAuth();
   const [users, setUsers] = useState<ApiUser[]>([]);
@@ -65,9 +80,9 @@ export default function UserManagement() {
       try {
         setLoading(true);
         const params = roleFilter !== 'all' ? { role: roleFilter } : undefined;
-        const data = await usersApi.list(params as Record<string, string>);
+        const data = await fetchAllUsers(params);
         if (controller.signal.aborted) return;
-        setUsers(unwrapList(data));
+        setUsers(data);
       } catch {
         if (controller.signal.aborted) return;
         toast.error('Erro ao carregar usuários.');
@@ -101,8 +116,7 @@ export default function UserManagement() {
       toast.success('Usuário criado.');
       setShowCreateModal(false);
       setForm(EMPTY_FORM);
-      const data = await usersApi.list();
-      setUsers(unwrapList(data));
+      setUsers(await fetchAllUsers(roleFilter !== 'all' ? { role: roleFilter } : undefined));
     } catch (err: any) {
       const msg = err?.response?.data?.detail || 'Erro ao criar usuário.';
       toast.error(String(msg));
@@ -126,8 +140,7 @@ export default function UserManagement() {
       await usersApi.update(editingUser.id, payload);
       toast.success('Usuário atualizado.');
       setEditingUser(null);
-      const data = await usersApi.list();
-      setUsers(unwrapList(data));
+      setUsers(await fetchAllUsers(roleFilter !== 'all' ? { role: roleFilter } : undefined));
     } catch {
       toast.error('Erro ao atualizar.');
     } finally {
@@ -185,8 +198,7 @@ export default function UserManagement() {
     try {
       await usersApi.createBatch(batch as Record<string, unknown>[]);
       toast.success(`${batch.length} usuários importados.`);
-      const data = await usersApi.list();
-      setUsers(unwrapList(data));
+      setUsers(await fetchAllUsers(roleFilter !== 'all' ? { role: roleFilter } : undefined));
     } catch (err: any) {
       const msg = err?.response?.data?.detail || 'Erro na importação.';
       toast.error(String(msg));
