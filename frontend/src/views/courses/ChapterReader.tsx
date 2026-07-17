@@ -323,6 +323,16 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
             id: sessionData.id ?? sessionData.session_id,
             initialQuestionText: sessionData.initial_question_text ?? null,
           });
+          // Cross-device unlock: a session ``completed`` no SERVIDOR prova que o
+          // aluno ja esgotou as interacoes — o gate nao pode depender so do
+          // localStorage (outro device obrigava a refazer as 3 interacoes).
+          // Hidrata o flag e persiste localmente para os proximos loads.
+          setTutorDone(true);
+          if (user?.id && contentId) {
+            try {
+              localStorage.setItem(`harven_socratic_done:${user.id}:${contentId}`, '1');
+            } catch { /* best-effort — o flag em memoria ja destrava esta visita */ }
+          }
         } else {
           setActiveSession(null);
           setCompletedSession(null);
