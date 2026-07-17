@@ -87,7 +87,13 @@ export default function CourseList({ userRole }: CourseListProps) {
     return courses.filter(course => {
       const progress = Number(course.progress ?? 0);
       const status = progress >= 100 ? 'Concluído' : progress > 0 ? 'Em Andamento' : 'Não Iniciado';
-      const matchesTab = activeTab === 'Todos' || activeTab === status || (activeTab === 'Favoritos' && course.isFavorite) || (activeTab === 'Não Iniciados' && status === 'Não Iniciado');
+      // Abas no plural vs status no singular: mapear explicitamente (a aba
+      // 'Concluídos' nunca casava com o status 'Concluído' por igualdade crua).
+      const matchesTab =
+        activeTab === 'Todos' ||
+        activeTab === status ||
+        (activeTab === 'Não Iniciados' && status === 'Não Iniciado') ||
+        (activeTab === 'Concluídos' && status === 'Concluído');
       const q = searchTerm.toLowerCase();
       const matchesSearch = !q || String(course.title ?? '').toLowerCase().includes(q) || String(course.instructor ?? '').toLowerCase().includes(q);
       const matchesCat = selectedCategory === 'Todas' || course.category === selectedCategory;
@@ -111,7 +117,9 @@ export default function CourseList({ userRole }: CourseListProps) {
     finally { setIsCreating(false); }
   };
 
-  const tabs = ['Todos', 'Em Andamento', 'Não Iniciados', 'Concluídos', 'Favoritos'];
+  // 'Favoritos' removida: course.isFavorite nao existe no backend — a aba era
+  // permanentemente vazia. Reintroduzir junto com o recurso real de favoritos.
+  const tabs = ['Todos', 'Em Andamento', 'Não Iniciados', 'Concluídos'];
 
   if (loading) return (
     <div className="max-w-7xl mx-auto p-8 space-y-8">
