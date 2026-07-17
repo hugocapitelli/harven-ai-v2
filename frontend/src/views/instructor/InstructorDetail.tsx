@@ -231,12 +231,12 @@ export default function InstructorDetail() {
         constrained={false}
       />
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {/* Stats — /classes/{id}/stats só retorna counts; avg_progress não existe
+          no backend, então o card de Progresso Médio (sempre 0%) foi removido. */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <StatCard icon="menu_book" label="Cursos" value={stats.course_count ?? stats.courses_count ?? courses.length} />
         <StatCard icon="group" label="Alunos" value={stats.student_count ?? stats.students_count ?? students.length} />
-        <StatCard icon="forum" label="Conversas" value={stats.session_count ?? stats.sessions_count ?? sessions.length} />
-        <StatCard icon="trending_up" label="Progresso Médio" value={`${stats.avg_progress ?? 0}%`} variant="highlight" />
+        <StatCard icon="forum" label="Conversas" value={stats.session_count ?? stats.sessions_count ?? sessions.length} variant="highlight" />
       </div>
 
       {/* Toolbar */}
