@@ -40,13 +40,19 @@ class TokenUsageRepository(BaseRepository):
     def __init__(self, client: Client):
         super().__init__(client, "token_usage")
 
-    def get_today_usage(self, user_id: str) -> int:
+    def get_today_usage(self, user_id: str, raise_on_error: bool = False) -> int:
         """Tokens consumed by ``user_id`` on the current server day.
 
         Returns ``0`` when no row exists for ``(user_id, today)`` — absence is
-        zero consumption, never ``None`` or an exception. The date is always
-        ``date.today().isoformat()`` (server-side), matching TKN-1's
-        ``(user_id, usage_date)`` index/constraint.
+        zero consumption. The date is always ``date.today().isoformat()``
+        (server-side), matching TKN-1's ``(user_id, usage_date)`` index/constraint.
+
+        P2: by default a READ FAILURE also degrades to ``0`` (legacy contract kept
+        for the internal ``add_usage`` fallbacks), but that made a broken
+        persistence layer indistinguishable from "no consumption yet" — the budget
+        enforcer's fail-open accounting never fired. Callers that must OBSERVE the
+        failure (``AIService.check_token_budget``) pass ``raise_on_error=True`` to
+        receive the exception instead of a silent zero.
         """
         try:
             res = (
@@ -57,8 +63,10 @@ class TokenUsageRepository(BaseRepository):
                 .maybe_single()
                 .execute()
             )
-        except Exception as exc:  # pragma: no cover - defensive read fallback
+        except Exception as exc:
             logger.warning("get_today_usage read failed for %s: %s", user_id, exc)
+            if raise_on_error:
+                raise
             return 0
         if not res or not res.data:
             return 0

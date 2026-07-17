@@ -241,17 +241,37 @@ ALLOWED_CONTENT_TYPES = {
 # MIDDLEWARE
 # ============================================
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, default_max: int = 10 * 1024 * 1024, upload_max: int = 50 * 1024 * 1024):
+    # P1: the flat 50MB upload cap contradicted the UI, which promises 500MB for
+    # video and 100MB for audio — every real lecture upload died with a 413.
+    # Limits are now coherent per upload type; everything else keeps the old caps.
+    def __init__(
+        self,
+        app,
+        default_max: int = 10 * 1024 * 1024,
+        upload_max: int = 50 * 1024 * 1024,
+        video_max: int = 500 * 1024 * 1024,
+        audio_max: int = 100 * 1024 * 1024,
+    ):
         super().__init__(app)
         self.default_max = default_max
         self.upload_max = upload_max
+        self.video_max = video_max
+        self.audio_max = audio_max
+
+    def _limit_for(self, path: str) -> int:
+        if "/upload/video" in path:
+            return self.video_max
+        if "/upload/audio" in path:
+            return self.audio_max
+        if "upload" in path or "avatar" in path or "image" in path:
+            return self.upload_max
+        return self.default_max
 
     async def dispatch(self, request: Request, call_next):
         content_length = request.headers.get("content-length")
         if content_length:
             length = int(content_length)
-            is_upload = "upload" in request.url.path or "avatar" in request.url.path or "image" in request.url.path
-            limit = self.upload_max if is_upload else self.default_max
+            limit = self._limit_for(request.url.path)
             if length > limit:
                 return JSONResponse(
                     status_code=413,
@@ -691,6 +711,10 @@ async def get_user(
     current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # P1 IDOR: any authenticated STUDENT could read ANY user's profile (name,
+    # email, RA) by iterating ids. Only the target user themselves or a
+    # privileged role may read a profile — same barrier as the avatar route.
+    require_self_or_role(user_id, current_user, "ADMIN", "TEACHER", "INSTRUCTOR")
     user_repo = UserRepository(client)
     user = user_repo.get_by_id(user_id)
     if not user:
@@ -1050,6 +1074,21 @@ async def list_courses(
     if discipline_id:
         filters["discipline_id"] = discipline_id
 
+    # P1: a STUDENT could list EVERY course on the platform, including drafts and
+    # courses of disciplines they are not enrolled in. Scope students to their own
+    # enrollment (discipline_students) and to non-draft courses; staff keeps the
+    # full listing.
+    if (current_user.get("role") or "").upper() == "STUDENT":
+        disc_repo = DisciplineRepository(client)
+        enrolled_ids = disc_repo.get_student_discipline_ids(current_user["id"])
+        if discipline_id and discipline_id not in enrolled_ids:
+            return {"data": [], "total": 0, "page": page, "per_page": per_page}
+        target_ids = [discipline_id] if discipline_id else enrolled_ids
+        if not target_ids:
+            return {"data": [], "total": 0, "page": page, "per_page": per_page}
+        filters["discipline_id"] = target_ids  # BaseRepository maps list → IN
+        filters["status"] = "active"
+
     courses, total = course_repo.get_all(
         filters=filters if filters else None,
         order_by="created_at",
@@ -1188,7 +1227,12 @@ async def create_discipline_course(
     data["discipline_id"] = class_id
     if not data.get("instructor_id"):
         data["instructor_id"] = current_user["id"]
-    data["status"] = "active"
+    # P1: this route used to FORCE status='active', silently publishing to
+    # students a course the teacher explicitly created as draft. Respect the
+    # requested status; CourseCreate defaults to 'draft' when omitted — same
+    # contract as POST /courses.
+    if not data.get("status"):
+        data["status"] = "draft"
     course = course_repo.create(data)
     return course
 

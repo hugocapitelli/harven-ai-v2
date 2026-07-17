@@ -57,6 +57,7 @@ class _QueryBuilder:
         self._op = "select"          # select | insert | update | delete
         self._filters: List[tuple] = []  # list of (col, value) for .eq
         self._in_filters: List[tuple] = []  # list of (col, values) for .in_
+        self._or_filters: List[list] = []  # groups of (col, op, value) — any-of per group
         self._not_is_filters: List[str] = []  # cols required NOT NULL via .not_.is_(col,"null")
         self._payload: Any = None        # insert/update payload
         self._single = False             # .single() -> dict or raise
@@ -85,6 +86,20 @@ class _QueryBuilder:
 
     def in_(self, col: str, values: Any) -> "_QueryBuilder":
         self._in_filters.append((col, list(values)))
+        return self
+
+    def or_(self, expr: str) -> "_QueryBuilder":
+        """Minimal PostgREST ``or=`` support: ``"name.ilike.%x%,ra.eq.y"``.
+        Each call adds one group; a row must satisfy AT LEAST ONE condition of
+        every group (the group ORs internally, groups AND with other filters).
+        Only ``ilike`` (case-insensitive contains) and ``eq`` are implemented —
+        the two operators production code uses."""
+        group: List[tuple] = []
+        for part in expr.split(","):
+            pieces = part.split(".", 2)
+            if len(pieces) == 3:
+                group.append((pieces[0], pieces[1], pieces[2]))
+        self._or_filters.append(group)
         return self
 
     @property
@@ -159,6 +174,21 @@ class _QueryBuilder:
         # .not_.is_(col, "null") -> the column must be present AND non-null.
         for col in self._not_is_filters:
             if row.get(col) is None:
+                return False
+        for group in self._or_filters:
+            ok = False
+            for col, op, val in group:
+                cell = row.get(col)
+                if op == "ilike":
+                    needle = str(val).strip("%").lower()
+                    if cell is not None and needle in str(cell).lower():
+                        ok = True
+                        break
+                elif op == "eq":
+                    if str(cell) == str(val):
+                        ok = True
+                        break
+            if not ok:
                 return False
         return True
 

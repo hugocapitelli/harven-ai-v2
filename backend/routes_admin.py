@@ -677,13 +677,45 @@ async def force_logout(
     new_secret = secrets.token_urlsafe(48)
 
     # Rotate the active signing secret in the DB (durable source of truth).
+    #
+    # P2 hardening: on a DB that never received the SEC-ROT migration the
+    # ``jwt_secret`` column does not exist. The UPDATE then fails (or, worse,
+    # some PostgREST configs silently drop unknown keys) and the old code still
+    # answered "todos os tokens foram invalidados" — a false sense of security
+    # for an ADMIN who believes a leaked token is now dead. Fail LOUDLY with an
+    # actionable 500 instead, and only report success after VERIFYING the new
+    # secret actually persisted.
     row = _get_or_create_settings(client)
-    client.table("system_settings").update(
-        {
-            "jwt_secret": new_secret,
-            "jwt_secret_rotated_at": datetime.now(timezone.utc).isoformat(),
-        }
-    ).eq("id", row["id"]).execute()
+    try:
+        client.table("system_settings").update(
+            {
+                "jwt_secret": new_secret,
+                "jwt_secret_rotated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ).eq("id", row["id"]).execute()
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "column" in msg or "does not exist" in msg or "pgrst204" in msg or "42703" in msg:
+            logger.error(f"force-logout: coluna jwt_secret ausente em system_settings: {exc}")
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Rotacao de tokens indisponivel: a coluna jwt_secret nao existe em "
+                    "system_settings. Aplique a migration SEC-ROT antes de usar o force-logout."
+                ),
+            )
+        raise
+
+    # Read-back verification: the rotation only counts if the DB now holds the
+    # new secret (guards the silent-drop case).
+    check = client.table("system_settings").select("jwt_secret").eq("id", row["id"]).maybe_single().execute()
+    stored = (getattr(check, "data", None) or {}) if check else {}
+    if stored.get("jwt_secret") != new_secret:
+        logger.error("force-logout: rotacao NAO persistiu (jwt_secret divergente apos update)")
+        raise HTTPException(
+            status_code=500,
+            detail="Rotacao de tokens falhou: o novo segredo nao foi persistido. Nenhum token foi invalidado.",
+        )
 
     # Drop the provider cache so the new secret takes effect immediately
     # (do not wait for the TTL). All pre-rotation tokens now fail verification.
@@ -808,11 +840,34 @@ async def broadcast_notification(
     # Fan-out is an ADMIN-only operation (mirrors create_notification's ADMIN
     # gate) — resolves recipients server-side and inserts one notification row
     # per recipient in a single batch call.
-    target = (body.target or "all").lower()
-    if target == "all":
+    #
+    # P1: the UI sends audience labels ('STUDENTS'/'INSTRUCTORS'), but the users
+    # table stores the roles STUDENT/TEACHER/ADMIN — the old ``eq("role",
+    # target.upper())`` matched ZERO rows (plural never equals singular, and
+    # INSTRUCTOR is stored as TEACHER per _db_role), so audience broadcasts were
+    # silently sent to nobody. Map labels → DB roles explicitly; an unknown label
+    # is a loud 400, never an empty send that looks like success.
+    target = (body.target or "all").strip().lower()
+    TARGET_ROLE_MAP: dict[str, list[str] | None] = {
+        "all": None,
+        "students": ["STUDENT"],
+        "student": ["STUDENT"],
+        # INSTRUCTOR is a frontend alias — the DB stores TEACHER (see _db_role in
+        # main.py). Accept both labels and query both spellings defensively.
+        "instructors": ["TEACHER", "INSTRUCTOR"],
+        "instructor": ["TEACHER", "INSTRUCTOR"],
+        "teachers": ["TEACHER", "INSTRUCTOR"],
+        "teacher": ["TEACHER", "INSTRUCTOR"],
+        "admins": ["ADMIN"],
+        "admin": ["ADMIN"],
+    }
+    if target not in TARGET_ROLE_MAP:
+        raise HTTPException(status_code=400, detail=f"Alvo de broadcast invalido: {body.target}")
+    db_roles = TARGET_ROLE_MAP[target]
+    if db_roles is None:
         users_res = client.table("users").select("id").execute()
     else:
-        users_res = client.table("users").select("id").eq("role", target.upper()).execute()
+        users_res = client.table("users").select("id").in_("role", db_roles).execute()
     recipients = users_res.data or []
 
     if not recipients:
@@ -857,12 +912,18 @@ async def mark_all_read(
     # IDOR gate (SEC-ADMIN-3): only the owner of {user_id}, or an ADMIN, may
     # suppress this feed — checked before any update touches another user's rows.
     require_self_or_role(user_id, current_user, "ADMIN")
+    # P2 semantics fix: the old code counted the rows REMAINING unread after the
+    # update but returned that number under a variable named ``marked`` — so
+    # ``remaining_unread`` actually carried a post-update leftover count and
+    # ``marked_read`` was the literal string "all". Count before/after so each
+    # field means what it says.
+    before = client.table("notifications").select("id", count="exact").eq("user_id", user_id).eq("is_read", False).execute()
+    to_mark = before.count or 0
     # Supabase doesn't return an update count directly; update all matching rows
     client.table("notifications").update({"is_read": True}).eq("user_id", user_id).eq("is_read", False).execute()
     # Count remaining unread to confirm (should be 0)
     remaining = client.table("notifications").select("id", count="exact").eq("user_id", user_id).eq("is_read", False).execute()
-    marked = (remaining.count or 0)
-    return {"marked_read": "all", "remaining_unread": marked}
+    return {"marked_read": to_mark, "remaining_unread": remaining.count or 0}
 
 
 @router.delete("/notifications/{notification_id}", tags=["Notifications"], summary="Excluir notificacao")
@@ -888,7 +949,10 @@ async def delete_notification(
 @router.get("/search", tags=["Search"], summary="Busca global")
 async def global_search(
     q: str = Query(..., min_length=2, max_length=200),
-    _user: dict = Depends(get_current_user),
+    # P1: this search returns users (name/email/RA), draft courses and every
+    # discipline — gated only by get_current_user it exposed the WHOLE base to
+    # any student. Cross-user search is a staff capability.
+    _user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
     client: Client = Depends(get_supabase),
 ):
     safe = _sanitize_search(q)
@@ -940,7 +1004,9 @@ async def global_search(
 
 @router.get("/dashboard/stats", tags=["Dashboard"], summary="Estatisticas agregadas")
 async def dashboard_stats(
-    _user: dict = Depends(get_current_user),
+    # P1: institutional aggregates (total users, role breakdown, average
+    # performance score) were readable by any STUDENT. Staff-only.
+    _user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
     client: Client = Depends(get_supabase),
 ):
     total_users = (client.table("users").select("id", count="exact").execute()).count or 0
