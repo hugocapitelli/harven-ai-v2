@@ -24,11 +24,11 @@ interface Backup {
   created_at: string;
 }
 
+// Shape real de GET /admin/performance; não há uptime/ram/cpu/disk no backend.
 interface PerfMetrics {
-  uptime?: string;
-  ram_usage?: number;
-  cpu_usage?: number;
-  disk_usage?: number;
+  avg_performance_score?: number;
+  avg_messages_per_session?: number;
+  active_sessions?: number;
 }
 
 // Backend retorna log_type (não type) em /admin/logs.
@@ -382,12 +382,11 @@ export default function SystemSettings() {
       {/* Tab: Performance */}
       {activeTab === 'performance' && (
         <div className="flex flex-col gap-6">
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
             {[
-              { icon: 'timer', label: 'Uptime', value: perf.uptime ?? '—' },
-              { icon: 'memory', label: 'RAM', value: perf.ram_usage != null ? `${perf.ram_usage}%` : '—' },
-              { icon: 'developer_board', label: 'CPU', value: perf.cpu_usage != null ? `${perf.cpu_usage}%` : '—' },
-              { icon: 'storage', label: 'Disco', value: perf.disk_usage != null ? `${perf.disk_usage}%` : '—' },
+              { icon: 'grade', label: 'Score Médio das Sessões', value: perf.avg_performance_score != null ? Number(perf.avg_performance_score).toFixed(1) : '—' },
+              { icon: 'forum', label: 'Mensagens por Sessão', value: perf.avg_messages_per_session != null ? Number(perf.avg_messages_per_session).toFixed(1) : '—' },
+              { icon: 'sensors', label: 'Sessões Ativas', value: perf.active_sessions ?? '—' },
             ].map((m) => (
               <StatCard key={m.label} icon={m.icon} value={m.value} label={m.label} />
             ))}
