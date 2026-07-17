@@ -28,6 +28,17 @@ export default function CourseList({ userRole }: CourseListProps) {
   const [isCreating, setIsCreating] = useState(false);
   const [instructors, setInstructors] = useState<Array<{ id: string; name: string }>>([]);
 
+  // Catalogo do aluno: enquanto o backend nao filtra a listagem por matricula
+  // (em andamento no terminal Byte), o front NAO pode exibir curso em rascunho
+  // para STUDENT. Filtro defensivo e idempotente: quando o backend passar a
+  // filtrar, este predicado apenas deixa de remover itens (nao depende de
+  // course.progress nem de campo inexistente).
+  const visibleToRole = (c: Record<string, unknown>) => {
+    if (userRole !== 'STUDENT') return true;
+    const status = String(c.status ?? '').toLowerCase();
+    return status === '' || status === 'published' || status === 'active';
+  };
+
   // Progresso real por conteudo concluido: o objeto course do backend nao traz
   // `progress` — a fonte e /users/{id}/courses/{courseId}/progress.
   const attachProgress = async (list: Record<string, unknown>[]) => {
@@ -48,7 +59,7 @@ export default function CourseList({ userRole }: CourseListProps) {
       try {
         const data = await coursesApi.list(ctrl.signal);
         if (ctrl.signal.aborted) return;
-        const list = unwrapList<Record<string, unknown>>(data).filter((c) => c.title && String(c.title).trim());
+        const list = unwrapList<Record<string, unknown>>(data).filter((c) => c.title && String(c.title).trim()).filter(visibleToRole);
         const withProgress = await attachProgress(list);
         if (ctrl.signal.aborted) return;
         setCourses(withProgress);
@@ -92,7 +103,7 @@ export default function CourseList({ userRole }: CourseListProps) {
       if (newCourse.instructor_id) payload.instructor_id = newCourse.instructor_id;
       await coursesApi.create(payload);
       const data = await coursesApi.list();
-      setCourses(await attachProgress(unwrapList<Record<string, unknown>>(data).filter((c) => c.title && String(c.title).trim())));
+      setCourses(await attachProgress(unwrapList<Record<string, unknown>>(data).filter((c) => c.title && String(c.title).trim()).filter(visibleToRole)));
       setShowCreateModal(false);
       setNewCourse({ title: '', instructor_id: '', category: 'Geral' });
       toast.success('Curso criado com sucesso');
