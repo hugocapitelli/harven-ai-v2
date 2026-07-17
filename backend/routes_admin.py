@@ -677,13 +677,45 @@ async def force_logout(
     new_secret = secrets.token_urlsafe(48)
 
     # Rotate the active signing secret in the DB (durable source of truth).
+    #
+    # P2 hardening: on a DB that never received the SEC-ROT migration the
+    # ``jwt_secret`` column does not exist. The UPDATE then fails (or, worse,
+    # some PostgREST configs silently drop unknown keys) and the old code still
+    # answered "todos os tokens foram invalidados" — a false sense of security
+    # for an ADMIN who believes a leaked token is now dead. Fail LOUDLY with an
+    # actionable 500 instead, and only report success after VERIFYING the new
+    # secret actually persisted.
     row = _get_or_create_settings(client)
-    client.table("system_settings").update(
-        {
-            "jwt_secret": new_secret,
-            "jwt_secret_rotated_at": datetime.now(timezone.utc).isoformat(),
-        }
-    ).eq("id", row["id"]).execute()
+    try:
+        client.table("system_settings").update(
+            {
+                "jwt_secret": new_secret,
+                "jwt_secret_rotated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ).eq("id", row["id"]).execute()
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "column" in msg or "does not exist" in msg or "pgrst204" in msg or "42703" in msg:
+            logger.error(f"force-logout: coluna jwt_secret ausente em system_settings: {exc}")
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "Rotacao de tokens indisponivel: a coluna jwt_secret nao existe em "
+                    "system_settings. Aplique a migration SEC-ROT antes de usar o force-logout."
+                ),
+            )
+        raise
+
+    # Read-back verification: the rotation only counts if the DB now holds the
+    # new secret (guards the silent-drop case).
+    check = client.table("system_settings").select("jwt_secret").eq("id", row["id"]).maybe_single().execute()
+    stored = (getattr(check, "data", None) or {}) if check else {}
+    if stored.get("jwt_secret") != new_secret:
+        logger.error("force-logout: rotacao NAO persistiu (jwt_secret divergente apos update)")
+        raise HTTPException(
+            status_code=500,
+            detail="Rotacao de tokens falhou: o novo segredo nao foi persistido. Nenhum token foi invalidado.",
+        )
 
     # Drop the provider cache so the new secret takes effect immediately
     # (do not wait for the TTL). All pre-rotation tokens now fail verification.
