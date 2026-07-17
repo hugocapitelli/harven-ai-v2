@@ -416,6 +416,11 @@ async def login(request: Request, body: LoginRequest, client: Client = Depends(g
     if not verify_password(body.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Credenciais invalidas")
 
+    # P0: blocked accounts must not log in. Checked AFTER password verification so
+    # this response never becomes an account-probing oracle for wrong credentials.
+    if (user.get("status") or "").lower() == "blocked":
+        raise HTTPException(status_code=403, detail="Usuario bloqueado")
+
     role = _normalize_role(user["role"])
     token = create_access_token(user["id"], role)
 
