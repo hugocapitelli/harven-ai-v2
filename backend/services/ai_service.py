@@ -450,6 +450,11 @@ class AIService:
         # NEVER awaited; NEVER used inside an async handler.
         self.sync_client = None
         self.daily_token_limit = 500_000
+        # P2: fail-open accounting. Every time the budget check lets a request
+        # through WITHOUT having read real usage (no db handle / read failure),
+        # the event is counted here — observable via logs and this counter, never
+        # a silent allow that hides a broken persistence layer for days.
+        self.budget_failopen_count = 0
 
         # ASYNC-AI-3: explicit injection wins over real construction (headless tests).
         if client is not None:
@@ -502,23 +507,30 @@ class AIService:
         if not user_id:
             return
         if db is None:
+            self.budget_failopen_count += 1
             logger.warning(
                 "check_token_budget: no db (Supabase client) provided for %s — "
-                "fail-open (budget not enforced this call).",
-                user_id,
+                "fail-open #%d (budget not enforced this call).",
+                user_id, self.budget_failopen_count,
             )
             return
         # Lazy import: avoid a module-import cycle (repository imports may pull in
         # service-adjacent modules) and keep the import cost off the hot path.
         from repositories.token_usage_repo import TokenUsageRepository
 
+        # P2: ``raise_on_error=True`` is what makes this except reachable — the
+        # repo's legacy default swallows read failures into a 0 that is
+        # indistinguishable from "no consumption", so the fail-open below never
+        # fired and a broken token_usage table went unnoticed while the budget
+        # silently stopped being enforced.
         try:
-            used = TokenUsageRepository(db).get_today_usage(user_id)
+            used = TokenUsageRepository(db).get_today_usage(user_id, raise_on_error=True)
         except Exception as exc:
-            logger.warning(
-                "check_token_budget: usage read failed for %s (%s) — "
-                "fail-open (budget not enforced this call).",
-                user_id, exc,
+            self.budget_failopen_count += 1
+            logger.error(
+                "check_token_budget: usage read FAILED for %s (%s) — "
+                "fail-open #%d (budget not enforced this call).",
+                user_id, exc, self.budget_failopen_count,
             )
             return
 
