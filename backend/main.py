@@ -1207,7 +1207,12 @@ async def create_discipline_course(
     data["discipline_id"] = class_id
     if not data.get("instructor_id"):
         data["instructor_id"] = current_user["id"]
-    data["status"] = "active"
+    # P1: this route used to FORCE status='active', silently publishing to
+    # students a course the teacher explicitly created as draft. Respect the
+    # requested status; CourseCreate defaults to 'draft' when omitted — same
+    # contract as POST /courses.
+    if not data.get("status"):
+        data["status"] = "draft"
     course = course_repo.create(data)
     return course
 
