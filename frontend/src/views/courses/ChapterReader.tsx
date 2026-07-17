@@ -1641,9 +1641,10 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
           </div>
         </div>
 
-        {/* Chat Panel */}
+        {/* Chat Panel — painel lateral fixo (w-96) so cabe em >=lg; no mobile o
+            dialogo socratico vira overlay full-screen, senao fica inutilizavel. */}
         {chatOpen && (
-          <div className="w-96 border-l border-harven-border bg-white flex flex-col flex-shrink-0">
+          <div className="fixed inset-0 z-50 bg-white flex flex-col lg:static lg:inset-auto lg:z-auto lg:w-96 lg:border-l lg:border-harven-border lg:flex-shrink-0">
             <div className="h-14 flex items-center justify-between px-4 border-b border-harven-border">
               <div className="flex items-center gap-2 min-w-0">
                 <span className="material-symbols-outlined text-harven-gold">psychology</span>
