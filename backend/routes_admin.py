@@ -1473,6 +1473,53 @@ async def complete_content(
             contents_res = client.table("contents").select("id", count="exact").in_("chapter_id", chapter_ids).execute()
             total_contents = contents_res.count or 0
 
+        # P0: record WHICH content was completed, idempotently per
+        # (user_id, content_id). Before this, only a bare counter was bumped —
+        # repeat-clicking the same content inflated progress and nobody could
+        # audit what a student actually finished. Degrades gracefully when the
+        # content_completions table has not been migrated yet (counter-only,
+        # legacy behavior) instead of 503ing the whole endpoint.
+        already_completed = False
+        completions_available = True
+        try:
+            comp_res = (
+                client.table("content_completions")
+                .select("id")
+                .eq("user_id", target_user_id)
+                .eq("content_id", content_id)
+                .limit(1)
+                .execute()
+            )
+            already_completed = bool(getattr(comp_res, "data", None))
+        except Exception as comp_err:
+            comp_msg = str(comp_err).lower()
+            if "relation" in comp_msg or "does not exist" in comp_msg or "undefined_table" in comp_msg:
+                completions_available = False
+                logger.warning(
+                    "content_completions table missing — falling back to counter-only progress"
+                )
+            else:
+                raise
+
+        if completions_available and not already_completed:
+            try:
+                client.table("content_completions").insert(
+                    {
+                        "id": str(uuid4()),
+                        "user_id": target_user_id,
+                        "content_id": content_id,
+                        "course_id": course_id,
+                    }
+                ).execute()
+            except Exception as ins_err:
+                ins_msg = str(ins_err).lower()
+                # Concurrent double-click: the UNIQUE(user_id, content_id) index
+                # already holds the row — treat as completed, don't double-count.
+                if "unique" in ins_msg or "duplicate" in ins_msg or "23505" in ins_msg:
+                    already_completed = True
+                else:
+                    raise
+
         # Upsert course progress
         progress_res = (
             client.table("course_progress")
@@ -1482,7 +1529,21 @@ async def complete_content(
             .maybe_single()
             .execute()
         )
-        progress = progress_res.data
+        progress = progress_res.data if progress_res else None
+
+        if already_completed:
+            # Idempotent replay: return the CURRENT progress untouched — no counter
+            # bump, no duplicate activity/points.
+            completed_contents = (progress or {}).get("completed_contents") or 0
+            progress_percent = round(completed_contents / total_contents * 100, 1) if total_contents > 0 else 0
+            return {
+                "course_id": course_id,
+                "content_id": content_id,
+                "progress_percent": progress_percent,
+                "completed_contents": completed_contents,
+                "total_contents": total_contents,
+                "already_completed": True,
+            }
 
         if not progress:
             new_completed = 1

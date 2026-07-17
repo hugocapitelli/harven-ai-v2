@@ -263,6 +263,21 @@ CREATE TABLE IF NOT EXISTS course_progress (
     UNIQUE(user_id, course_id)
 );
 
+-- P0: per-content completion record. course_progress only carries a COUNTER, so
+-- nobody could tell WHICH contents a student finished and repeat-clicking the
+-- same content inflated progress. UNIQUE(user_id, content_id) makes completion
+-- idempotent at the DB layer.
+CREATE TABLE IF NOT EXISTS content_completions (
+    id TEXT PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    content_id TEXT NOT NULL REFERENCES contents(id) ON DELETE CASCADE,
+    course_id TEXT REFERENCES courses(id) ON DELETE SET NULL,
+    completed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(user_id, content_id)
+);
+CREATE INDEX IF NOT EXISTS idx_content_completions_user ON content_completions(user_id);
+CREATE INDEX IF NOT EXISTS idx_content_completions_course ON content_completions(course_id);
+
 -- ============================================
 -- INTEGRATIONS
 -- ============================================
