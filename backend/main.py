@@ -241,17 +241,37 @@ ALLOWED_CONTENT_TYPES = {
 # MIDDLEWARE
 # ============================================
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, default_max: int = 10 * 1024 * 1024, upload_max: int = 50 * 1024 * 1024):
+    # P1: the flat 50MB upload cap contradicted the UI, which promises 500MB for
+    # video and 100MB for audio — every real lecture upload died with a 413.
+    # Limits are now coherent per upload type; everything else keeps the old caps.
+    def __init__(
+        self,
+        app,
+        default_max: int = 10 * 1024 * 1024,
+        upload_max: int = 50 * 1024 * 1024,
+        video_max: int = 500 * 1024 * 1024,
+        audio_max: int = 100 * 1024 * 1024,
+    ):
         super().__init__(app)
         self.default_max = default_max
         self.upload_max = upload_max
+        self.video_max = video_max
+        self.audio_max = audio_max
+
+    def _limit_for(self, path: str) -> int:
+        if "/upload/video" in path:
+            return self.video_max
+        if "/upload/audio" in path:
+            return self.audio_max
+        if "upload" in path or "avatar" in path or "image" in path:
+            return self.upload_max
+        return self.default_max
 
     async def dispatch(self, request: Request, call_next):
         content_length = request.headers.get("content-length")
         if content_length:
             length = int(content_length)
-            is_upload = "upload" in request.url.path or "avatar" in request.url.path or "image" in request.url.path
-            limit = self.upload_max if is_upload else self.default_max
+            limit = self._limit_for(request.url.path)
             if length > limit:
                 return JSONResponse(
                     status_code=413,
