@@ -691,6 +691,10 @@ async def get_user(
     current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # P1 IDOR: any authenticated STUDENT could read ANY user's profile (name,
+    # email, RA) by iterating ids. Only the target user themselves or a
+    # privileged role may read a profile — same barrier as the avatar route.
+    require_self_or_role(user_id, current_user, "ADMIN", "TEACHER", "INSTRUCTOR")
     user_repo = UserRepository(client)
     user = user_repo.get_by_id(user_id)
     if not user:
