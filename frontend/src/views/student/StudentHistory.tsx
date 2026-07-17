@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { userStatsApi } from '../../services/api';
-import { cn } from '../../lib/utils';
+import { cn, unwrapList } from '../../lib/utils';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { PageHeader } from '../../components/ui/PageHeader';
 
@@ -17,18 +17,22 @@ interface Activity {
   created_at: string;
 }
 
+// activity_type reais do backend sao minusculos (gamification_points.py):
+// content_completed, course_completed, session_completed, achievement_unlocked,
+// certificate_issued. Os antigos CHAT/QUIZ/CONTENT nunca batiam — lista vazia.
 const typeConfig: Record<string, { label: string; icon: string; color: string; bg: string }> = {
-  CHAT: { label: 'Debate Socratico', icon: 'forum', color: 'text-harven-dark', bg: 'bg-harven-dark/10' },
-  QUIZ: { label: 'Quiz', icon: 'quiz', color: 'text-harven-gold', bg: 'bg-harven-gold/10' },
-  CONTENT: { label: 'Conteudo', icon: 'article', color: 'text-green-600', bg: 'bg-green-100' },
-  COURSE: { label: 'Curso', icon: 'school', color: 'text-orange-600', bg: 'bg-orange-100' },
+  session_completed: { label: 'Debate Socratico', icon: 'forum', color: 'text-harven-dark', bg: 'bg-harven-dark/10' },
+  content_completed: { label: 'Conteudo', icon: 'article', color: 'text-green-600', bg: 'bg-green-100' },
+  course_completed: { label: 'Curso', icon: 'school', color: 'text-orange-600', bg: 'bg-orange-100' },
+  achievement_unlocked: { label: 'Conquista', icon: 'emoji_events', color: 'text-harven-gold', bg: 'bg-harven-gold/10' },
+  certificate_issued: { label: 'Certificado', icon: 'workspace_premium', color: 'text-yellow-600', bg: 'bg-yellow-100' },
 };
 
 const tabs = [
   { id: 'all', label: 'Tudo' },
-  { id: 'CHAT', label: 'Debates' },
-  { id: 'QUIZ', label: 'Quizzes' },
-  { id: 'CONTENT', label: 'Conteudos' },
+  { id: 'session_completed', label: 'Debates' },
+  { id: 'content_completed', label: 'Conteudos' },
+  { id: 'course_completed', label: 'Cursos' },
 ];
 
 function formatDate(iso: string) {
@@ -51,7 +55,13 @@ export default function StudentHistory() {
         if (!user) return;
         const data = await userStatsApi.getActivities(user.id);
         if (ctrl.signal.aborted) return;
-        setActivities(Array.isArray(data) ? data : []);
+        // Backend devolve paginado { data: [...], total, ... } — Array.isArray
+        // direto no envelope zerava a lista. Normaliza o tipo para minusculo
+        // (tolerante a registros legados em maiusculo).
+        setActivities(unwrapList<Activity>(data).map((a) => ({
+          ...a,
+          activity_type: String(a.activity_type ?? '').toLowerCase(),
+        })));
       } catch { /* handled */ } finally {
         if (!ctrl.signal.aborted) setLoading(false);
       }
@@ -97,9 +107,9 @@ export default function StudentHistory() {
           <div className="absolute left-6 top-0 bottom-0 w-0.5 bg-harven-border" />
           <div className="space-y-4">
             {filtered.map(activity => {
-              const cfg = typeConfig[activity.activity_type] ?? typeConfig['CONTENT']!;
-              const isQuiz = activity.activity_type === 'QUIZ';
-              const passed = isQuiz && activity.score != null && activity.total != null && (activity.score / activity.total) >= 0.7;
+              const cfg = typeConfig[activity.activity_type] ?? typeConfig['content_completed']!;
+              const isQuiz = activity.score != null && activity.total != null;
+              const passed = isQuiz && (activity.score! / activity.total!) >= 0.7;
 
               return (
                 <div key={activity.id} className="relative pl-14">
@@ -118,12 +128,12 @@ export default function StudentHistory() {
                       </div>
                       <div className="text-right flex-shrink-0">
                         <p className="text-[10px] text-muted-foreground">{formatDate(activity.created_at)}</p>
-                        {isQuiz && activity.score != null && (
+                        {isQuiz && (
                           <span className={cn('text-xs font-bold mt-1 inline-block px-2 py-0.5 rounded', passed ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600')}>
                             {passed ? 'Aprovado' : 'Reprovado'} — {activity.score}/{activity.total}
                           </span>
                         )}
-                        {activity.activity_type === 'CONTENT' && (
+                        {activity.activity_type === 'content_completed' && (
                           <span className="text-xs font-bold mt-1 inline-block px-2 py-0.5 rounded bg-green-100 text-green-700">Concluido</span>
                         )}
                       </div>

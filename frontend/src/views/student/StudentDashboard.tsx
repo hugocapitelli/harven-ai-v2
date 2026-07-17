@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { dashboardApi, disciplinesApi, coursesApi } from '../../services/api';
+import { disciplinesApi, coursesApi, userStatsApi } from '../../services/api';
 import { unwrapList } from '../../lib/utils';
 import { StatCard } from '../../components/ui/StatCard';
 import { EmptyState } from '../../components/ui/EmptyState';
@@ -21,17 +21,19 @@ export default function StudentDashboard() {
     (async () => {
       try {
         if (!user) return;
+        // O aluno le /users/{id}/stats (proprio) — /dashboard/stats e o agregado
+        // admin e devolve chaves que nao existem para o aluno (dashboard zerado).
         const [statsData, disciplinesData] = await Promise.all([
-          dashboardApi.getStats(),
+          userStatsApi.getStats(user.id),
           disciplinesApi.list(),
         ]);
         if (ctrl.signal.aborted) return;
 
         setStats([
-          { label: 'Cursos em Andamento', value: statsData?.courses_in_progress ?? 0, icon: 'menu_book' },
+          { label: 'Cursos Concluidos', value: statsData?.courses_completed ?? 0, icon: 'menu_book' },
           { label: 'Horas Estudadas', value: `${statsData?.hours_studied ?? 0}h`, icon: 'schedule' },
           { label: 'Media Geral', value: statsData?.average_score?.toFixed?.(1) ?? '-', icon: 'trending_up' },
-          { label: 'Conquistas', value: statsData?.achievements_count ?? 0, icon: 'emoji_events' },
+          { label: 'Pontos', value: statsData?.total_points ?? 0, icon: 'emoji_events' },
         ]);
 
         const allCourses: Record<string, unknown>[] = [];
@@ -44,7 +46,18 @@ export default function StudentDashboard() {
             allCourses.push(...courseList.map((course) => ({ ...course, disciplineName: d.name ?? d.title })));
           } catch { /* skip */ }
         }
-        setCourses(allCourses);
+        // Progresso real por conteudo concluido — o objeto course do backend nao
+        // traz `progress`; a fonte e /users/{id}/courses/{courseId}/progress.
+        const withProgress = await Promise.all(allCourses.map(async (course) => {
+          try {
+            const p = await userStatsApi.getCourseProgress(user.id, course.id as string);
+            return { ...course, progress: Math.round(Number(p?.progress_percent ?? 0)) };
+          } catch {
+            return { ...course, progress: Number(course.progress ?? 0) };
+          }
+        }));
+        if (ctrl.signal.aborted) return;
+        setCourses(withProgress);
       } catch {
         if (!ctrl.signal.aborted) console.error('Erro ao carregar dashboard');
       } finally {

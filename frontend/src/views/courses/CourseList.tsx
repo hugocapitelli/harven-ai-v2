@@ -2,7 +2,8 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { coursesApi, usersApi } from '../../services/api';
+import { coursesApi, usersApi, userStatsApi } from '../../services/api';
+import { useAuth } from '../../contexts/AuthContext';
 import { unwrapList } from '../../lib/utils';
 import { cn } from '../../lib/utils';
 import { EmptyState } from '../../components/ui/EmptyState';
@@ -16,6 +17,7 @@ interface CourseListProps { userRole: UserRole }
 
 export default function CourseList({ userRole }: CourseListProps) {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [courses, setCourses] = useState<Record<string, unknown>[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -26,18 +28,35 @@ export default function CourseList({ userRole }: CourseListProps) {
   const [isCreating, setIsCreating] = useState(false);
   const [instructors, setInstructors] = useState<Array<{ id: string; name: string }>>([]);
 
+  // Progresso real por conteudo concluido: o objeto course do backend nao traz
+  // `progress` — a fonte e /users/{id}/courses/{courseId}/progress.
+  const attachProgress = async (list: Record<string, unknown>[]) => {
+    if (!user?.id) return list;
+    return Promise.all(list.map(async (course) => {
+      try {
+        const p = await userStatsApi.getCourseProgress(user.id, String(course.id));
+        return { ...course, progress: Math.round(Number(p?.progress_percent ?? 0)) };
+      } catch {
+        return course;
+      }
+    }));
+  };
+
   useEffect(() => {
     const ctrl = new AbortController();
     (async () => {
       try {
         const data = await coursesApi.list(ctrl.signal);
         if (ctrl.signal.aborted) return;
-        setCourses(unwrapList<Record<string, unknown>>(data).filter((c) => c.title && String(c.title).trim()));
+        const list = unwrapList<Record<string, unknown>>(data).filter((c) => c.title && String(c.title).trim());
+        const withProgress = await attachProgress(list);
+        if (ctrl.signal.aborted) return;
+        setCourses(withProgress);
       } catch { if (!ctrl.signal.aborted) console.error('Erro ao buscar cursos'); }
       finally { if (!ctrl.signal.aborted) setLoading(false); }
     })();
     return () => ctrl.abort();
-  }, []);
+  }, [user?.id]);
 
   // Load instructors list when admin opens the create modal
   useEffect(() => {
@@ -73,7 +92,7 @@ export default function CourseList({ userRole }: CourseListProps) {
       if (newCourse.instructor_id) payload.instructor_id = newCourse.instructor_id;
       await coursesApi.create(payload);
       const data = await coursesApi.list();
-      setCourses(unwrapList<Record<string, unknown>>(data).filter((c) => c.title && String(c.title).trim()));
+      setCourses(await attachProgress(unwrapList<Record<string, unknown>>(data).filter((c) => c.title && String(c.title).trim())));
       setShowCreateModal(false);
       setNewCourse({ title: '', instructor_id: '', category: 'Geral' });
       toast.success('Curso criado com sucesso');

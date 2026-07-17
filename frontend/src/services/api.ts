@@ -267,6 +267,11 @@ export const usersApi = {
   create:       (data: Record<string, unknown>)    => api.post('/users', data).then(d),
   createBatch:  (users: Record<string, unknown>[]) => api.post('/users/batch', users).then(d),
   update:       (id: string, data: Record<string, unknown>) => api.put(`/users/${id}`, data).then(d),
+  // Self-service: PUT /users/{id} e ADMIN-only (403 para aluno). O endpoint
+  // PUT /me (perfil/senha/preferencias do proprio usuario) esta sendo criado
+  // no backend (terminal Byte). TODO: confirmar o contrato final de /me quando
+  // o backend publicar (campos aceitos e formato de erro de senha atual).
+  updateMe:     (data: Record<string, unknown>)    => api.put('/me', data).then(d),
   delete:       (id: string)                       => api.delete(`/users/${id}`).then(d),
   uploadAvatar: (id: string, file: File) => upload(`/users/${id}/avatar`, file, 'file'),
 };
