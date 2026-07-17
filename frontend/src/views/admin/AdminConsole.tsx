@@ -38,7 +38,7 @@ const QUICK_ACTIONS = [
   { icon: 'person_add', label: 'Criar Usuário', route: '/admin/users' },
   { icon: 'class', label: 'Gerenciar Turmas', route: '/admin/classes' },
   { icon: 'settings', label: 'Configurações', route: '/admin/settings' },
-  { icon: 'download', label: 'Backups', route: '/admin/settings?tab=backups' },
+  { icon: 'download', label: 'Relatórios', route: '/admin/settings?tab=backups' },
   { icon: 'shield', label: 'Segurança', route: '/admin/settings?tab=security' },
   { icon: 'monitoring', label: 'Performance', route: '/admin/settings?tab=performance' },
 ];

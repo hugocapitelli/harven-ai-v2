@@ -42,7 +42,7 @@ interface LogEntry {
 const TABS = [
   { id: 'general', label: 'Geral', icon: 'tune' },
   { id: 'security', label: 'Segurança', icon: 'shield' },
-  { id: 'backups', label: 'Backups', icon: 'backup' },
+  { id: 'backups', label: 'Relatórios', icon: 'backup' },
   { id: 'performance', label: 'Performance', icon: 'monitoring' },
   { id: 'logs', label: 'Logs', icon: 'description' },
 ];
@@ -327,13 +327,17 @@ export default function SystemSettings() {
       {activeTab === 'backups' && (
         <Card>
           <CardHeader className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-foreground">Backups</h2>
+            <h2 className="text-sm font-semibold text-foreground">Relatórios de Dados</h2>
             <Button size="sm" onClick={async () => {
-              try { await adminApi.createBackup(); toast.success('Backup criado.'); const d = await adminApi.listBackups(); setBackups(unwrapList<Backup>(d)); } catch { toast.error('Erro.'); }
+              try { await adminApi.createBackup(); toast.success('Relatório gerado.'); const d = await adminApi.listBackups(); setBackups(unwrapList<Backup>(d)); } catch { toast.error('Erro.'); }
             }}>
-              <span className="material-symbols-outlined text-[16px] mr-1">add</span> Criar Backup
+              <span className="material-symbols-outlined text-[16px] mr-1">add</span> Gerar Relatório
             </Button>
           </CardHeader>
+          <div className="px-4 py-2.5 border-b border-border flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="material-symbols-outlined text-[16px] text-primary">info</span>
+            Estes arquivos são relatórios de contagem de registros por tabela (JSON), não um backup restaurável do banco de dados.
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -346,7 +350,7 @@ export default function SystemSettings() {
               </thead>
               <tbody>
                 {backups.length === 0 ? (
-                  <tr><td colSpan={4}><EmptyState icon="backup" title="Nenhum backup disponível" description="Crie o primeiro backup clicando em 'Criar Backup'" size="sm" /></td></tr>
+                  <tr><td colSpan={4}><EmptyState icon="backup" title="Nenhum relatório disponível" description="Gere o primeiro clicando em 'Gerar Relatório'" size="sm" /></td></tr>
                 ) : (
                   backups.map((b) => (
                     <tr key={b.id} className="border-b border-border last:border-0 hover:bg-muted/50">
