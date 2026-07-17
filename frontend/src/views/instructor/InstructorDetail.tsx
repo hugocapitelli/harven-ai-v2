@@ -10,7 +10,6 @@ import { Card, CardContent, CardHeader } from '../../components/ui/Card';
 import { Badge } from '../../components/ui/Badge';
 import { Tabs } from '../../components/ui/Tabs';
 import { Avatar } from '../../components/ui/Avatar';
-import { Progress } from '../../components/ui/Progress';
 import { Skeleton, SkeletonCard, SkeletonText } from '../../components/ui/Skeleton';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { SearchInput } from '../../components/ui/SearchInput';
@@ -20,14 +19,14 @@ import { Modal } from '../../components/ui/Modal';
 import { PageHeader } from '../../components/ui/PageHeader';
 import type { Discipline, Course } from '../../types';
 
+// Shape real de GET /disciplines/{id}/students/stats: {id,name,ra,sessions,avg_score}.
 interface StudentStat {
   id: string;
   name: string;
-  email: string;
+  ra?: string;
   avatar_url?: string;
-  progress?: number;
-  grade?: number;
-  sessions_count?: number;
+  sessions?: number;
+  avg_score?: number;
 }
 
 // Shape returned by GET /disciplines/{id}/sessions (discipline-wide "Conversas").
@@ -216,7 +215,7 @@ export default function InstructorDetail() {
   }
 
   const filteredCourses = filterBySearch(courses, ['title']);
-  const filteredStudents = filterBySearch(students, ['name', 'email']);
+  const filteredStudents = filterBySearch(students, ['name', 'ra']);
   const filteredSessions = filterBySearch(sessions, ['user_name', 'content_title']);
 
   return (
@@ -355,9 +354,9 @@ export default function InstructorDetail() {
               <thead>
                 <tr className="border-b border-border">
                   <th className="text-left px-4 py-3 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Aluno</th>
-                  <th className="text-left px-4 py-3 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Progresso</th>
-                  <th className="text-left px-4 py-3 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Nota</th>
+                  <th className="text-left px-4 py-3 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">RA</th>
                   <th className="text-left px-4 py-3 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Sessões</th>
+                  <th className="text-left px-4 py-3 text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Nota Média</th>
                 </tr>
               </thead>
               <tbody>
@@ -374,20 +373,14 @@ export default function InstructorDetail() {
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
                           <Avatar src={s.avatar_url} fallback={s.name} size="sm" />
-                          <div>
-                            <p className="font-medium text-foreground hover:text-primary transition-colors">{s.name}</p>
-                            <p className="text-xs text-muted-foreground">{s.email}</p>
-                          </div>
+                          <p className="font-medium text-foreground hover:text-primary transition-colors">{s.name}</p>
                         </div>
                       </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-2 w-32">
-                          <Progress value={s.progress ?? 0} className="flex-1" />
-                          <span className="text-xs text-muted-foreground">{s.progress ?? 0}%</span>
-                        </div>
+                      <td className="px-4 py-3 text-muted-foreground font-mono text-xs">{s.ra ?? '—'}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{s.sessions ?? 0}</td>
+                      <td className="px-4 py-3 font-bold text-foreground">
+                        {(s.sessions ?? 0) > 0 && s.avg_score != null ? Number(s.avg_score).toFixed(1) : '—'}
                       </td>
-                      <td className="px-4 py-3 font-bold text-foreground">{s.grade != null ? s.grade.toFixed(1) : '—'}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{s.sessions_count ?? 0}</td>
                     </tr>
                   ))
                 )}
