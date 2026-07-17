@@ -318,22 +318,25 @@ export default function InstructorDetail() {
                         >
                           <span className="material-symbols-outlined text-[18px]">edit</span>
                         </button>
-                        <button
-                          onClick={async (e) => {
-                            e.stopPropagation();
-                            if (!confirm(`Remover "${c.title}"? Esta ação não pode ser desfeita.`)) return;
-                            try {
-                              await coursesApi.delete(c.id);
-                              toast.success('Curso removido.');
-                              const controller = new AbortController();
-                              load(controller);
-                            } catch { toast.error('Erro ao remover curso.'); }
-                          }}
-                          className="p-1.5 rounded-md text-muted-foreground hover:text-red-500 hover:bg-red-50 transition-colors"
-                          title="Remover curso"
-                        >
-                          <span className="material-symbols-outlined text-[18px]">delete</span>
-                        </button>
+                        {/* DELETE /courses é ADMIN-only no backend */}
+                        {user?.role === 'ADMIN' && (
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (!confirm(`Remover "${c.title}"? Esta ação não pode ser desfeita.`)) return;
+                              try {
+                                await coursesApi.delete(c.id);
+                                toast.success('Curso removido.');
+                                const controller = new AbortController();
+                                load(controller);
+                              } catch { toast.error('Erro ao remover curso.'); }
+                            }}
+                            className="p-1.5 rounded-md text-muted-foreground hover:text-red-500 hover:bg-red-50 transition-colors"
+                            title="Remover curso"
+                          >
+                            <span className="material-symbols-outlined text-[18px]">delete</span>
+                          </button>
+                        )}
                       </div>
                     </div>
                   </CardContent>

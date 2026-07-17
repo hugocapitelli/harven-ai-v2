@@ -12,7 +12,7 @@ import type { UserRole, Chapter, Content } from '../../types';
 
 interface CourseEditProps { userRole: UserRole }
 
-export default function CourseEdit({ userRole: _userRole }: CourseEditProps) {
+export default function CourseEdit({ userRole }: CourseEditProps) {
   const navigate = useNavigate();
   const { courseId } = useParams<{ courseId: string }>();
   const [course, setCourse] = useState<Record<string, unknown> | null>(null);
@@ -158,10 +158,13 @@ export default function CourseEdit({ userRole: _userRole }: CourseEditProps) {
                   {(course?.image_url || course?.image) && <img src={String(course.image_url || course.image)} alt="" className="w-full h-32 object-cover rounded-lg mt-1" />}
                   <input type="file" accept="image/*" onChange={handleImageUpload} className="mt-2 text-xs" />
                 </div>
-                <div className="border-t border-red-200 pt-4 mt-4">
-                  <p className="text-xs text-red-500 font-bold uppercase mb-2">Zona de Perigo</p>
-                  <button onClick={() => setDeleteTarget({ type: 'course', id: courseId! })} className="w-full py-2 rounded-lg border border-red-300 text-red-500 text-xs font-bold hover:bg-red-50">Excluir Curso</button>
-                </div>
+                {/* DELETE /courses é ADMIN-only no backend */}
+                {userRole === 'ADMIN' && (
+                  <div className="border-t border-red-200 pt-4 mt-4">
+                    <p className="text-xs text-red-500 font-bold uppercase mb-2">Zona de Perigo</p>
+                    <button onClick={() => setDeleteTarget({ type: 'course', id: courseId! })} className="w-full py-2 rounded-lg border border-red-300 text-red-500 text-xs font-bold hover:bg-red-50">Excluir Curso</button>
+                  </div>
+                )}
               </div>
             )}
           </div>
