@@ -46,7 +46,18 @@ export default function StudentDashboard() {
             allCourses.push(...courseList.map((course) => ({ ...course, disciplineName: d.name ?? d.title })));
           } catch { /* skip */ }
         }
-        setCourses(allCourses);
+        // Progresso real por conteudo concluido — o objeto course do backend nao
+        // traz `progress`; a fonte e /users/{id}/courses/{courseId}/progress.
+        const withProgress = await Promise.all(allCourses.map(async (course) => {
+          try {
+            const p = await userStatsApi.getCourseProgress(user.id, course.id as string);
+            return { ...course, progress: Math.round(Number(p?.progress_percent ?? 0)) };
+          } catch {
+            return { ...course, progress: Number(course.progress ?? 0) };
+          }
+        }));
+        if (ctrl.signal.aborted) return;
+        setCourses(withProgress);
       } catch {
         if (!ctrl.signal.aborted) console.error('Erro ao carregar dashboard');
       } finally {
