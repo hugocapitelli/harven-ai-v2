@@ -227,7 +227,38 @@ async def save_admin_settings(
         cleaned.pop(key, None)
 
     if cleaned:
-        client.table("system_settings").update(cleaned).eq("id", row_id).execute()
+        # P0: the payload comes straight from the admin UI and may carry keys that
+        # are not (yet) columns in system_settings. PostgREST rejects the WHOLE
+        # batch update on a single unknown column, so one stray field silently
+        # killed every other setting in the save. Try the batch first (1 round
+        # trip, common case); on failure retry field-by-field so the valid fields
+        # persist and only the bad ones are skipped (logged, and 400 only when
+        # NOTHING could be saved).
+        try:
+            client.table("system_settings").update(cleaned).eq("id", row_id).execute()
+        except Exception as batch_exc:
+            logger.warning(
+                f"settings batch update failed ({batch_exc}); retrying field-by-field"
+            )
+            skipped: list[str] = []
+            for key, value in cleaned.items():
+                try:
+                    client.table("system_settings").update({key: value}).eq("id", row_id).execute()
+                except Exception as field_exc:
+                    skipped.append(key)
+                    logger.warning(f"settings field '{key}' skipped: {field_exc}")
+            if skipped:
+                _log(
+                    client,
+                    f"Settings: campos ignorados no save ({', '.join(skipped)})",
+                    author=admin["name"],
+                    log_type="settings",
+                )
+            if skipped and len(skipped) == len(cleaned):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Nenhum campo pode ser salvo: {', '.join(sorted(skipped))}",
+                )
 
     updated = _get_or_create_settings(client)
     _log(client, f"Settings atualizadas por {admin['name']}", author=admin["name"], log_type="settings")
