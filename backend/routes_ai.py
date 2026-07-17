@@ -2140,7 +2140,11 @@ async def lti_status():
 @router.post("/upload", tags=["Upload"])
 async def upload_file(
     file: UploadFile = File(...),
-    current_user: dict = Depends(get_current_user),
+    # P2: this generic upload accepted ANY authenticated user — a student could
+    # park arbitrary (allowed-type) files on the server's public /uploads mount.
+    # Uploading content is an authoring capability: staff only. File TYPE is
+    # validated inside storage.save_file (ValueError → 400 below).
+    current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
 ):
     try:
         storage = get_storage_service()
@@ -2157,7 +2161,8 @@ async def upload_file(
 @router.post("/upload/video", tags=["Upload"])
 async def upload_video(
     file: UploadFile = File(...),
-    current_user: dict = Depends(get_current_user),
+    # P2: same staff-only gate as the generic /upload (authoring capability).
+    current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
 ):
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
     if ext not in ("mp4", "mov", "avi", "webm"):
@@ -2177,7 +2182,8 @@ async def upload_video(
 @router.post("/upload/audio", tags=["Upload"])
 async def upload_audio(
     file: UploadFile = File(...),
-    current_user: dict = Depends(get_current_user),
+    # P2: same staff-only gate as the generic /upload (authoring capability).
+    current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
 ):
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
     if ext not in ("mp3", "wav", "ogg", "m4a"):
