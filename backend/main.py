@@ -281,7 +281,28 @@ def _exclude_password(user: dict) -> dict:
 # ============================================
 # APP SETUP
 # ============================================
-limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+def _rate_limit_client_ip(request: Request) -> str:
+    """Rate-limit key that survives a reverse proxy (P0).
+
+    In production every request reaches uvicorn through the proxy, so
+    ``get_remote_address`` sees the PROXY's IP for all students — one student
+    hitting the 5/min login limit locked out the whole school. Behind the proxy
+    the real client is the FIRST hop of ``X-Forwarded-For`` (the proxy appends,
+    left-most is the origin). Without the header (direct/local access) we fall
+    back to the socket address, so dev behavior is unchanged.
+    """
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        client_ip = xff.split(",")[0].strip()
+        if client_ip:
+            return client_ip
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip and real_ip.strip():
+        return real_ip.strip()
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=_rate_limit_client_ip, default_limits=["60/minute"])
 
 
 def _ensure_grade_overrides_table():
