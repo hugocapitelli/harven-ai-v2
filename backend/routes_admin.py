@@ -808,11 +808,34 @@ async def broadcast_notification(
     # Fan-out is an ADMIN-only operation (mirrors create_notification's ADMIN
     # gate) — resolves recipients server-side and inserts one notification row
     # per recipient in a single batch call.
-    target = (body.target or "all").lower()
-    if target == "all":
+    #
+    # P1: the UI sends audience labels ('STUDENTS'/'INSTRUCTORS'), but the users
+    # table stores the roles STUDENT/TEACHER/ADMIN — the old ``eq("role",
+    # target.upper())`` matched ZERO rows (plural never equals singular, and
+    # INSTRUCTOR is stored as TEACHER per _db_role), so audience broadcasts were
+    # silently sent to nobody. Map labels → DB roles explicitly; an unknown label
+    # is a loud 400, never an empty send that looks like success.
+    target = (body.target or "all").strip().lower()
+    TARGET_ROLE_MAP: dict[str, list[str] | None] = {
+        "all": None,
+        "students": ["STUDENT"],
+        "student": ["STUDENT"],
+        # INSTRUCTOR is a frontend alias — the DB stores TEACHER (see _db_role in
+        # main.py). Accept both labels and query both spellings defensively.
+        "instructors": ["TEACHER", "INSTRUCTOR"],
+        "instructor": ["TEACHER", "INSTRUCTOR"],
+        "teachers": ["TEACHER", "INSTRUCTOR"],
+        "teacher": ["TEACHER", "INSTRUCTOR"],
+        "admins": ["ADMIN"],
+        "admin": ["ADMIN"],
+    }
+    if target not in TARGET_ROLE_MAP:
+        raise HTTPException(status_code=400, detail=f"Alvo de broadcast invalido: {body.target}")
+    db_roles = TARGET_ROLE_MAP[target]
+    if db_roles is None:
         users_res = client.table("users").select("id").execute()
     else:
-        users_res = client.table("users").select("id").eq("role", target.upper()).execute()
+        users_res = client.table("users").select("id").in_("role", db_roles).execute()
     recipients = users_res.data or []
 
     if not recipients:
