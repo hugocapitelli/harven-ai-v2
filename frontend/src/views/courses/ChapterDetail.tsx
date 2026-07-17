@@ -2,7 +2,8 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { cn } from '@/lib/utils';
-import { chaptersApi, contentsApi } from '@/services/api';
+import { chaptersApi, contentsApi, userStatsApi } from '@/services/api';
+import { useAuth } from '@/contexts/AuthContext';
 import type { Chapter, Content } from '@/types';
 
 interface ChapterWithMeta extends Chapter {
@@ -54,9 +55,11 @@ function Skeleton() {
 export default function ChapterDetail() {
   const { courseId, chapterId } = useParams<{ courseId: string; chapterId: string }>();
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const [chapter, setChapter] = useState<ChapterWithMeta | null>(null);
   const [contents, setContents] = useState<Content[]>([]);
+  const [courseProgress, setCourseProgress] = useState<{ progress_percent: number; completed_contents: number; total_contents: number } | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -74,6 +77,19 @@ export default function ChapterDetail() {
         ]);
         setChapter(chapterData);
         setContents(Array.isArray(contentsData) ? contentsData : contentsData?.data ?? []);
+        // Progresso real do curso — o backend rastreia apenas o agregado por
+        // curso em /users/{id}/courses/{courseId}/progress (nao ha flag
+        // `completed` por conteudo na listagem).
+        if (user?.id) {
+          try {
+            const p = await userStatsApi.getCourseProgress(user.id, courseId!);
+            setCourseProgress({
+              progress_percent: Math.round(Number(p?.progress_percent ?? 0)),
+              completed_contents: Number(p?.completed_contents ?? 0),
+              total_contents: Number(p?.total_contents ?? 0),
+            });
+          } catch { /* card cai no fallback local */ }
+        }
       } catch (err) {
         if ((err as Error).name !== 'AbortError') console.error(err);
       } finally {
@@ -83,10 +99,16 @@ export default function ChapterDetail() {
 
     load();
     return () => controller.abort();
-  }, [courseId, chapterId]);
+  }, [courseId, chapterId, user?.id]);
 
-  const completedCount = contents.filter((c) => c.completed).length;
-  const progressPct = contents.length > 0 ? Math.round((completedCount / contents.length) * 100) : 0;
+  // Preferir o progresso real do curso (backend); fallback para o calculo local
+  // (flags `completed` locais) quando o endpoint nao respondeu.
+  const localCompleted = contents.filter((c) => c.completed).length;
+  const completedCount = courseProgress ? courseProgress.completed_contents : localCompleted;
+  const totalCount = courseProgress ? courseProgress.total_contents : contents.length;
+  const progressPct = courseProgress
+    ? courseProgress.progress_percent
+    : contents.length > 0 ? Math.round((localCompleted / contents.length) * 100) : 0;
 
   if (loading) {
     return (
@@ -181,7 +203,7 @@ export default function ChapterDetail() {
             ) : (
               <div className="mt-4 space-y-3">
                 {contents
-                  .sort((a, b) => (a as Content & { order?: number }).order ?? 0 - ((b as Content & { order?: number }).order ?? 0))
+                  .sort((a, b) => ((a as Content & { order?: number }).order ?? 0) - ((b as Content & { order?: number }).order ?? 0))
                   .map((content, idx) => {
                     const meta = CONTENT_TYPE_META[content.type] ?? CONTENT_TYPE_META.text;
                     return (
@@ -245,7 +267,7 @@ export default function ChapterDetail() {
           <div className="sticky top-8 space-y-4">
             {/* Progress card */}
             <div className="rounded-2xl bg-harven-dark p-6 text-white">
-              <p className="text-xs uppercase tracking-wider text-white/60">Progresso</p>
+              <p className="text-xs uppercase tracking-wider text-white/60">{courseProgress ? 'Progresso do curso' : 'Progresso'}</p>
               <p className="mt-2 font-display text-4xl font-bold text-harven-primary">{progressPct}%</p>
               <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
                 <div
@@ -254,7 +276,7 @@ export default function ChapterDetail() {
                 />
               </div>
               <p className="mt-2 text-xs text-white/60">
-                {completedCount} de {contents.length} concluídos
+                {completedCount} de {totalCount} concluídos
               </p>
               {contents.length > 0 && (
                 <button

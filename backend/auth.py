@@ -61,6 +61,12 @@ def get_current_user(
     res = client.table("users").select("*").eq("id", user_id).maybe_single().execute()
     if res is None or res.data is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario nao encontrado")
+    # P0: a blocked user must lose access IMMEDIATELY, including tokens minted
+    # BEFORE the block. Rejecting here (not only at login) covers every protected
+    # endpoint with a single gate. 403 (not 401): the token is valid, the account
+    # is forbidden — the frontend should not treat this as "expired, re-login".
+    if (res.data.get("status") or "").lower() == "blocked":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Usuario bloqueado")
     return res.data
 
 

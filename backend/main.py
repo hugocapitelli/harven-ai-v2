@@ -95,6 +95,16 @@ class UserUpdate(BaseModel):
         return v
 
 
+class MeUpdate(BaseModel):
+    """Self-service profile update (P0). Deliberately NARROWER than UserUpdate:
+    no ``role``/``status`` — privilege fields are ADMIN-only via PUT /users/{id};
+    an extra field in the payload is silently ignored by pydantic, never applied."""
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    email: Optional[str] = Field(None, max_length=255)
+    password: Optional[str] = Field(None, min_length=6, max_length=128)
+    current_password: Optional[str] = Field(None, max_length=128)
+
+
 # -- Discipline --
 class DisciplineCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
@@ -231,17 +241,37 @@ ALLOWED_CONTENT_TYPES = {
 # MIDDLEWARE
 # ============================================
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, default_max: int = 10 * 1024 * 1024, upload_max: int = 50 * 1024 * 1024):
+    # P1: the flat 50MB upload cap contradicted the UI, which promises 500MB for
+    # video and 100MB for audio — every real lecture upload died with a 413.
+    # Limits are now coherent per upload type; everything else keeps the old caps.
+    def __init__(
+        self,
+        app,
+        default_max: int = 10 * 1024 * 1024,
+        upload_max: int = 50 * 1024 * 1024,
+        video_max: int = 500 * 1024 * 1024,
+        audio_max: int = 100 * 1024 * 1024,
+    ):
         super().__init__(app)
         self.default_max = default_max
         self.upload_max = upload_max
+        self.video_max = video_max
+        self.audio_max = audio_max
+
+    def _limit_for(self, path: str) -> int:
+        if "/upload/video" in path:
+            return self.video_max
+        if "/upload/audio" in path:
+            return self.audio_max
+        if "upload" in path or "avatar" in path or "image" in path:
+            return self.upload_max
+        return self.default_max
 
     async def dispatch(self, request: Request, call_next):
         content_length = request.headers.get("content-length")
         if content_length:
             length = int(content_length)
-            is_upload = "upload" in request.url.path or "avatar" in request.url.path or "image" in request.url.path
-            limit = self.upload_max if is_upload else self.default_max
+            limit = self._limit_for(request.url.path)
             if length > limit:
                 return JSONResponse(
                     status_code=413,
@@ -281,7 +311,28 @@ def _exclude_password(user: dict) -> dict:
 # ============================================
 # APP SETUP
 # ============================================
-limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+def _rate_limit_client_ip(request: Request) -> str:
+    """Rate-limit key that survives a reverse proxy (P0).
+
+    In production every request reaches uvicorn through the proxy, so
+    ``get_remote_address`` sees the PROXY's IP for all students — one student
+    hitting the 5/min login limit locked out the whole school. Behind the proxy
+    the real client is the FIRST hop of ``X-Forwarded-For`` (the proxy appends,
+    left-most is the origin). Without the header (direct/local access) we fall
+    back to the socket address, so dev behavior is unchanged.
+    """
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        client_ip = xff.split(",")[0].strip()
+        if client_ip:
+            return client_ip
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip and real_ip.strip():
+        return real_ip.strip()
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=_rate_limit_client_ip, default_limits=["60/minute"])
 
 
 def _ensure_grade_overrides_table():
@@ -415,6 +466,11 @@ async def login(request: Request, body: LoginRequest, client: Client = Depends(g
 
     if not verify_password(body.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Credenciais invalidas")
+
+    # P0: blocked accounts must not log in. Checked AFTER password verification so
+    # this response never becomes an account-probing oracle for wrong credentials.
+    if (user.get("status") or "").lower() == "blocked":
+        raise HTTPException(status_code=403, detail="Usuario bloqueado")
 
     role = _normalize_role(user["role"])
     token = create_access_token(user["id"], role)
@@ -607,12 +663,58 @@ async def batch_create_users(
     return {"message": f"{len(created)} usuarios criados", "count": len(created)}
 
 
+@app.put("/users/me", tags=["Users"])
+async def update_me(
+    body: MeUpdate,
+    current_user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
+):
+    """P0: self-service profile/password update. Before this endpoint the only
+    write path was ``PUT /users/{id}`` (ADMIN-only), so a student could not fix
+    their own name/email or rotate their own password. Registered BEFORE the
+    ``/users/{user_id}`` routes so the literal ``me`` never binds as an id.
+    Identity always comes from the token — never from a body/path field."""
+    user_repo = UserRepository(client)
+    data: dict = {}
+    if body.name is not None:
+        data["name"] = body.name
+    if body.email is not None:
+        data["email"] = body.email
+
+    if body.password is not None:
+        if not body.current_password:
+            raise HTTPException(
+                status_code=400,
+                detail="current_password e obrigatorio para alterar a senha",
+            )
+        # Re-read the stored row: the auth dependency strips nothing, but token
+        # payloads/overrides may not carry password_hash — the DB is the truth.
+        stored = user_repo.get_by_id(current_user["id"]) or {}
+        if not stored.get("password_hash") or not verify_password(
+            body.current_password, stored["password_hash"]
+        ):
+            raise HTTPException(status_code=403, detail="Senha atual incorreta")
+        data["password_hash"] = hash_password(body.password)
+
+    if not data:
+        raise HTTPException(status_code=400, detail="Nenhum campo para atualizar")
+
+    user = user_repo.update(current_user["id"], data)
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario nao encontrado")
+    return _exclude_password(user)
+
+
 @app.get("/users/{user_id}", tags=["Users"])
 async def get_user(
     user_id: str,
     current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # P1 IDOR: any authenticated STUDENT could read ANY user's profile (name,
+    # email, RA) by iterating ids. Only the target user themselves or a
+    # privileged role may read a profile — same barrier as the avatar route.
+    require_self_or_role(user_id, current_user, "ADMIN", "TEACHER", "INSTRUCTOR")
     user_repo = UserRepository(client)
     user = user_repo.get_by_id(user_id)
     if not user:
@@ -972,6 +1074,21 @@ async def list_courses(
     if discipline_id:
         filters["discipline_id"] = discipline_id
 
+    # P1: a STUDENT could list EVERY course on the platform, including drafts and
+    # courses of disciplines they are not enrolled in. Scope students to their own
+    # enrollment (discipline_students) and to non-draft courses; staff keeps the
+    # full listing.
+    if (current_user.get("role") or "").upper() == "STUDENT":
+        disc_repo = DisciplineRepository(client)
+        enrolled_ids = disc_repo.get_student_discipline_ids(current_user["id"])
+        if discipline_id and discipline_id not in enrolled_ids:
+            return {"data": [], "total": 0, "page": page, "per_page": per_page}
+        target_ids = [discipline_id] if discipline_id else enrolled_ids
+        if not target_ids:
+            return {"data": [], "total": 0, "page": page, "per_page": per_page}
+        filters["discipline_id"] = target_ids  # BaseRepository maps list → IN
+        filters["status"] = "active"
+
     courses, total = course_repo.get_all(
         filters=filters if filters else None,
         order_by="created_at",
@@ -1110,7 +1227,12 @@ async def create_discipline_course(
     data["discipline_id"] = class_id
     if not data.get("instructor_id"):
         data["instructor_id"] = current_user["id"]
-    data["status"] = "active"
+    # P1: this route used to FORCE status='active', silently publishing to
+    # students a course the teacher explicitly created as draft. Respect the
+    # requested status; CourseCreate defaults to 'draft' when omitted — same
+    # contract as POST /courses.
+    if not data.get("status"):
+        data["status"] = "draft"
     course = course_repo.create(data)
     return course
 

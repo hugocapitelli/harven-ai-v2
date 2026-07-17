@@ -41,6 +41,51 @@ const EMPTY_FORM = { name: '', ra: '', email: '', password: '', role: 'STUDENT' 
 
 const EMPTY_NOTIFY_FORM = { title: '', message: '' };
 
+// Parser CSV tolerante: remove BOM, detecta ; ou , como delimitador e
+// respeita campos entre aspas (com "" como escape).
+function parseCsvRows(text: string): string[][] {
+  const clean = text.replace(/^\uFEFF/, '').trim();
+  if (!clean) return [];
+  const lines = clean.split(/\r?\n/).filter((l) => l.trim());
+  const first = lines[0] ?? '';
+  const delim = (first.match(/;/g)?.length ?? 0) > (first.match(/,/g)?.length ?? 0) ? ';' : ',';
+  return lines.map((line) => {
+    const out: string[] = [];
+    let cur = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (inQuotes) {
+        if (ch === '"') {
+          if (line[i + 1] === '"') { cur += '"'; i++; } else inQuotes = false;
+        } else cur += ch;
+      } else if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === delim) {
+        out.push(cur.trim());
+        cur = '';
+      } else cur += ch;
+    }
+    out.push(cur.trim());
+    return out;
+  });
+}
+
+// GET /users é paginado no backend (per_page max 100, default 20); agrega
+// todas as páginas para exibir a lista completa de usuários.
+async function fetchAllUsers(params?: Record<string, unknown>): Promise<ApiUser[]> {
+  const all: ApiUser[] = [];
+  const perPage = 100;
+  for (let page = 1; page <= 100; page += 1) {
+    const res = await usersApi.list({ ...(params ?? {}), page, per_page: perPage });
+    const chunk = unwrapList<ApiUser>(res);
+    all.push(...chunk);
+    const total = (res as { total?: number })?.total;
+    if (chunk.length < perPage || (typeof total === 'number' && all.length >= total)) break;
+  }
+  return all;
+}
+
 export default function UserManagement() {
   const { user: currentUser } = useAuth();
   const [users, setUsers] = useState<ApiUser[]>([]);
@@ -55,6 +100,8 @@ export default function UserManagement() {
   const [notifyingUser, setNotifyingUser] = useState<ApiUser | null>(null);
   const [notifyForm, setNotifyForm] = useState(EMPTY_NOTIFY_FORM);
   const [notifySending, setNotifySending] = useState(false);
+  const [csvPending, setCsvPending] = useState<Array<Record<string, unknown>> | null>(null);
+  const [csvDefaultPassword, setCsvDefaultPassword] = useState('');
   const csvRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -63,9 +110,9 @@ export default function UserManagement() {
       try {
         setLoading(true);
         const params = roleFilter !== 'all' ? { role: roleFilter } : undefined;
-        const data = await usersApi.list(params as Record<string, string>);
+        const data = await fetchAllUsers(params);
         if (controller.signal.aborted) return;
-        setUsers(unwrapList(data));
+        setUsers(data);
       } catch {
         if (controller.signal.aborted) return;
         toast.error('Erro ao carregar usuários.');
@@ -99,8 +146,7 @@ export default function UserManagement() {
       toast.success('Usuário criado.');
       setShowCreateModal(false);
       setForm(EMPTY_FORM);
-      const data = await usersApi.list();
-      setUsers(unwrapList(data));
+      setUsers(await fetchAllUsers(roleFilter !== 'all' ? { role: roleFilter } : undefined));
     } catch (err: any) {
       const msg = err?.response?.data?.detail || 'Erro ao criar usuário.';
       toast.error(String(msg));
@@ -111,13 +157,20 @@ export default function UserManagement() {
 
   const handleEdit = async () => {
     if (!editingUser) return;
+    if (form.password.trim() && form.password.trim().length < 6) {
+      toast.error('Nova senha deve ter no mínimo 6 caracteres.');
+      return;
+    }
     setSaving(true);
     try {
-      await usersApi.update(editingUser.id, form as Record<string, unknown>);
+      // O backend hasheia qualquer `password` recebido no update; enviar ''
+      // resetaria a senha do usuário. Só enviar quando o admin digitou uma nova.
+      const payload: Record<string, unknown> = { ...form };
+      if (!form.password.trim()) delete payload.password;
+      await usersApi.update(editingUser.id, payload);
       toast.success('Usuário atualizado.');
       setEditingUser(null);
-      const data = await usersApi.list();
-      setUsers(unwrapList(data));
+      setUsers(await fetchAllUsers(roleFilter !== 'all' ? { role: roleFilter } : undefined));
     } catch {
       toast.error('Erro ao atualizar.');
     } finally {
@@ -166,30 +219,44 @@ export default function UserManagement() {
     }
   };
 
-  const handleCsvImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const text = await file.text();
-    const lines = text.trim().split('\n').slice(1);
-    const batch = lines.map((line) => {
-      const [name, ra, email, role] = line.split(',').map((s) => s.trim());
-      return { name, ra, email, role: (role?.toUpperCase() || 'STUDENT') as UserRole };
-    }).filter((u) => u.name && u.email);
-
-    if (batch.length === 0) { toast.error('CSV vazio ou inválido.'); return; }
+  const importBatch = async (rows: Array<Record<string, unknown>>, defaultPassword = '') => {
+    const batch = rows.map((r) => ({
+      ...r,
+      password: String(r.password ?? '').length >= 6 ? r.password : defaultPassword,
+    }));
     setSaving(true);
     try {
       await usersApi.createBatch(batch as Record<string, unknown>[]);
       toast.success(`${batch.length} usuários importados.`);
-      const data = await usersApi.list();
-      setUsers(unwrapList(data));
+      setUsers(await fetchAllUsers(roleFilter !== 'all' ? { role: roleFilter } : undefined));
     } catch (err: any) {
       const msg = err?.response?.data?.detail || 'Erro na importação.';
       toast.error(String(msg));
     } finally {
       setSaving(false);
-      if (csvRef.current) csvRef.current.value = '';
     }
+  };
+
+  const handleCsvImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    // Colunas: name,ra,email,role[,password] — password é opcional no CSV
+    const rows = parseCsvRows(text).slice(1).map((cols) => {
+      const [name, ra, email, role, password] = cols;
+      return { name, ra, email, role: (role?.toUpperCase() || 'STUDENT') as UserRole, password: password || '' };
+    }).filter((u) => u.name && u.email);
+    if (csvRef.current) csvRef.current.value = '';
+
+    if (rows.length === 0) { toast.error('CSV vazio ou inválido.'); return; }
+    // POST /users/batch exige password (min 6) por usuário; linhas sem senha
+    // válida no CSV precisam de uma senha padrão definida pelo admin.
+    if (rows.some((r) => (r.password ?? '').length < 6)) {
+      setCsvDefaultPassword(`Harven@${Math.floor(1000 + Math.random() * 9000)}`);
+      setCsvPending(rows);
+      return;
+    }
+    await importBatch(rows);
   };
 
   const openEdit = (u: ApiUser) => {
@@ -336,14 +403,13 @@ export default function UserManagement() {
             <Input label="Nome" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} autoFocus />
             <Input label="RA" value={form.ra} onChange={(e) => setForm((f) => ({ ...f, ra: e.target.value }))} />
             <Input label="Email" type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />
-            {!editingUser && (
-              <Input
-                label="Senha temporária"
-                type="password"
-                value={form.password}
-                onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
-              />
-            )}
+            <Input
+              label={editingUser ? 'Nova senha (opcional)' : 'Senha temporária'}
+              type="password"
+              placeholder={editingUser ? 'Deixe em branco para manter a senha atual' : undefined}
+              value={form.password}
+              onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
+            />
             <Select label="Role" value={form.role} onChange={(e) => setForm((f) => ({ ...f, role: e.target.value as UserRole }))}>
               <option value="STUDENT">Aluno</option>
               <option value="INSTRUCTOR">Professor</option>
@@ -371,14 +437,70 @@ export default function UserManagement() {
       <Modal.Root open={!!deletingUser} onClose={() => setDeletingUser(null)} size="sm">
         <Modal.Header title="Confirmar exclusão" onClose={() => setDeletingUser(null)} />
         <Modal.Body>
-          <p className="text-sm text-muted-foreground">
-            Excluir o usuário &quot;{deletingUser?.name}&quot;? Essa ação não pode ser desfeita.
-          </p>
+          <div className="flex flex-col gap-3">
+            <p className="text-sm text-muted-foreground">
+              Excluir o usuário &quot;{deletingUser?.name}&quot;? Essa ação não pode ser desfeita.
+            </p>
+            <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
+              <span className="material-symbols-outlined text-[16px] shrink-0">warning</span>
+              <span>
+                A exclusão apaga em cascata as sessões socráticas, notas e certificados
+                deste usuário. Se a intenção é só impedir o acesso, prefira <b>Bloquear</b>.
+              </span>
+            </div>
+          </div>
         </Modal.Body>
         <Modal.Footer>
           <Button variant="outline" onClick={() => setDeletingUser(null)}>Cancelar</Button>
+          <Button
+            variant="outline"
+            disabled={saving}
+            onClick={async () => {
+              if (!deletingUser) return;
+              try {
+                await usersApi.update(deletingUser.id, { status: 'blocked' } as Record<string, unknown>);
+                toast.success('Usuário bloqueado (dados preservados).');
+                setUsers((prev) => prev.map((x) => x.id === deletingUser.id ? { ...x, status: 'blocked' } : x));
+                setDeletingUser(null);
+              } catch { toast.error('Erro ao bloquear.'); }
+            }}
+          >
+            <span className="material-symbols-outlined text-[16px] mr-1">block</span> Bloquear
+          </Button>
           <Button variant="destructive" onClick={handleDelete} disabled={saving}>
             {saving ? 'Excluindo...' : 'Excluir'}
+          </Button>
+        </Modal.Footer>
+      </Modal.Root>
+
+      {/* CSV Default Password Modal */}
+      <Modal.Root open={!!csvPending} onClose={() => setCsvPending(null)} size="sm">
+        <Modal.Header title="Senha padrão para importação" onClose={() => setCsvPending(null)} />
+        <Modal.Body>
+          <div className="flex flex-col gap-4">
+            <p className="text-sm text-muted-foreground">
+              {csvPending?.filter((r) => String(r.password ?? '').length < 6).length} linha(s) do CSV sem senha válida
+              (mínimo 6 caracteres). Defina a senha temporária que será aplicada a esses usuários.
+            </p>
+            <Input
+              label="Senha padrão"
+              value={csvDefaultPassword}
+              onChange={(e) => setCsvDefaultPassword(e.target.value)}
+              autoFocus
+            />
+          </div>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="outline" onClick={() => setCsvPending(null)}>Cancelar</Button>
+          <Button
+            disabled={saving || csvDefaultPassword.trim().length < 6}
+            onClick={() => {
+              const rows = csvPending!;
+              setCsvPending(null);
+              importBatch(rows, csvDefaultPassword.trim());
+            }}
+          >
+            {saving ? 'Importando...' : 'Importar'}
           </Button>
         </Modal.Footer>
       </Modal.Root>

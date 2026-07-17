@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { userStatsApi } from '../../services/api';
-import { cn } from '../../lib/utils';
+import { cn, unwrapList } from '../../lib/utils';
 import type { Achievement } from '../../types';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { PageHeader } from '../../components/ui/PageHeader';
@@ -55,8 +55,26 @@ export default function StudentAchievements() {
           userStatsApi.getStats(user.id),
         ]);
         if (ctrl.signal.aborted) return;
-        setAchievements(achData?.achievements ?? []);
-        setTotalPoints(achData?.summary?.total_points ?? 0);
+        // Backend devolve { data: [...] } com SOMENTE as conquistas desbloqueadas
+        // (linhas de user_achievements: name/icon/rarity/points/unlocked_at) — nao
+        // existe {achievements, summary} nem campos de progresso. Adapta para o
+        // shape Achievement do front (title/unlocked/progress_percent).
+        const rows = unwrapList<Record<string, unknown>>(achData);
+        setAchievements(rows.map((r) => ({
+          id: String(r.id ?? ''),
+          title: String(r.name ?? r.title ?? 'Conquista'),
+          description: (r.description as string) ?? '',
+          icon: String(r.icon ?? 'emoji_events'),
+          category: String(r.category ?? 'jornada'),
+          rarity: (String(r.rarity ?? 'comum').toLowerCase() as Achievement['rarity']),
+          points: Number(r.points ?? 0),
+          unlocked: true,
+          progress: 1,
+          target: 1,
+          progress_percent: 100,
+        })));
+        // total_points vem de /users/{id}/stats — o endpoint de conquistas nao traz summary.
+        setTotalPoints(Number(statsData?.total_points ?? 0));
         setUserStats(statsData ?? {});
       } catch { /* handled */ } finally {
         if (!ctrl.signal.aborted) setLoading(false);

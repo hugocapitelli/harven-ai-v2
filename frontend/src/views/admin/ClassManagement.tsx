@@ -39,6 +39,52 @@ const SEMESTER_OPTIONS = (() => {
   return years.flatMap((y) => [`${y}.1`, `${y}.2`]);
 })();
 
+// Parser CSV tolerante: remove BOM, detecta ; ou , como delimitador e
+// respeita campos entre aspas (com "" como escape).
+function parseCsvRows(text: string): string[][] {
+  const clean = text.replace(/^\uFEFF/, '').trim();
+  if (!clean) return [];
+  const lines = clean.split(/\r?\n/).filter((l) => l.trim());
+  const first = lines[0] ?? '';
+  const delim = (first.match(/;/g)?.length ?? 0) > (first.match(/,/g)?.length ?? 0) ? ';' : ',';
+  return lines.map((line) => {
+    const out: string[] = [];
+    let cur = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (inQuotes) {
+        if (ch === '"') {
+          if (line[i + 1] === '"') { cur += '"'; i++; } else inQuotes = false;
+        } else cur += ch;
+      } else if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === delim) {
+        out.push(cur.trim());
+        cur = '';
+      } else cur += ch;
+    }
+    out.push(cur.trim());
+    return out;
+  });
+}
+
+// GET /users é paginado no backend (per_page max 100, default 20); agrega
+// todas as páginas para que vínculos e resolução de RAs do CSV enxerguem
+// todos os usuários, não só os 20 primeiros.
+async function fetchAllUsers(params?: Record<string, unknown>): Promise<User[]> {
+  const all: User[] = [];
+  const perPage = 100;
+  for (let page = 1; page <= 100; page += 1) {
+    const res = await usersApi.list({ ...(params ?? {}), page, per_page: perPage });
+    const chunk = unwrapList<User>(res);
+    all.push(...chunk);
+    const total = (res as { total?: number })?.total;
+    if (chunk.length < perPage || (typeof total === 'number' && all.length >= total)) break;
+  }
+  return all;
+}
+
 export default function ClassManagement() {
   const [disciplines, setDisciplines] = useState<Discipline[]>([]);
   const [loading, setLoading] = useState(true);
@@ -104,7 +150,7 @@ export default function ClassManagement() {
         coursesApi.listByClass(disc.id).catch(() => []),
         disciplinesApi.getTeachers(disc.id).catch(() => []),
         disciplinesApi.getStudents(disc.id).catch(() => []),
-        usersApi.list().catch(() => []),
+        fetchAllUsers().catch(() => []),
       ]);
       setCourses(unwrapList(c));
       // Teachers/students endpoints return array of link objects with nested teacher/student
@@ -112,7 +158,7 @@ export default function ClassManagement() {
       const studentList = unwrapList(s).map((link: any) => link.student ?? link).filter(Boolean);
       setTeachers(teacherList);
       setStudents(studentList);
-      setAllUsers(unwrapList(u));
+      setAllUsers(u);
     } catch {}
   };
 
@@ -205,7 +251,7 @@ export default function ClassManagement() {
     const file = e.target.files?.[0];
     if (!file || !editState.discipline) return;
     const text = await file.text();
-    const ras = text.trim().split('\n').slice(1).map((l) => l.split(',')[0]?.trim()).filter(Boolean);
+    const ras = parseCsvRows(text).slice(1).map((cols) => cols[0]).filter(Boolean);
     if (ras.length === 0) { toast.error('CSV vazio.'); return; }
 
     // Resolve RAs → student IDs via allUsers lookup

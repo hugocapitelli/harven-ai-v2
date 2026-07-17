@@ -1,6 +1,26 @@
 import axios from 'axios';
 
 // ---------------------------------------------------------------------------
+// "Manter conectado" (Login.tsx)
+// ---------------------------------------------------------------------------
+// O token vive em sessionStorage (morre com a aba). Quando o aluno opta por
+// manter-se conectado, Login espelha token+user em localStorage; este seed
+// roda no IMPORT do modulo — antes do AuthContext bootar (ele importa daqui),
+// entao uma aba/sessao nova ja nasce com a sessao restaurada.
+// TODO(follow-up fora do escopo aluno): logout no AuthContext deve limpar
+// tambem as chaves lembradas do localStorage.
+export const REMEMBER_KEYS = ['harven-access-token', 'user-data'] as const;
+
+try {
+  if (!sessionStorage.getItem('harven-access-token')) {
+    const remembered = REMEMBER_KEYS.map((k) => localStorage.getItem(k));
+    if (remembered.every(Boolean)) {
+      REMEMBER_KEYS.forEach((k, i) => sessionStorage.setItem(k, remembered[i]!));
+    }
+  }
+} catch { /* storage indisponivel (SSR/privacidade) — segue sem restaurar */ }
+
+// ---------------------------------------------------------------------------
 // Axios instance
 // ---------------------------------------------------------------------------
 const api = axios.create({
@@ -25,6 +45,9 @@ api.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401 && window.location.pathname !== '/login') {
       sessionStorage.clear();
+      // Token invalido: limpar tambem o "manter conectado", senao o seed de
+      // import reidrataria o mesmo token morto em loop.
+      try { REMEMBER_KEYS.forEach((k) => localStorage.removeItem(k)); } catch { /* noop */ }
       window.location.href = '/login';
     }
     return Promise.reject(error);
@@ -54,6 +77,20 @@ const upload = (
         : undefined,
     })
     .then(d);
+};
+
+// ---------------------------------------------------------------------------
+// Media URL resolver
+// ---------------------------------------------------------------------------
+// O backend devolve file_url/media_url RELATIVOS (ex.: /uploads/x.mp4). O TTS
+// ja prefixava com VITE_API_URL, mas video/audio/imagem/iframe usavam o path
+// cru no src — quebrava sempre que a API nao esta na mesma origem do front.
+// Um unico resolvedor para toda midia.
+export const resolveMediaUrl = (url?: string | null): string | undefined => {
+  if (!url) return undefined;
+  if (/^(https?:|blob:|data:)/i.test(url)) return url;
+  const base = import.meta.env.VITE_API_URL || '';
+  return url.startsWith('/') ? `${base}${url}` : `${base}/${url}`;
 };
 
 // ---------------------------------------------------------------------------
@@ -267,6 +304,11 @@ export const usersApi = {
   create:       (data: Record<string, unknown>)    => api.post('/users', data).then(d),
   createBatch:  (users: Record<string, unknown>[]) => api.post('/users/batch', users).then(d),
   update:       (id: string, data: Record<string, unknown>) => api.put(`/users/${id}`, data).then(d),
+  // Self-service: PUT /users/{id} e ADMIN-only (403 para aluno). O endpoint
+  // PUT /me (perfil/senha/preferencias do proprio usuario) esta sendo criado
+  // no backend (terminal Byte). TODO: confirmar o contrato final de /me quando
+  // o backend publicar (campos aceitos e formato de erro de senha atual).
+  updateMe:     (data: Record<string, unknown>)    => api.put('/me', data).then(d),
   delete:       (id: string)                       => api.delete(`/users/${id}`).then(d),
   uploadAvatar: (id: string, file: File) => upload(`/users/${id}/avatar`, file, 'file'),
 };

@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
+import { useAuth } from '../../contexts/AuthContext';
 import { disciplinesApi, coursesApi } from '../../services/api';
 import { unwrapList } from '../../lib/utils';
 import { Button } from '../../components/ui/Button';
@@ -24,8 +25,11 @@ interface CourseForm {
 const EMPTY_COURSE: CourseForm = { title: '', description: '' };
 
 export default function DisciplineEdit() {
-  const { id } = useParams<{ id: string }>();
+  // A rota é /instructor/discipline/:disciplineId/edit (App.tsx) — ler `id` deixava o param sempre undefined.
+  const { disciplineId: id } = useParams<{ disciplineId: string }>();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'ADMIN';
   const isNew = id === 'new';
 
   const [discipline, setDiscipline] = useState<Partial<Discipline>>({ title: '', code: '', department: '', image: '' });
@@ -83,7 +87,8 @@ export default function DisciplineEdit() {
         setImageFile(null);
       }
       if (isNew && disciplineId) {
-        navigate(`/instructor/discipline/${disciplineId}`, { replace: true });
+        // /instructor/discipline/{id} não existe como rota; a tela da disciplina é /instructor/class/:id.
+        navigate(`/instructor/class/${disciplineId}`, { replace: true });
       }
     } catch {
       toast.error('Erro ao salvar.');
@@ -222,9 +227,12 @@ export default function DisciplineEdit() {
                         <Button variant="ghost" size="icon" onClick={() => openEditCourse(c)}>
                           <span className="material-symbols-outlined text-[18px]">edit</span>
                         </Button>
-                        <Button variant="destructive" size="icon" onClick={() => setConfirmDelete(c.id)}>
-                          <span className="material-symbols-outlined text-[18px]">delete</span>
-                        </Button>
+                        {/* DELETE /courses é ADMIN-only no backend */}
+                        {isAdmin && (
+                          <Button variant="destructive" size="icon" onClick={() => setConfirmDelete(c.id)}>
+                            <span className="material-symbols-outlined text-[18px]">delete</span>
+                          </Button>
+                        )}
                       </div>
                     </Card>
                   ))}

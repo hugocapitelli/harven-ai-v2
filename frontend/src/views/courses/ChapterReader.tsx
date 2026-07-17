@@ -11,6 +11,7 @@ import {
   chatSessionsApi,
   ttsApi,
   userStatsApi,
+  resolveMediaUrl,
 } from '../../services/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { cn } from '../../lib/utils';
@@ -323,6 +324,16 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
             id: sessionData.id ?? sessionData.session_id,
             initialQuestionText: sessionData.initial_question_text ?? null,
           });
+          // Cross-device unlock: a session ``completed`` no SERVIDOR prova que o
+          // aluno ja esgotou as interacoes — o gate nao pode depender so do
+          // localStorage (outro device obrigava a refazer as 3 interacoes).
+          // Hidrata o flag e persiste localmente para os proximos loads.
+          setTutorDone(true);
+          if (user?.id && contentId) {
+            try {
+              localStorage.setItem(`harven_socratic_done:${user.id}:${contentId}`, '1');
+            } catch { /* best-effort — o flag em memoria ja destrava esta visita */ }
+          }
         } else {
           setActiveSession(null);
           setCompletedSession(null);
@@ -1242,7 +1253,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                       <video
                         controls
                         className="w-full rounded-xl shadow-lg"
-                        src={content.file_url}
+                        src={resolveMediaUrl(content.file_url)}
                         preload="metadata"
                       >
                         <track kind="captions" />
@@ -1273,7 +1284,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                       <audio
                         controls
                         className="w-full"
-                        src={content.file_url || content.audio_url}
+                        src={resolveMediaUrl(content.file_url || content.audio_url)}
                         preload="metadata"
                       />
                     ) : (
@@ -1287,7 +1298,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                   <div className="bg-white rounded-xl border border-harven-border p-4">
                     {content.file_url ? (
                       <img
-                        src={content.file_url}
+                        src={resolveMediaUrl(content.file_url)}
                         alt={content.title}
                         className="w-full rounded-xl object-contain"
                       />
@@ -1342,7 +1353,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                 {/* Text — file view */}
                 {normType === 'text' && !editing && activeView === 'file' && hasFile && (
                   <iframe
-                    src={content.file_url}
+                    src={resolveMediaUrl(content.file_url)}
                     className="w-full h-[600px] rounded-xl border border-harven-border bg-white"
                     title="Arquivo"
                   />
@@ -1602,9 +1613,10 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
           </div>
         </div>
 
-        {/* Chat Panel */}
+        {/* Chat Panel — painel lateral fixo (w-96) so cabe em >=lg; no mobile o
+            dialogo socratico vira overlay full-screen, senao fica inutilizavel. */}
         {chatOpen && (
-          <div className="w-96 border-l border-harven-border bg-white flex flex-col flex-shrink-0">
+          <div className="fixed inset-0 z-50 bg-white flex flex-col lg:static lg:inset-auto lg:z-auto lg:w-96 lg:border-l lg:border-harven-border lg:flex-shrink-0">
             <div className="h-14 flex items-center justify-between px-4 border-b border-harven-border">
               <div className="flex items-center gap-2 min-w-0">
                 <span className="material-symbols-outlined text-harven-gold">psychology</span>
