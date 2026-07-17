@@ -47,6 +47,16 @@ const TABS = [
   { id: 'logs', label: 'Logs', icon: 'description' },
 ];
 
+// Grupos de campos salvos em chamadas separadas: uma seção com campo que o
+// backend rejeita (coluna inexistente) não pode bloquear o save das demais.
+const SETTINGS_SECTIONS: Array<{ label: string; keys: string[] }> = [
+  { label: 'Plataforma', keys: ['platform_name', 'support_email', 'primary_color', 'logo_url', 'login_logo_url', 'login_bg_url'] },
+  { label: 'Módulos', keys: ['ai_tutor_enabled', 'gamification_enabled', 'dark_mode_enabled'] },
+  { label: 'Quotas', keys: ['max_tokens_per_response', 'max_upload_mb', 'daily_token_limit'] },
+  { label: 'Política de Senhas', keys: ['min_password_length', 'require_special_chars', 'password_expiration_days'] },
+  { label: 'Sessão', keys: ['session_timeout'] },
+];
+
 
 export default function SystemSettings() {
   const [searchParams] = useSearchParams();
@@ -95,13 +105,46 @@ export default function SystemSettings() {
   }, [activeTab]);
 
   const handleSave = async () => {
+    const changedKeys = Object.keys(settings).filter(
+      (k) => JSON.stringify(settings[k]) !== JSON.stringify(originalSettings[k]),
+    );
+    if (changedKeys.length === 0) return;
+
+    // Monta um payload por seção só com os campos alterados; campos que não
+    // pertencem a nenhuma seção conhecida são enviados individualmente.
+    const groups: Array<{ label: string; payload: Record<string, unknown> }> = [];
+    const assigned = new Set<string>();
+    for (const section of SETTINGS_SECTIONS) {
+      const keys = section.keys.filter((k) => changedKeys.includes(k));
+      if (keys.length === 0) continue;
+      keys.forEach((k) => assigned.add(k));
+      groups.push({ label: section.label, payload: Object.fromEntries(keys.map((k) => [k, settings[k]])) });
+    }
+    for (const k of changedKeys.filter((k) => !assigned.has(k))) {
+      groups.push({ label: k, payload: { [k]: settings[k] } });
+    }
+
     setSaving(true);
-    try {
-      await adminApi.updateSettings(settings as Record<string, unknown>);
-      setOriginalSettings({ ...settings });
+    const savedOriginal = { ...originalSettings };
+    const failed: string[] = [];
+    for (const group of groups) {
+      try {
+        await adminApi.updateSettings(group.payload);
+        Object.assign(savedOriginal, group.payload);
+      } catch {
+        failed.push(group.label);
+      }
+    }
+    setOriginalSettings(savedOriginal);
+    setSaving(false);
+
+    if (failed.length === 0) {
       toast.success('Configurações salvas.');
-    } catch { toast.error('Erro ao salvar.'); }
-    finally { setSaving(false); }
+    } else if (failed.length < groups.length) {
+      toast.warning(`Salvo parcialmente. Falhou: ${failed.join(', ')}.`);
+    } else {
+      toast.error('Erro ao salvar.');
+    }
   };
 
   const handleLogoUpload = async (type: 'logo' | 'login-logo' | 'login-bg', file: File) => {
