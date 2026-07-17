@@ -23,6 +23,7 @@ non-blocking wrapper handlers should prefer.
 import logging
 from typing import Dict, List, Optional
 
+from postgrest.exceptions import APIError
 from supabase import Client
 
 from .base import BaseRepository
@@ -145,16 +146,37 @@ class ChatRepository(BaseRepository):
         ``(created_at, sequence, id)``: ``created_at`` is primary; ``sequence``
         (migration A backfill) and ``id`` are deterministic tiebreakers so two
         turns sharing a microsecond never reorder (#TPP-3 ordering defect).
+
+        Un-migrated-DB degradation (prod incident 2026-07-17): a DB where
+        migration ``20260603a`` was never applied has NO ``sequence`` column, so
+        PostgREST rejects the ordered read with 42703 (undefined_column) and every
+        transcript endpoint 500s while writes/counts keep working. On exactly that
+        error, retry ordered by ``(created_at, id)`` — the same deterministic key
+        the migration's backfill uses — so the transcript stays readable. Any
+        other APIError propagates untouched.
         """
-        res = (
-            self.client.table("chat_messages")
-            .select("*")
-            .eq("session_id", session_id)
-            .order("created_at")
-            .order("sequence")
-            .order("id")
-            .execute()
-        )
+        def _query(with_sequence: bool):
+            q = (
+                self.client.table("chat_messages")
+                .select("*")
+                .eq("session_id", session_id)
+                .order("created_at")
+            )
+            if with_sequence:
+                q = q.order("sequence")
+            return q.order("id").execute()
+
+        try:
+            res = _query(with_sequence=True)
+        except APIError as exc:
+            if getattr(exc, "code", None) != "42703":
+                raise
+            logger.warning(
+                "chat_messages.sequence missing (migration 20260603a not applied); "
+                "falling back to (created_at, id) ordering for session %s",
+                session_id,
+            )
+            res = _query(with_sequence=False)
         return res.data or []
 
     def get_session_with_messages(self, session_id: str) -> Optional[Dict]:

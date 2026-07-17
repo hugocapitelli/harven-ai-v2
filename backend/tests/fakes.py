@@ -36,6 +36,8 @@ import copy
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
+from postgrest.exceptions import APIError
+
 
 class _Result(SimpleNamespace):
     """``.execute()`` return value — has ``.data`` and ``.count``."""
@@ -196,6 +198,19 @@ class _QueryBuilder:
         rows = self._fake._tables.setdefault(self._table, [])
 
         if self._op == "select":
+            # Un-migrated-DB fidelity: PostgREST rejects a query that references a
+            # column absent from the table's schema with 42703 (undefined_column),
+            # regardless of whether any row matches. Tests opt in per-table via
+            # ``mark_missing_column`` to reproduce a prod DB missing a migration.
+            missing = self._fake._missing_columns.get(self._table, set())
+            for col, _desc in self._orders:
+                if col in missing:
+                    raise APIError({
+                        "code": "42703",
+                        "message": f"column {self._table}.{col} does not exist",
+                        "details": None,
+                        "hint": None,
+                    })
             matched = [copy.deepcopy(r) for r in rows if self._matches(r)]
             # Apply accumulated sort keys right-to-left (stable sort) so the first
             # ``.order`` is the most significant key — matching PostgREST chaining.
@@ -299,6 +314,9 @@ class FakeSupabaseClient:
     ):
         self._tables: Dict[str, List[Dict[str, Any]]] = {}
         self._id_counters: Dict[str, int] = {}
+        # table -> set of column names the "DB schema" does NOT have. Queries that
+        # ORDER BY one of these raise the PostgREST 42703 APIError (see execute()).
+        self._missing_columns: Dict[str, set] = {}
         self.mutations: List[Dict[str, Any]] = []
         # When False, this fake exposes NO ``.rpc`` attribute at all — mirroring a
         # DB where migration B (TPP-1) has not been applied, so chat_repo exercises
@@ -391,6 +409,12 @@ class FakeSupabaseClient:
 
     def add(self, table: str, row: Dict[str, Any]) -> "FakeSupabaseClient":
         self._tables.setdefault(table, []).append(copy.deepcopy(row))
+        return self
+
+    def mark_missing_column(self, table: str, column: str) -> "FakeSupabaseClient":
+        """Declare that ``table`` lacks ``column`` in the simulated DB schema —
+        mirrors a production DB where an additive migration was never applied."""
+        self._missing_columns.setdefault(table, set()).add(column)
         return self
 
     def rows(self, table: str) -> List[Dict[str, Any]]:
