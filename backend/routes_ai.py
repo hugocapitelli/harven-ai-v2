@@ -1349,6 +1349,14 @@ def _create_chat_session_row(
 
     SOC-1: ``initial_question_text`` (when provided) is written on creation so the
     chosen "Pergunta para Reflexão" is the durable source of truth for the lock.
+
+    P0 (nova-tentativa fix): the DB enforces at most ONE ``active`` session per
+    ``(user_id, content_id)``. The caller resolves only the NEWEST row for the
+    pair, so an older ``active`` attempt hidden behind a newer ``completed`` row
+    (GRD-2 phantom / clock ties / races) makes this insert violate that unique
+    index → the whole "Refazer sessão" 500s. On a unique violation we recover by
+    resuming the surviving ``active`` row instead of surfacing the error; any
+    other failure still propagates.
     """
     new_session = {
         "user_id": uid,
@@ -1358,8 +1366,28 @@ def _create_chat_session_row(
     }
     if initial_question_text is not None:
         new_session["initial_question_text"] = initial_question_text
-    insert_result = client.table("chat_sessions").insert(new_session).execute()
-    return insert_result.data[0] if insert_result.data else new_session
+    try:
+        insert_result = client.table("chat_sessions").insert(new_session).execute()
+        return insert_result.data[0] if insert_result.data else new_session
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "unique" not in msg and "duplicate" not in msg and "23505" not in msg:
+            raise
+        row = _get_active_session_row(client, uid, content_id)
+        if row:
+            return _ensure_initial_question(client, row, initial_question_text)
+        raise
+
+
+def _get_active_session_row(client: Client, uid: str, content_id: str) -> dict | None:
+    """Newest ``active`` session for the pair, or None. ``.order().limit(1)`` keeps
+    ``.maybe_single()`` safe even if legacy data holds >1 active row (GRD-3)."""
+    res = client.table("chat_sessions").select("*").eq(
+        "user_id", uid
+    ).eq("content_id", content_id).eq("status", "active").order(
+        "created_at", desc=True
+    ).limit(1).maybe_single().execute()
+    return getattr(res, "data", None) if res else None
 
 
 def _ensure_initial_question(
@@ -1495,6 +1523,17 @@ async def create_or_get_chat_session(
             # a deliberate "new attempt after completion" is a product decision —
             # SEC-CHAT-3 — handled here at the app layer.) SOC-1: the new attempt
             # gets the NEW question written on creation.
+            #
+            # P0 (nova-tentativa fix): the newest row being ``completed`` does NOT
+            # guarantee the pair has no ``active`` row — an older active attempt can
+            # survive behind it (GRD-2 phantom / clock ties). Inserting a 2nd active
+            # would violate the one-active-per-pair unique index → 500. Resume the
+            # stranded active attempt when it exists; only create when none does.
+            stranded_active = _get_active_session_row(client, uid, data.content_id)
+            if stranded_active:
+                return _ensure_initial_question(
+                    client, stranded_active, data.initial_question_text
+                )
             return _create_chat_session_row(
                 client, uid, data.content_id, data.initial_question_text
             )
