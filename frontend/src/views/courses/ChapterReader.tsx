@@ -12,6 +12,7 @@ import {
   chatSessionsApi,
   ttsApi,
   userStatsApi,
+  resolveMediaUrl,
 } from '../../services/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { cn } from '../../lib/utils';
@@ -1281,7 +1282,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                       <video
                         controls
                         className="w-full rounded-xl shadow-lg"
-                        src={content.file_url}
+                        src={resolveMediaUrl(content.file_url)}
                         preload="metadata"
                       >
                         <track kind="captions" />
@@ -1312,7 +1313,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                       <audio
                         controls
                         className="w-full"
-                        src={content.file_url || content.audio_url}
+                        src={resolveMediaUrl(content.file_url || content.audio_url)}
                         preload="metadata"
                       />
                     ) : (
@@ -1326,7 +1327,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                   <div className="bg-white rounded-xl border border-harven-border p-4">
                     {content.file_url ? (
                       <img
-                        src={content.file_url}
+                        src={resolveMediaUrl(content.file_url)}
                         alt={content.title}
                         className="w-full rounded-xl object-contain"
                       />
@@ -1381,7 +1382,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                 {/* Text — file view */}
                 {normType === 'text' && !editing && activeView === 'file' && hasFile && (
                   <iframe
-                    src={content.file_url}
+                    src={resolveMediaUrl(content.file_url)}
                     className="w-full h-[600px] rounded-xl border border-harven-border bg-white"
                     title="Arquivo"
                   />

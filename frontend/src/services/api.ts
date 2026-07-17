@@ -57,6 +57,20 @@ const upload = (
 };
 
 // ---------------------------------------------------------------------------
+// Media URL resolver
+// ---------------------------------------------------------------------------
+// O backend devolve file_url/media_url RELATIVOS (ex.: /uploads/x.mp4). O TTS
+// ja prefixava com VITE_API_URL, mas video/audio/imagem/iframe usavam o path
+// cru no src — quebrava sempre que a API nao esta na mesma origem do front.
+// Um unico resolvedor para toda midia.
+export const resolveMediaUrl = (url?: string | null): string | undefined => {
+  if (!url) return undefined;
+  if (/^(https?:|blob:|data:)/i.test(url)) return url;
+  const base = import.meta.env.VITE_API_URL || '';
+  return url.startsWith('/') ? `${base}${url}` : `${base}/${url}`;
+};
+
+// ---------------------------------------------------------------------------
 // Public
 // ---------------------------------------------------------------------------
 export const publicApi = {
