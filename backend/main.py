@@ -95,6 +95,16 @@ class UserUpdate(BaseModel):
         return v
 
 
+class MeUpdate(BaseModel):
+    """Self-service profile update (P0). Deliberately NARROWER than UserUpdate:
+    no ``role``/``status`` — privilege fields are ADMIN-only via PUT /users/{id};
+    an extra field in the payload is silently ignored by pydantic, never applied."""
+    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    email: Optional[str] = Field(None, max_length=255)
+    password: Optional[str] = Field(None, min_length=6, max_length=128)
+    current_password: Optional[str] = Field(None, max_length=128)
+
+
 # -- Discipline --
 class DisciplineCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
@@ -631,6 +641,48 @@ async def batch_create_users(
             raise HTTPException(status_code=409, detail="Um ou mais RAs ja cadastrados")
         raise
     return {"message": f"{len(created)} usuarios criados", "count": len(created)}
+
+
+@app.put("/users/me", tags=["Users"])
+async def update_me(
+    body: MeUpdate,
+    current_user: dict = Depends(get_current_user),
+    client: Client = Depends(get_supabase),
+):
+    """P0: self-service profile/password update. Before this endpoint the only
+    write path was ``PUT /users/{id}`` (ADMIN-only), so a student could not fix
+    their own name/email or rotate their own password. Registered BEFORE the
+    ``/users/{user_id}`` routes so the literal ``me`` never binds as an id.
+    Identity always comes from the token — never from a body/path field."""
+    user_repo = UserRepository(client)
+    data: dict = {}
+    if body.name is not None:
+        data["name"] = body.name
+    if body.email is not None:
+        data["email"] = body.email
+
+    if body.password is not None:
+        if not body.current_password:
+            raise HTTPException(
+                status_code=400,
+                detail="current_password e obrigatorio para alterar a senha",
+            )
+        # Re-read the stored row: the auth dependency strips nothing, but token
+        # payloads/overrides may not carry password_hash — the DB is the truth.
+        stored = user_repo.get_by_id(current_user["id"]) or {}
+        if not stored.get("password_hash") or not verify_password(
+            body.current_password, stored["password_hash"]
+        ):
+            raise HTTPException(status_code=403, detail="Senha atual incorreta")
+        data["password_hash"] = hash_password(body.password)
+
+    if not data:
+        raise HTTPException(status_code=400, detail="Nenhum campo para atualizar")
+
+    user = user_repo.update(current_user["id"], data)
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario nao encontrado")
+    return _exclude_password(user)
 
 
 @app.get("/users/{user_id}", tags=["Users"])
