@@ -6,17 +6,17 @@ import { Avatar } from '../../components/ui/Avatar';
 import { Badge } from '../../components/ui/Badge';
 import { Progress } from '../../components/ui/Progress';
 import { Skeleton, SkeletonCard, SkeletonText } from '../../components/ui/Skeleton';
+import { unwrapList } from '../../lib/utils';
 import type { Achievement } from '../../types';
 
+// Chaves REAIS de GET /users/{id}/stats (routes_admin.py user_stats) — as
+// antigas total_courses/total_hours/avg_score nao existem e zeravam o perfil.
 interface UserStats {
-  total_courses?: number;
-  total_hours?: number;
-  total_certificates?: number;
-  avg_score?: number;
-  level?: number;
-  level_progress?: number;
-  xp?: number;
-  next_level_xp?: number;
+  courses_completed?: number;
+  hours_studied?: number;
+  average_score?: number;
+  streak_days?: number;
+  total_points?: number;
 }
 
 interface Activity {
@@ -75,9 +75,35 @@ export default function UserProfile() {
         ]);
         if (controller.signal.aborted) return;
         setStats(s ?? {});
-        setActivities(Array.isArray(a) ? a : []);
-        setCertificates(Array.isArray(c) ? c : []);
-        setAchievements(Array.isArray(ach) ? ach : []);
+        // activities/certificates/achievements chegam como envelope {data:[...]}
+        // — Array.isArray no envelope zerava as tres listas. Mapeia tambem os
+        // campos reais (activity_type; certificate_number; name em conquistas).
+        setActivities(unwrapList<Record<string, unknown>>(a).map((r) => ({
+          id: String(r.id ?? ''),
+          type: String(r.activity_type ?? r.type ?? '').toLowerCase(),
+          description: String(r.description ?? ''),
+          created_at: String(r.created_at ?? ''),
+        })));
+        setCertificates(unwrapList<Record<string, unknown>>(c).map((r) => ({
+          id: String(r.id ?? ''),
+          title: String(r.title ?? r.certificate_number ?? 'Certificado'),
+          course_name: (r.course_name as string) ?? undefined,
+          issued_at: String(r.issued_at ?? ''),
+          url: (r.url as string) ?? undefined,
+        })));
+        setAchievements(unwrapList<Record<string, unknown>>(ach).map((r) => ({
+          id: String(r.id ?? ''),
+          title: String(r.name ?? r.title ?? 'Conquista'),
+          description: (r.description as string) ?? '',
+          icon: String(r.icon ?? 'emoji_events'),
+          category: String(r.category ?? 'jornada'),
+          rarity: (String(r.rarity ?? 'comum').toLowerCase() as Achievement['rarity']),
+          points: Number(r.points ?? 0),
+          unlocked: true,
+          progress: 1,
+          target: 1,
+          progress_percent: 100,
+        })));
       } catch {
         if (controller.signal.aborted) return;
       } finally {
@@ -99,11 +125,17 @@ export default function UserProfile() {
   }
 
   const statCards = [
-    { icon: 'menu_book', label: 'Cursos', value: stats.total_courses ?? 0 },
-    { icon: 'schedule', label: 'Horas', value: stats.total_hours ?? 0 },
-    { icon: 'workspace_premium', label: 'Certificados', value: stats.total_certificates ?? 0 },
-    { icon: 'stars', label: 'Score', value: stats.avg_score != null ? `${stats.avg_score}%` : '—' },
+    { icon: 'menu_book', label: 'Cursos', value: stats.courses_completed ?? 0 },
+    { icon: 'schedule', label: 'Horas', value: stats.hours_studied ?? 0 },
+    { icon: 'workspace_premium', label: 'Certificados', value: certificates.length },
+    { icon: 'stars', label: 'Score', value: stats.average_score != null ? `${stats.average_score}%` : '—' },
   ];
+
+  // Nivel derivado de total_points (100 pts/nivel, mesma regra de StudentAchievements)
+  // — o backend nao devolve level/xp/next_level_xp.
+  const totalPoints = stats.total_points ?? 0;
+  const level = Math.floor(totalPoints / 100) + 1;
+  const levelProgress = totalPoints % 100;
 
   const unlockedAchievements = achievements.filter((a) => a.unlocked);
   const lockedAchievements = achievements.filter((a) => !a.unlocked);
@@ -123,15 +155,13 @@ export default function UserProfile() {
             {user?.bio && <p className="text-sm text-foreground mt-3">{user.bio}</p>}
 
             {/* Level Progress */}
-            {stats.level != null && (
-              <div className="mt-4 max-w-xs">
-                <div className="flex items-center justify-between text-xs mb-1">
-                  <span className="font-bold text-foreground">Nível {stats.level}</span>
-                  <span className="text-muted-foreground">{stats.xp ?? 0} / {stats.next_level_xp ?? 100} XP</span>
-                </div>
-                <Progress value={stats.level_progress ?? 0} />
+            <div className="mt-4 max-w-xs">
+              <div className="flex items-center justify-between text-xs mb-1">
+                <span className="font-bold text-foreground">Nível {level}</span>
+                <span className="text-muted-foreground">{totalPoints} / {level * 100} XP</span>
               </div>
-            )}
+              <Progress value={levelProgress} />
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -229,7 +259,7 @@ export default function UserProfile() {
                       key={a.id}
                       className={`p-4 rounded-xl border-2 text-center ${RARITY_COLORS[a.rarity] ?? 'border-gray-300 bg-gray-50'}`}
                     >
-                      <span className="text-3xl block mb-1">{a.icon}</span>
+                      <span className="material-symbols-outlined text-3xl block mb-1">{a.icon}</span>
                       <p className="text-xs font-bold text-foreground">{a.title}</p>
                       <Badge variant="outline" className="mt-1 text-[8px]">{a.rarity}</Badge>
                       <p className="text-[10px] text-muted-foreground mt-1">+{a.points} XP</p>
@@ -244,7 +274,7 @@ export default function UserProfile() {
                   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
                     {lockedAchievements.map((a) => (
                       <div key={a.id} className="p-4 rounded-xl border border-border bg-muted/30 text-center opacity-60">
-                        <span className="text-3xl block mb-1 grayscale">{a.icon}</span>
+                        <span className="material-symbols-outlined text-3xl block mb-1 grayscale">{a.icon}</span>
                         <p className="text-xs font-bold text-foreground">{a.title}</p>
                         {a.target > 0 && (
                           <div className="mt-2">
