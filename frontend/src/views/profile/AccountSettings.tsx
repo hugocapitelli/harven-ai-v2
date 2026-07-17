@@ -67,7 +67,8 @@ export default function AccountSettings() {
     if (!user?.id || !name.trim()) { toast.error('Nome é obrigatório.'); return; }
     setSaving(true);
     try {
-      await usersApi.update(user.id, { name, email, title, bio } as Record<string, unknown>);
+      // PUT /users/{id} e ADMIN-only (403 para aluno) — perfil proprio usa PUT /me.
+      await usersApi.updateMe({ name, email, title, bio } as Record<string, unknown>);
       updateUser({ name, email, title, bio });
       toast.success('Perfil atualizado.');
     } catch {
@@ -106,7 +107,7 @@ export default function AccountSettings() {
     if (newPassword.length < 8) { toast.error('Senha deve ter pelo menos 8 caracteres.'); return; }
     setSaving(true);
     try {
-      await usersApi.update(user.id, { current_password: currentPassword, password: newPassword } as Record<string, unknown>);
+      await usersApi.updateMe({ current_password: currentPassword, password: newPassword } as Record<string, unknown>);
       toast.success('Senha alterada.');
       setCurrentPassword('');
       setNewPassword('');
@@ -122,7 +123,7 @@ export default function AccountSettings() {
     if (!user?.id) return;
     setSaving(true);
     try {
-      await usersApi.update(user.id, { notification_preferences: notifPrefs } as Record<string, unknown>);
+      await usersApi.updateMe({ notification_preferences: notifPrefs } as Record<string, unknown>);
       toast.success('Preferências salvas.');
     } catch {
       toast.error('Erro ao salvar preferências.');
