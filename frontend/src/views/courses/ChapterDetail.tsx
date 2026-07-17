@@ -203,7 +203,7 @@ export default function ChapterDetail() {
             ) : (
               <div className="mt-4 space-y-3">
                 {contents
-                  .sort((a, b) => (a as Content & { order?: number }).order ?? 0 - ((b as Content & { order?: number }).order ?? 0))
+                  .sort((a, b) => ((a as Content & { order?: number }).order ?? 0) - ((b as Content & { order?: number }).order ?? 0))
                   .map((content, idx) => {
                     const meta = CONTENT_TYPE_META[content.type] ?? CONTENT_TYPE_META.text;
                     return (
