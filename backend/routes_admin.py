@@ -888,7 +888,10 @@ async def delete_notification(
 @router.get("/search", tags=["Search"], summary="Busca global")
 async def global_search(
     q: str = Query(..., min_length=2, max_length=200),
-    _user: dict = Depends(get_current_user),
+    # P1: this search returns users (name/email/RA), draft courses and every
+    # discipline — gated only by get_current_user it exposed the WHOLE base to
+    # any student. Cross-user search is a staff capability.
+    _user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
     client: Client = Depends(get_supabase),
 ):
     safe = _sanitize_search(q)
@@ -940,7 +943,9 @@ async def global_search(
 
 @router.get("/dashboard/stats", tags=["Dashboard"], summary="Estatisticas agregadas")
 async def dashboard_stats(
-    _user: dict = Depends(get_current_user),
+    # P1: institutional aggregates (total users, role breakdown, average
+    # performance score) were readable by any STUDENT. Staff-only.
+    _user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
     client: Client = Depends(get_supabase),
 ):
     total_users = (client.table("users").select("id", count="exact").execute()).count or 0
