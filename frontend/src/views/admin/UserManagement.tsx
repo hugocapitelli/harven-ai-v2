@@ -111,9 +111,17 @@ export default function UserManagement() {
 
   const handleEdit = async () => {
     if (!editingUser) return;
+    if (form.password.trim() && form.password.trim().length < 6) {
+      toast.error('Nova senha deve ter no mínimo 6 caracteres.');
+      return;
+    }
     setSaving(true);
     try {
-      await usersApi.update(editingUser.id, form as Record<string, unknown>);
+      // O backend hasheia qualquer `password` recebido no update; enviar ''
+      // resetaria a senha do usuário. Só enviar quando o admin digitou uma nova.
+      const payload: Record<string, unknown> = { ...form };
+      if (!form.password.trim()) delete payload.password;
+      await usersApi.update(editingUser.id, payload);
       toast.success('Usuário atualizado.');
       setEditingUser(null);
       const data = await usersApi.list();
@@ -336,14 +344,13 @@ export default function UserManagement() {
             <Input label="Nome" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} autoFocus />
             <Input label="RA" value={form.ra} onChange={(e) => setForm((f) => ({ ...f, ra: e.target.value }))} />
             <Input label="Email" type="email" value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />
-            {!editingUser && (
-              <Input
-                label="Senha temporária"
-                type="password"
-                value={form.password}
-                onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
-              />
-            )}
+            <Input
+              label={editingUser ? 'Nova senha (opcional)' : 'Senha temporária'}
+              type="password"
+              placeholder={editingUser ? 'Deixe em branco para manter a senha atual' : undefined}
+              value={form.password}
+              onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
+            />
             <Select label="Role" value={form.role} onChange={(e) => setForm((f) => ({ ...f, role: e.target.value as UserRole }))}>
               <option value="STUDENT">Aluno</option>
               <option value="INSTRUCTOR">Professor</option>
