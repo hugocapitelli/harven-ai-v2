@@ -6,7 +6,6 @@ import ReactMarkdown from 'react-markdown';
 import DOMPurify from 'dompurify';
 import {
   contentsApi,
-  coursesApi,
   questionsApi,
   aiApi,
   chatSessionsApi,
@@ -917,21 +916,10 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
       return;
     }
     setCompleting(true);
-    let courseJustFinished = false;
     try {
-      const res = await userStatsApi.completeContent(user.id, courseId, contentId);
+      await userStatsApi.completeContent(user.id, courseId, contentId);
       setCompleted(true);
       toast.success('Conteudo marcado como concluido!');
-      // Deteccao de fim de curso: o proprio completeContent devolve o progresso
-      // agregado; se nao vier, consulta o endpoint de progresso.
-      let pct = Number((res as Record<string, unknown> | null)?.progress_percent);
-      if (!Number.isFinite(pct)) {
-        try {
-          const p = await userStatsApi.getCourseProgress(user.id, courseId);
-          pct = Number(p?.progress_percent ?? 0);
-        } catch { pct = 0; }
-      }
-      courseJustFinished = pct >= 100;
     } catch (err) {
       const status = (err as { response?: { status?: number } })?.response?.status;
       if (status === 503) {
@@ -956,28 +944,11 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
         console.warn('[ChapterReader] chatSessionsApi.complete failed (non-blocking)');
       }
     }
-    // Fim de curso: progresso chegou a 100% — consolida no backend
-    // (POST /courses/{id}/complete atualiza course_progress + user_stats +
-    // activity) e emite o certificado (POST /users/{id}/certificates, que o
-    // servidor so libera com progresso 100%). Best-effort: falha aqui nunca
-    // desfaz a conclusao do conteudo. O certificado aparece no UserProfile.
-    if (courseJustFinished) {
-      try {
-        await coursesApi.complete(courseId);
-        const cert = await userStatsApi.issueCertificate(user.id, courseId);
-        const certNumber = (cert as Record<string, unknown> | null)?.certificate_number;
-        toast.success(
-          certNumber
-            ? `Curso concluido! Certificado ${String(certNumber)} emitido — veja no seu perfil.`
-            : 'Curso concluido! Certificado emitido — veja no seu perfil.',
-          { duration: 8000 },
-        );
-      } catch {
-        console.warn('[ChapterReader] course-completion/certificate chain failed (non-blocking)');
-        toast.success('Curso concluido!');
-      }
-    }
     setCompleting(false);
+    // NOTE (out of scope, documented follow-up): course-completion certificate
+    // emission (userStatsApi.issueCertificate) is intentionally NOT wired here.
+    // See docs/stories/epic-front/sf-3.md — course-completion detection is a
+    // separate follow-up; this handler closes per-content completion only.
   };
 
   // ---- Reprocess with AI ----

@@ -165,9 +165,6 @@ export const coursesApi = {
   uploadImage: (id: string, file: File)                    => upload(`/courses/${id}/image`, file, 'file'),
   listByClass: (classId: string)                           => api.get(`/classes/${classId}/courses`).then(d),
   createInClass: (classId: string, data: Record<string, unknown>) => api.post(`/classes/${classId}/courses`, data).then(d),
-  // Gamification: marca o curso do PROPRIO usuario autenticado como 100%
-  // (routes_admin.py complete_course) — pre-requisito para emitir certificado.
-  complete:    (id: string)                                => api.post(`/courses/${id}/complete`).then(d),
 };
 
 // ---------------------------------------------------------------------------
