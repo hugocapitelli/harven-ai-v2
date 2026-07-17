@@ -55,6 +55,8 @@ export default function UserManagement() {
   const [notifyingUser, setNotifyingUser] = useState<ApiUser | null>(null);
   const [notifyForm, setNotifyForm] = useState(EMPTY_NOTIFY_FORM);
   const [notifySending, setNotifySending] = useState(false);
+  const [csvPending, setCsvPending] = useState<Array<Record<string, unknown>> | null>(null);
+  const [csvDefaultPassword, setCsvDefaultPassword] = useState('');
   const csvRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -174,17 +176,11 @@ export default function UserManagement() {
     }
   };
 
-  const handleCsvImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const text = await file.text();
-    const lines = text.trim().split('\n').slice(1);
-    const batch = lines.map((line) => {
-      const [name, ra, email, role] = line.split(',').map((s) => s.trim());
-      return { name, ra, email, role: (role?.toUpperCase() || 'STUDENT') as UserRole };
-    }).filter((u) => u.name && u.email);
-
-    if (batch.length === 0) { toast.error('CSV vazio ou inválido.'); return; }
+  const importBatch = async (rows: Array<Record<string, unknown>>, defaultPassword = '') => {
+    const batch = rows.map((r) => ({
+      ...r,
+      password: String(r.password ?? '').length >= 6 ? r.password : defaultPassword,
+    }));
     setSaving(true);
     try {
       await usersApi.createBatch(batch as Record<string, unknown>[]);
@@ -196,8 +192,30 @@ export default function UserManagement() {
       toast.error(String(msg));
     } finally {
       setSaving(false);
-      if (csvRef.current) csvRef.current.value = '';
     }
+  };
+
+  const handleCsvImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    const lines = text.trim().split('\n').slice(1);
+    // Colunas: name,ra,email,role[,password] — password é opcional no CSV
+    const rows = lines.map((line) => {
+      const [name, ra, email, role, password] = line.split(',').map((s) => s.trim());
+      return { name, ra, email, role: (role?.toUpperCase() || 'STUDENT') as UserRole, password: password || '' };
+    }).filter((u) => u.name && u.email);
+    if (csvRef.current) csvRef.current.value = '';
+
+    if (rows.length === 0) { toast.error('CSV vazio ou inválido.'); return; }
+    // POST /users/batch exige password (min 6) por usuário; linhas sem senha
+    // válida no CSV precisam de uma senha padrão definida pelo admin.
+    if (rows.some((r) => (r.password ?? '').length < 6)) {
+      setCsvDefaultPassword(`Harven@${Math.floor(1000 + Math.random() * 9000)}`);
+      setCsvPending(rows);
+      return;
+    }
+    await importBatch(rows);
   };
 
   const openEdit = (u: ApiUser) => {
@@ -386,6 +404,38 @@ export default function UserManagement() {
           <Button variant="outline" onClick={() => setDeletingUser(null)}>Cancelar</Button>
           <Button variant="destructive" onClick={handleDelete} disabled={saving}>
             {saving ? 'Excluindo...' : 'Excluir'}
+          </Button>
+        </Modal.Footer>
+      </Modal.Root>
+
+      {/* CSV Default Password Modal */}
+      <Modal.Root open={!!csvPending} onClose={() => setCsvPending(null)} size="sm">
+        <Modal.Header title="Senha padrão para importação" onClose={() => setCsvPending(null)} />
+        <Modal.Body>
+          <div className="flex flex-col gap-4">
+            <p className="text-sm text-muted-foreground">
+              {csvPending?.filter((r) => String(r.password ?? '').length < 6).length} linha(s) do CSV sem senha válida
+              (mínimo 6 caracteres). Defina a senha temporária que será aplicada a esses usuários.
+            </p>
+            <Input
+              label="Senha padrão"
+              value={csvDefaultPassword}
+              onChange={(e) => setCsvDefaultPassword(e.target.value)}
+              autoFocus
+            />
+          </div>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="outline" onClick={() => setCsvPending(null)}>Cancelar</Button>
+          <Button
+            disabled={saving || csvDefaultPassword.trim().length < 6}
+            onClick={() => {
+              const rows = csvPending!;
+              setCsvPending(null);
+              importBatch(rows, csvDefaultPassword.trim());
+            }}
+          >
+            {saving ? 'Importando...' : 'Importar'}
           </Button>
         </Modal.Footer>
       </Modal.Root>
