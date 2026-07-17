@@ -25,7 +25,8 @@ interface CourseForm {
 const EMPTY_COURSE: CourseForm = { title: '', description: '' };
 
 export default function DisciplineEdit() {
-  const { id } = useParams<{ id: string }>();
+  // A rota é /instructor/discipline/:disciplineId/edit (App.tsx) — ler `id` deixava o param sempre undefined.
+  const { disciplineId: id } = useParams<{ disciplineId: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
   const isAdmin = user?.role === 'ADMIN';
@@ -86,7 +87,8 @@ export default function DisciplineEdit() {
         setImageFile(null);
       }
       if (isNew && disciplineId) {
-        navigate(`/instructor/discipline/${disciplineId}`, { replace: true });
+        // /instructor/discipline/{id} não existe como rota; a tela da disciplina é /instructor/class/:id.
+        navigate(`/instructor/class/${disciplineId}`, { replace: true });
       }
     } catch {
       toast.error('Erro ao salvar.');
