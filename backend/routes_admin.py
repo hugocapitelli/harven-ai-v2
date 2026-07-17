@@ -912,12 +912,18 @@ async def mark_all_read(
     # IDOR gate (SEC-ADMIN-3): only the owner of {user_id}, or an ADMIN, may
     # suppress this feed — checked before any update touches another user's rows.
     require_self_or_role(user_id, current_user, "ADMIN")
+    # P2 semantics fix: the old code counted the rows REMAINING unread after the
+    # update but returned that number under a variable named ``marked`` — so
+    # ``remaining_unread`` actually carried a post-update leftover count and
+    # ``marked_read`` was the literal string "all". Count before/after so each
+    # field means what it says.
+    before = client.table("notifications").select("id", count="exact").eq("user_id", user_id).eq("is_read", False).execute()
+    to_mark = before.count or 0
     # Supabase doesn't return an update count directly; update all matching rows
     client.table("notifications").update({"is_read": True}).eq("user_id", user_id).eq("is_read", False).execute()
     # Count remaining unread to confirm (should be 0)
     remaining = client.table("notifications").select("id", count="exact").eq("user_id", user_id).eq("is_read", False).execute()
-    marked = (remaining.count or 0)
-    return {"marked_read": "all", "remaining_unread": marked}
+    return {"marked_read": to_mark, "remaining_unread": remaining.count or 0}
 
 
 @router.delete("/notifications/{notification_id}", tags=["Notifications"], summary="Excluir notificacao")
