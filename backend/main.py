@@ -1054,6 +1054,21 @@ async def list_courses(
     if discipline_id:
         filters["discipline_id"] = discipline_id
 
+    # P1: a STUDENT could list EVERY course on the platform, including drafts and
+    # courses of disciplines they are not enrolled in. Scope students to their own
+    # enrollment (discipline_students) and to non-draft courses; staff keeps the
+    # full listing.
+    if (current_user.get("role") or "").upper() == "STUDENT":
+        disc_repo = DisciplineRepository(client)
+        enrolled_ids = disc_repo.get_student_discipline_ids(current_user["id"])
+        if discipline_id and discipline_id not in enrolled_ids:
+            return {"data": [], "total": 0, "page": page, "per_page": per_page}
+        target_ids = [discipline_id] if discipline_id else enrolled_ids
+        if not target_ids:
+            return {"data": [], "total": 0, "page": page, "per_page": per_page}
+        filters["discipline_id"] = target_ids  # BaseRepository maps list → IN
+        filters["status"] = "active"
+
     courses, total = course_repo.get_all(
         filters=filters if filters else None,
         order_by="created_at",
