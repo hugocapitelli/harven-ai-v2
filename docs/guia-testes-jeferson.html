@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Harven AI · Acessos e Guia de Testes da Plataforma</title>
+<style>
+  @page { size: A4; margin: 16mm 14mm; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; color: #1a2b20; margin: 0; font-size: 12.5px; line-height: 1.5; }
+  .header { background: linear-gradient(135deg, #0e3d24 0%, #14532d 60%, #1a6b38 100%); color: #fff; border-radius: 14px; padding: 24px 28px; margin-bottom: 18px; }
+  .header .brand { font-size: 11px; letter-spacing: 2.5px; text-transform: uppercase; color: #b8f04d; font-weight: 700; }
+  .header h1 { margin: 6px 0 4px; font-size: 24px; }
+  .header .meta { font-size: 11.5px; color: #d7e8dc; }
+  .badge { display: inline-block; background: #b8f04d; color: #0e3d24; font-weight: 700; border-radius: 999px; padding: 2px 12px; font-size: 11px; margin-left: 6px; }
+  .role-badge { display: inline-block; border-radius: 999px; padding: 2px 12px; font-size: 11px; font-weight: 700; letter-spacing: .5px; }
+  .role-admin { background: #0e3d24; color: #fff; }
+  .role-prof { background: #1a6b38; color: #fff; }
+  .role-aluno { background: #d9f0c2; color: #14532d; }
+  h2 { font-size: 15px; color: #0e3d24; border-bottom: 2px solid #b8f04d; padding-bottom: 4px; margin: 22px 0 10px; }
+  h2 .num { display: inline-block; background: #0e3d24; color: #b8f04d; border-radius: 6px; width: 22px; height: 22px; text-align: center; line-height: 22px; font-size: 12px; margin-right: 8px; }
+  h3.parte { font-size: 13px; color: #14532d; text-transform: uppercase; letter-spacing: 1.5px; margin: 26px 0 4px; padding: 8px 14px; background: #eef7ee; border-radius: 8px; border-left: 5px solid #1a6b38; }
+  h3.parte .login { font-family: "SF Mono", Menlo, monospace; font-weight: 400; text-transform: none; letter-spacing: 0; color: #567; font-size: 11.5px; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 14px; page-break-inside: auto; }
+  tr { page-break-inside: avoid; }
+  h2, h3.parte { page-break-after: avoid; }
+  th { background: #eef7ee; color: #0e3d24; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; padding: 7px 9px; border: 1px solid #d5e6d5; }
+  td { padding: 7px 9px; border: 1px solid #d5e6d5; vertical-align: top; }
+  tr:nth-child(even) td { background: #fafdf8; }
+  .chk { font-size: 15px; color: #14532d; width: 26px; text-align: center; }
+  .esperado { color: #14532d; }
+  .intro { background: #f4faee; border: 1px solid #d5e6d5; border-left: 5px solid #b8f04d; border-radius: 8px; padding: 12px 16px; margin-bottom: 6px; }
+  .alerta { background: #fff7ed; border: 1px solid #fed7aa; border-left: 5px solid #f59e0b; border-radius: 8px; padding: 10px 16px; margin: 10px 0; }
+  .mono { font-family: "SF Mono", Menlo, monospace; font-size: 11.5px; background: #eef2ee; border-radius: 4px; padding: 1px 6px; white-space: nowrap; }
+  .card { background: #f4faee; border: 1px solid #d5e6d5; border-radius: 10px; padding: 14px 18px; margin: 8px 0 14px; }
+  .card h4 { margin: 0 0 6px; font-size: 15px; color: #0e3d24; }
+  .card .disc { font-size: 11.5px; color: #567; margin-bottom: 8px; }
+  .card ul { margin: 4px 0 0; padding-left: 18px; }
+  .card li { margin: 2px 0; }
+  .obs-box { border: 1.5px dashed #9fbfa8; border-radius: 8px; min-height: 84px; padding: 8px 12px; color: #667; }
+  .footer { margin-top: 22px; padding-top: 8px; border-top: 1px solid #d5e6d5; font-size: 10.5px; color: #567; display: flex; justify-content: space-between; }
+  .kv td:first-child { font-weight: 600; width: 32%; background: #f4faee; }
+  .pagebreak { page-break-before: always; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="brand">Harven AI · Tutor Socrático</div>
+  <h1>Acessos e Guia de Testes da Plataforma</h1>
+  <div class="meta">Três perfis provisionados para validação: <b>Admin</b>, <b>Professor</b> e <b>Aluno</b> · Semestre 2026.2 · 17/07/2026</div>
+</div>
+
+<div class="intro">
+  <b>Bem-vindo ao teste da Harven AI!</b> Este guia leva você pela plataforma nos três papéis, um de cada vez: primeiro como <b>aluno</b> (percorrendo a jornada do Tutor Socrático), depois como <b>professor</b> (avaliando sessões e montando material) e, por fim, como <b>admin</b> (gestão da plataforma). Em cada passo, marque se o que aconteceu bate com o resultado esperado. Leva uns 40 minutos no total. Se algo falhar, anote o passo, tire um print e registre o horário, conforme a seção de registro no final.
+</div>
+
+<h2><span class="num">A</span>Acesso</h2>
+<table class="kv">
+  <tr><td>Endereço</td><td><span class="mono">https://harven.eximiaventures.com.br</span> — na tela de login, informe o RA (usuário) e a senha</td></tr>
+  <tr><td>Navegador</td><td>Chrome ou Safari atualizados, janela normal (não anônima)</td></tr>
+</table>
+<table>
+  <tr><th>Perfil</th><th>Usuário (RA)</th><th>Senha</th></tr>
+  <tr><td><span class="role-badge role-admin">ADMIN</span></td><td><span class="mono">jeferson.admin</span></td><td><span class="mono">Harven@2026</span></td></tr>
+  <tr><td><span class="role-badge role-prof">PROFESSOR</span></td><td><span class="mono">jeferson.prof</span></td><td><span class="mono">Harven@2026</span></td></tr>
+  <tr><td><span class="role-badge role-aluno">ALUNO</span></td><td><span class="mono">jeferson.aluno</span></td><td><span class="mono">Harven@2026</span></td></tr>
+</table>
+
+<h2><span class="num">B</span>Curso de teste</h2>
+<div class="card">
+  <h4>Fundamentos de IA no Agronegócio</h4>
+  <div class="disc">Disciplina: Inteligência Artificial Aplicada ao Agronegócio (IAA-2026) · Semestre 2026.2 · Status: Publicado</div>
+  Curso de teste com conteúdo real para navegação:
+  <ul>
+    <li><b>Capítulo 1, Introdução à IA</b></li>
+    <li>Lição 1: O que é IA</li>
+    <li>Lição 2: Integridade acadêmica na era da IA</li>
+  </ul>
+  <div style="margin-top:8px; font-size:11.5px; color:#567;">O <b>aluno</b> está matriculado na disciplina e vê o curso publicado. O <b>professor</b> é o instrutor do curso e da disciplina. O <b>admin</b> tem visão completa da plataforma.</div>
+</div>
+
+<h3 class="parte">Roteiro Parte 1 · Visão do Aluno <span class="login">login: jeferson.aluno</span></h3>
+
+<h2><span class="num">1</span>Login e navegação até o conteúdo</h2>
+<table>
+  <tr><th class="chk">✓</th><th style="width:44%">Passo</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td>1.1 Faça login com o RA <span class="mono">jeferson.aluno</span> e a senha</td><td class="esperado">Entra sem erro e vê o painel do aluno</td></tr>
+  <tr><td class="chk">☐</td><td>1.2 Abra a disciplina <b>Inteligência Artificial Aplicada ao Agronegócio</b> e o curso "Fundamentos de IA no Agronegócio"</td><td class="esperado">Lista de capítulos aparece; o Capítulo 1 "Introdução à IA" está visível</td></tr>
+  <tr><td class="chk">☐</td><td>1.3 Entre no capítulo e abra a <b>Lição 1 "O que é IA"</b></td><td class="esperado">O material abre normalmente, sem mensagem de erro e sem travar</td></tr>
+</table>
+
+<h2><span class="num">2</span>Iniciar a sessão socrática</h2>
+<table>
+  <tr><th class="chk">✓</th><th style="width:44%">Passo</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td>2.1 Na seção Questões Socráticas, escolha a questão 1 e inicie a conversa</td><td class="esperado">O painel "Tutor Socrático" abre e o tutor manda a primeira mensagem (a "provocação" de abertura)</td></tr>
+  <tr><td class="chk">☐</td><td>2.2 Observe o contador no topo do painel ANTES de responder qualquer coisa</td><td class="esperado"><b>3/3 interações disponíveis.</b> A mensagem de abertura do tutor NÃO gasta seu limite</td></tr>
+  <tr><td class="chk">☐</td><td>2.3 Confira o campo de digitação</td><td class="esperado">Liberado para escrever (não pode aparecer "Sessão concluída" nesta hora)</td></tr>
+</table>
+
+<h2><span class="num">3</span>Interagir até o limite</h2>
+<table>
+  <tr><th class="chk">✓</th><th style="width:44%">Passo</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td>3.1 Responda a pergunta do tutor com uma resposta de verdade (3 a 5 frases)</td><td class="esperado">Tutor responde e o contador cai para 2/3</td></tr>
+  <tr><td class="chk">☐</td><td>3.2 Responda de novo, aprofundando</td><td class="esperado">Contador cai para 1/3</td></tr>
+  <tr><td class="chk">☐</td><td>3.3 Mande sua terceira e última resposta</td><td class="esperado">Contador chega a 0/3, o tutor faz a síntese de fechamento e a sessão é concluída. SÓ AGORA aparece "Sessão concluída"</td></tr>
+  <tr><td class="chk">☐</td><td>3.4 Veja o status do conteúdo no topo da página</td><td class="esperado">Badge "Concluído"</td></tr>
+</table>
+
+<div class="alerta"><b>Ponto de atenção principal:</b> em nenhum momento a sessão pode aparecer como concluída ANTES de você ter mandado suas 3 respostas. Se isso acontecer, pare, tire print do painel inteiro (com o contador visível) e anote o horário.</div>
+
+<h2><span class="num">4</span>Refazer a sessão</h2>
+<table>
+  <tr><th class="chk">✓</th><th style="width:44%">Passo</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td>4.1 Com a sessão concluída, localize o botão <b>Refazer sessão</b> (no rodapé do chat ou no banner da seção de questões)</td><td class="esperado">Botão visível nos dois lugares</td></tr>
+  <tr><td class="chk">☐</td><td>4.2 Clique em Refazer sessão</td><td class="esperado">Chat reabre com a MESMA pergunta, tutor manda nova abertura, contador volta a <b>3/3</b> e o campo de digitação fica livre</td></tr>
+  <tr><td class="chk">☐</td><td>4.3 Mande 1 resposta na sessão nova</td><td class="esperado">Tutor responde, contador 2/3. Não pode voltar sozinho para "Sessão concluída"</td></tr>
+</table>
+
+<h2><span class="num">5</span>Sair e voltar (retomada)</h2>
+<table>
+  <tr><th class="chk">✓</th><th style="width:44%">Passo</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td>5.1 Com a sessão do cenário 4 pela metade, volte para a lista de capítulos e depois entre no conteúdo de novo</td><td class="esperado">A conversa reaparece de onde parou, com o contador certo, sem mensagem de erro</td></tr>
+  <tr><td class="chk">☐</td><td>5.2 Recarregue a página inteira (F5 ou Cmd+R) dentro do conteúdo</td><td class="esperado">Mesma coisa: conversa retomada, sem erro</td></tr>
+  <tr><td class="chk">☐</td><td>5.3 Complete as respostas restantes até concluir</td><td class="esperado">Fluxo termina normal, com síntese e status Concluído</td></tr>
+</table>
+
+<h2><span class="num">6</span>Teste em outro conteúdo (do zero)</h2>
+<table>
+  <tr><th class="chk">✓</th><th style="width:44%">Passo</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td>6.1 Abra a <b>Lição 2 "Integridade acadêmica na era da IA"</b>, que você nunca acessou, e vá direto na seção de questões</td><td class="esperado">Página abre sem erro (o caso "aluno sem sessão anterior" era outra fonte de erro corrigida)</td></tr>
+  <tr><td class="chk">☐</td><td>6.2 Inicie e complete uma sessão inteira nela</td><td class="esperado">Mesmo comportamento dos cenários 2 e 3</td></tr>
+</table>
+
+<h3 class="parte">Roteiro Parte 2 · Visão do Professor <span class="login">login: jeferson.prof</span></h3>
+<div class="intro" style="margin-bottom:10px;">Saia da conta de aluno e entre com a conta <b>professor</b> (RA <span class="mono">jeferson.prof</span>). A ideia central: a nota do aluno é <b>composta</b> pelas notas que o professor dá a cada interação com a IA, não digitada direto no quadro.</div>
+
+<h2><span class="num">7</span>Avaliar as sessões dos alunos</h2>
+<table>
+  <tr><th class="chk">✓</th><th style="width:44%">Passo</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td>7.1 Entre com a conta de professor e abra a disciplina <b>Inteligência Artificial Aplicada ao Agronegócio</b></td><td class="esperado">Painel do professor com as abas Disciplinas, Alunos, Quadro de Notas e Conversas</td></tr>
+  <tr><td class="chk">☐</td><td>7.2 Abra a aba <b>Quadro de Notas</b></td><td class="esperado">As notas aparecem SOMENTE para leitura (sem campos para digitar). Onde não há avaliação ainda, aparece "—"</td></tr>
+  <tr><td class="chk">☐</td><td>7.3 Clique na linha do aluno (ou vá pela aba Alunos) e abra o perfil dele na disciplina</td><td class="esperado">Abre o perfil do aluno, com as sessões socráticas feitas na Parte 1, agrupadas por curso e capítulo</td></tr>
+  <tr><td class="chk">☐</td><td>7.4 Abra uma sessão concluída, leia a conversa e dê uma nota de <b>0 a 10</b> (com feedback, se quiser)</td><td class="esperado">Campo de nota aceita 0 a 10 em passos de 0,5</td></tr>
+  <tr><td class="chk">☐</td><td>7.5 Volte ao <b>Quadro de Notas</b></td><td class="esperado">A nota que você deu apareceu na média do curso e na coluna Média, calculadas sozinhas</td></tr>
+  <tr><td class="chk">☐</td><td>7.6 Avalie uma segunda sessão e confira de novo</td><td class="esperado">A média recalcula com as duas notas (ex.: 8,0 e 6,0 viram 7,0)</td></tr>
+</table>
+
+<h2><span class="num">8</span>Criar seu próprio material e publicar</h2>
+<div class="intro" style="margin-bottom:10px;">Ainda como professor, teste a jornada de quem monta a disciplina: criar curso, subir material e deixar a IA gerar as perguntas. Use qualquer PDF de aula que tiver à mão (com texto de verdade, não escaneado).</div>
+<table>
+  <tr><th class="chk">✓</th><th style="width:44%">Passo</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td>8.1 Dentro da disciplina, crie um <b>curso novo</b> (nome e descrição livres)</td><td class="esperado">Curso criado e visível na disciplina</td></tr>
+  <tr><td class="chk">☐</td><td>8.2 Crie um capítulo dentro do curso</td><td class="esperado">Capítulo criado na ordem</td></tr>
+  <tr><td class="chk">☐</td><td>8.3 Adicione um conteúdo novo fazendo <b>upload de um PDF</b> seu</td><td class="esperado">Upload conclui e o corpo do conteúdo aparece preenchido com o texto extraído do PDF (se o PDF não tiver texto, deve aparecer um aviso claro, nunca ficar vazio em silêncio)</td></tr>
+  <tr><td class="chk">☐</td><td>8.4 Gere as <b>questões socráticas</b> do conteúdo (botão de gerar/reprocessar IA) e, se quiser, edite uma pergunta</td><td class="esperado">Perguntas geradas sem erro; edição persiste</td></tr>
+  <tr><td class="chk">☐</td><td>8.5 <b>Publique</b> o curso e confira que ele fica visível; depois teste <b>despublicar</b> e publicar de novo</td><td class="esperado">O status alterna entre Publicado e Não publicado; despublicado, o curso some para o aluno; publicado, reaparece</td></tr>
+  <tr><td class="chk">☐</td><td>8.6 Entre com a conta de <b>aluno</b> e confira o curso novo publicado; faça 1 sessão rápida. Volte como professor e <b>avalie</b> essa sessão</td><td class="esperado">As perguntas que você criou funcionam no Tutor Socrático; a nota entra na média do curso novo, e a coluna Média do aluno passa a considerar os dois cursos</td></tr>
+</table>
+
+<h3 class="parte">Roteiro Parte 3 · Visão do Admin <span class="login">login: jeferson.admin</span></h3>
+<div class="intro" style="margin-bottom:10px;">Saia da conta de professor e entre com a conta <b>admin</b> (RA <span class="mono">jeferson.admin</span>). O admin tem visão completa da plataforma: usuários, disciplinas, turmas, performance e configurações.</div>
+
+<h2><span class="num">9</span>Gestão da plataforma</h2>
+<table>
+  <tr><th class="chk">✓</th><th style="width:44%">Passo</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td>9.1 Faça login com o RA <span class="mono">jeferson.admin</span> e abra o painel administrativo</td><td class="esperado">Painel completo com acesso a usuários, disciplinas/turmas, performance e configurações</td></tr>
+  <tr><td class="chk">☐</td><td>9.2 Na gestão de <b>usuários</b>, crie um usuário de teste e depois edite-o</td><td class="esperado">Usuário criado e listado; edição salva. <b>Ao editar, se o campo de senha ficar vazio, a senha atual não é alterada</b> (só troca se você digitar uma nova)</td></tr>
+  <tr><td class="chk">☐</td><td>9.3 Navegue por <b>disciplinas e turmas</b> e confira a disciplina de teste (IAA-2026)</td><td class="esperado">A disciplina aparece com seu curso, professor e alunos vinculados</td></tr>
+  <tr><td class="chk">☐</td><td>9.4 Abra a aba <b>Performance / logs</b></td><td class="esperado">Métricas de uso e registros da plataforma aparecem sem erro</td></tr>
+  <tr><td class="chk">☐</td><td>9.5 Abra <b>Configurações</b> e revise as opções disponíveis</td><td class="esperado">Tela de configurações carrega; ajustes salvam sem erro</td></tr>
+  <tr><td class="chk">☐</td><td>9.6 Envie um <b>broadcast de notificação</b> de teste</td><td class="esperado">A notificação é enviada e aparece para os destinatários</td></tr>
+</table>
+
+<h2><span class="num">10</span>Registro do teste</h2>
+<table>
+  <tr><th style="width:26%">Cenário</th><th style="width:14%">OK?</th><th>Observações (o que viu de diferente do esperado)</th></tr>
+  <tr><td>1. Login e navegação (aluno)</td><td>☐ OK &nbsp; ☐ Falhou</td><td></td></tr>
+  <tr><td>2. Iniciar sessão</td><td>☐ OK &nbsp; ☐ Falhou</td><td></td></tr>
+  <tr><td>3. Interagir até o limite</td><td>☐ OK &nbsp; ☐ Falhou</td><td></td></tr>
+  <tr><td>4. Refazer sessão</td><td>☐ OK &nbsp; ☐ Falhou</td><td></td></tr>
+  <tr><td>5. Sair e voltar</td><td>☐ OK &nbsp; ☐ Falhou</td><td></td></tr>
+  <tr><td>6. Conteúdo novo (Lição 2)</td><td>☐ OK &nbsp; ☐ Falhou</td><td></td></tr>
+  <tr><td>7. Professor: avaliação</td><td>☐ OK &nbsp; ☐ Falhou</td><td></td></tr>
+  <tr><td>8. Professor: criar material</td><td>☐ OK &nbsp; ☐ Falhou</td><td></td></tr>
+  <tr><td>9. Admin: gestão da plataforma</td><td>☐ OK &nbsp; ☐ Falhou</td><td></td></tr>
+</table>
+
+<b>Se algo falhar, mande para o time:</b>
+<table>
+  <tr><td style="width:33%"><b>1. Print da tela inteira</b><br>com o painel e o contador/estado visíveis</td>
+      <td style="width:33%"><b>2. O passo do guia</b><br>em que a falha aconteceu (ex.: "4.2")</td>
+      <td><b>3. Horário aproximado</b><br>para localizarmos nos logs do servidor</td></tr>
+</table>
+
+<div class="obs-box">Espaço para anotações gerais:</div>
+
+<div class="footer">
+  <span>Harven AI · eximIA Ventures</span>
+  <span>Gerado em 17 de julho de 2026</span>
+</div>
+
+</body>
+</html>

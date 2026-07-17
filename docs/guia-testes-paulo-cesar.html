@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Harven AI · Guia de Testes do Aluno · Paulo Cesar</title>
+<style>
+  @page { size: A4; margin: 16mm 14mm; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; color: #1a2b20; margin: 0; font-size: 12.5px; line-height: 1.5; }
+  .header { background: linear-gradient(135deg, #0e3d24 0%, #14532d 60%, #1a6b38 100%); color: #fff; border-radius: 14px; padding: 24px 28px; margin-bottom: 18px; }
+  .header .brand { font-size: 11px; letter-spacing: 2.5px; text-transform: uppercase; color: #b8f04d; font-weight: 700; }
+  .header h1 { margin: 6px 0 4px; font-size: 24px; }
+  .header .meta { font-size: 11.5px; color: #d7e8dc; }
+  .badge { display: inline-block; background: #b8f04d; color: #0e3d24; font-weight: 700; border-radius: 999px; padding: 2px 12px; font-size: 11px; margin-left: 6px; }
+  h2 { font-size: 15px; color: #0e3d24; border-bottom: 2px solid #b8f04d; padding-bottom: 4px; margin: 22px 0 10px; }
+  h2 .num { display: inline-block; background: #0e3d24; color: #b8f04d; border-radius: 6px; width: 22px; height: 22px; text-align: center; line-height: 22px; font-size: 12px; margin-right: 8px; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 14px; page-break-inside: auto; }
+  tr { page-break-inside: avoid; }
+  h2 { page-break-after: avoid; }
+  th { background: #eef7ee; color: #0e3d24; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; padding: 7px 9px; border: 1px solid #d5e6d5; }
+  td { padding: 7px 9px; border: 1px solid #d5e6d5; vertical-align: top; }
+  tr:nth-child(even) td { background: #fafdf8; }
+  .chk { font-size: 15px; color: #14532d; width: 26px; text-align: center; }
+  .esperado { color: #14532d; }
+  .intro { background: #f4faee; border: 1px solid #d5e6d5; border-left: 5px solid #b8f04d; border-radius: 8px; padding: 12px 16px; margin-bottom: 6px; }
+  .alerta { background: #fff7ed; border: 1px solid #fed7aa; border-left: 5px solid #f59e0b; border-radius: 8px; padding: 10px 16px; margin: 10px 0; }
+  .mono { font-family: "SF Mono", Menlo, monospace; font-size: 11.5px; background: #eef2ee; border-radius: 4px; padding: 1px 6px; white-space: nowrap; }
+  .fill { color: #888; }
+  .obs-box { border: 1.5px dashed #9fbfa8; border-radius: 8px; min-height: 84px; padding: 8px 12px; color: #667; }
+  .footer { margin-top: 22px; padding-top: 8px; border-top: 1px solid #d5e6d5; font-size: 10.5px; color: #567; display: flex; justify-content: space-between; }
+  .kv td:first-child { font-weight: 600; width: 32%; background: #f4faee; }
+  .pagebreak { page-break-before: always; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="brand">Harven AI · Tutor Socrático</div>
+  <h1>Guia de Testes do Aluno <span class="badge">Paulo Cesar</span></h1>
+  <div class="meta">Disciplina exclusiva de teste: Teste do Tutor Harven (TESTE-TUTOR-2026) · Build de referência: <b>f6aee55</b> · 15/07/2026</div>
+</div>
+
+<div class="intro">
+  <b>Paulo, obrigado por testar!</b> Sua missão é percorrer a jornada completa do aluno no Tutor Socrático e marcar, em cada passo, se o que aconteceu bate com o resultado esperado. São 8 cenários (6 como aluno, 2 como professor), leva uns 35 minutos. Se algo falhar, anote o passo, tire um print e registre o horário. Cada interação sua com a IA será depois avaliada pelo professor com nota de 0 a 10, e a média dessas notas compõe sua nota no curso, então capriche nas respostas.
+</div>
+
+<h2><span class="num">0</span>Acesso</h2>
+<table class="kv">
+  <tr><td>Endereço</td><td><span class="mono">https://harven.eximiaventures.com.br</span></td></tr>
+  <tr><td>Conta ALUNO (cenários 1 a 6)</td><td>RA <span class="mono">paulo.dias.aluno</span></td></tr>
+  <tr><td>Conta PROFESSOR (cenários 7 e 8)</td><td>RA <span class="mono">paulo.dias</span> (seu usuário normal de professor)</td></tr>
+  <tr><td>Senha (ambas)</td><td><span class="mono">Harven@2026</span></td></tr>
+  <tr><td>Navegador</td><td>Chrome ou Safari atualizados, janela normal (não anônima)</td></tr>
+</table>
+
+<h2><span class="num">1</span>Login e navegação até o conteúdo</h2>
+<table>
+  <tr><th class="chk">✓</th><th style="width:44%">Passo</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td>1.1 Faça login com seu RA e senha</td><td class="esperado">Entra sem erro e vê o painel do aluno</td></tr>
+  <tr><td class="chk">☐</td><td>1.2 Abra a disciplina <b>Teste do Tutor Harven</b> (é a única que aparece para esta conta) e o curso "Fundamentos de IA no Agronegócio"</td><td class="esperado">Lista de capítulos aparece</td></tr>
+  <tr><td class="chk">☐</td><td>1.3 Entre no capítulo e abra o conteúdo <span class="mono">1_Aula_Inaugural.pdf</span></td><td class="esperado">O material abre normalmente, SEM mensagem de erro e sem travar (antes havia um erro ao reabrir a página)</td></tr>
+</table>
+
+<h2><span class="num">2</span>Iniciar a sessão socrática</h2>
+<table>
+  <tr><th class="chk">✓</th><th style="width:44%">Passo</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td>2.1 Na seção Questões Socráticas, escolha a questão 1 e inicie a conversa</td><td class="esperado">O painel "Tutor Socratico" abre e o tutor manda a primeira mensagem (a "provocação" de abertura)</td></tr>
+  <tr><td class="chk">☐</td><td>2.2 Observe o contador no topo do painel ANTES de responder qualquer coisa</td><td class="esperado"><b>3/3 interações disponíveis.</b> A mensagem de abertura do tutor NÃO gasta seu limite (este era um bug corrigido hoje)</td></tr>
+  <tr><td class="chk">☐</td><td>2.3 Confira o campo de digitação</td><td class="esperado">Liberado para escrever (não pode aparecer "Sessão concluída" nesta hora)</td></tr>
+</table>
+
+<h2><span class="num">3</span>Interagir até o limite</h2>
+<table>
+  <tr><th class="chk">✓</th><th style="width:44%">Passo</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td>3.1 Responda a pergunta do tutor com uma resposta de verdade (3 a 5 frases)</td><td class="esperado">Tutor responde e o contador cai para 2/3</td></tr>
+  <tr><td class="chk">☐</td><td>3.2 Responda de novo, aprofundando</td><td class="esperado">Contador cai para 1/3</td></tr>
+  <tr><td class="chk">☐</td><td>3.3 Mande sua terceira e última resposta</td><td class="esperado">Contador chega a 0/3, o tutor faz a síntese de fechamento e a sessão é concluída. SÓ AGORA aparece "Sessão concluída"</td></tr>
+  <tr><td class="chk">☐</td><td>3.4 Veja o status do conteúdo no topo da página</td><td class="esperado">Badge "Concluído"</td></tr>
+</table>
+
+<div class="alerta"><b>Ponto de atenção principal:</b> em nenhum momento a sessão pode aparecer como concluída ANTES de você ter mandado suas 3 respostas. Se isso acontecer, é exatamente o bug que estamos caçando: pare, tire print do painel inteiro (com o contador visível) e anote o horário.</div>
+
+<h2><span class="num">4</span>Refazer a sessão</h2>
+<table>
+  <tr><th class="chk">✓</th><th style="width:44%">Passo</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td>4.1 Com a sessão concluída, localize o botão <b>Refazer sessão</b> (no rodapé do chat ou no banner da seção de questões)</td><td class="esperado">Botão visível nos dois lugares</td></tr>
+  <tr><td class="chk">☐</td><td>4.2 Clique em Refazer sessão</td><td class="esperado">Chat reabre com a MESMA pergunta, tutor manda nova abertura, contador volta a <b>3/3</b> e o campo de digitação fica livre</td></tr>
+  <tr><td class="chk">☐</td><td>4.3 Mande 1 resposta na sessão nova</td><td class="esperado">Tutor responde, contador 2/3. NÃO pode voltar sozinho para "Sessão concluída" (bug corrigido hoje)</td></tr>
+</table>
+
+<h2><span class="num">5</span>Sair e voltar (retomada)</h2>
+<table>
+  <tr><th class="chk">✓</th><th style="width:44%">Passo</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td>5.1 Com a sessão do cenário 4 pela metade, volte para a lista de capítulos e depois entre no conteúdo de novo</td><td class="esperado">A conversa reaparece de onde parou, com o contador certo, sem mensagem de erro</td></tr>
+  <tr><td class="chk">☐</td><td>5.2 Recarregue a página inteira (F5 ou Cmd+R) dentro do conteúdo</td><td class="esperado">Mesma coisa: conversa retomada, sem erro (antes dava erro 500 aqui)</td></tr>
+  <tr><td class="chk">☐</td><td>5.3 Complete as respostas restantes até concluir</td><td class="esperado">Fluxo termina normal, com síntese e status Concluído</td></tr>
+</table>
+
+<h2><span class="num">6</span>Teste em outro conteúdo (do zero)</h2>
+<table>
+  <tr><th class="chk">✓</th><th style="width:44%">Passo</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td>6.1 Abra um conteúdo que você NUNCA acessou e vá direto na seção de questões</td><td class="esperado">Página abre sem erro (o caso "aluno sem sessão anterior" era outra fonte de erro corrigida hoje)</td></tr>
+  <tr><td class="chk">☐</td><td>6.2 Inicie e complete uma sessão inteira nele</td><td class="esperado">Mesmo comportamento dos cenários 2 e 3</td></tr>
+</table>
+
+<h2><span class="num">7</span>Visão do professor (a parte mais nova)</h2>
+<div class="intro" style="margin-bottom:10px;">Saia da conta de aluno e entre com a conta <b>professor</b> (RA <span class="mono">paulo.dias</span>). A grande mudança: a nota do aluno agora é <b>composta</b> pelas notas que o professor dá a cada interação com a IA, não digitada direto no quadro.</div>
+<table>
+  <tr><th class="chk">✓</th><th style="width:44%">Passo</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td>7.1 Entre com seu usuário normal de professor e abra a disciplina <b>Teste do Tutor Harven</b> (ela aparece junto com as suas disciplinas reais; as reais ficam intocadas)</td><td class="esperado">Painel do professor com as abas Disciplinas, Alunos, Quadro de Notas e Conversas</td></tr>
+  <tr><td class="chk">☐</td><td>7.2 Abra a aba <b>Quadro de Notas</b></td><td class="esperado">As notas aparecem SOMENTE para leitura (sem campos para digitar). Onde não há avaliação ainda, aparece "—"</td></tr>
+  <tr><td class="chk">☐</td><td>7.3 Clique na SUA linha de aluno (Paulo Cesar de Carvalho Dias) ou vá pela aba Alunos</td><td class="esperado">Abre o perfil do aluno na disciplina, com as sessões socráticas que você fez nos cenários anteriores, agrupadas por curso e capítulo</td></tr>
+  <tr><td class="chk">☐</td><td>7.4 Abra uma sessão concluída, leia a conversa e dê uma nota de <b>0 a 10</b> (com feedback, se quiser)</td><td class="esperado">Campo de nota aceita 0 a 10 em passos de 0,5 (não é mais estrelinha de 1 a 5)</td></tr>
+  <tr><td class="chk">☐</td><td>7.5 Volte ao <b>Quadro de Notas</b></td><td class="esperado">A nota que você deu apareceu na média do curso e na coluna Média, calculadas sozinhas</td></tr>
+  <tr><td class="chk">☐</td><td>7.6 Avalie uma segunda sessão e confira de novo</td><td class="esperado">A média recalcula com as duas notas (ex.: 8,0 e 6,0 viram 7,0)</td></tr>
+</table>
+
+<h2><span class="num">8</span>Criar seu próprio material (visão do professor)</h2>
+<div class="intro" style="margin-bottom:10px;">Ainda como professor, teste a jornada de quem monta a disciplina: criar curso, subir material e deixar a IA gerar as perguntas. Use qualquer PDF de aula que tiver à mão (com texto de verdade, não escaneado).</div>
+<table>
+  <tr><th class="chk">✓</th><th style="width:44%">Passo</th><th>Resultado esperado</th></tr>
+  <tr><td class="chk">☐</td><td>8.1 Dentro da disciplina Teste do Tutor Harven, crie um <b>curso novo</b> (nome e descrição livres)</td><td class="esperado">Curso criado e visível na disciplina</td></tr>
+  <tr><td class="chk">☐</td><td>8.2 Crie um capítulo dentro do curso</td><td class="esperado">Capítulo criado na ordem</td></tr>
+  <tr><td class="chk">☐</td><td>8.3 Adicione um conteúdo novo fazendo <b>upload de um PDF</b> seu</td><td class="esperado">Upload conclui e o corpo do conteúdo aparece preenchido com o texto extraído do PDF (se o PDF não tiver texto, deve aparecer um aviso claro, nunca ficar vazio em silêncio)</td></tr>
+  <tr><td class="chk">☐</td><td>8.4 Gere as <b>questões socráticas</b> do conteúdo (botão de gerar/reprocessar IA) e, se quiser, edite uma pergunta</td><td class="esperado">Perguntas geradas sem erro; edição persiste</td></tr>
+  <tr><td class="chk">☐</td><td>8.5 Publique/salve e entre com a conta de <b>aluno</b></td><td class="esperado">O curso novo aparece na disciplina, e as perguntas que você criou funcionam no Tutor Socrático (faça 1 sessão rápida)</td></tr>
+  <tr><td class="chk">☐</td><td>8.6 Volte como professor e <b>avalie</b> a sessão que você fez no material novo</td><td class="esperado">A nota entra na média do curso novo, e a coluna Média do aluno passa a considerar os dois cursos</td></tr>
+</table>
+
+<h2><span class="num">9</span>Registro do teste</h2>
+<table>
+  <tr><th style="width:22%">Cenário</th><th style="width:14%">OK?</th><th>Observações (o que viu de diferente do esperado)</th></tr>
+  <tr><td>1. Login e navegação</td><td>☐ OK &nbsp; ☐ Falhou</td><td></td></tr>
+  <tr><td>2. Iniciar sessão</td><td>☐ OK &nbsp; ☐ Falhou</td><td></td></tr>
+  <tr><td>3. Interagir até o limite</td><td>☐ OK &nbsp; ☐ Falhou</td><td></td></tr>
+  <tr><td>4. Refazer sessão</td><td>☐ OK &nbsp; ☐ Falhou</td><td></td></tr>
+  <tr><td>5. Sair e voltar</td><td>☐ OK &nbsp; ☐ Falhou</td><td></td></tr>
+  <tr><td>6. Conteúdo novo</td><td>☐ OK &nbsp; ☐ Falhou</td><td></td></tr>
+  <tr><td>7. Visão do professor (avaliação)</td><td>☐ OK &nbsp; ☐ Falhou</td><td></td></tr>
+  <tr><td>8. Criar material novo</td><td>☐ OK &nbsp; ☐ Falhou</td><td></td></tr>
+</table>
+
+<b>Se algo falhar, mande para o professor:</b>
+<table>
+  <tr><td style="width:33%"><b>1. Print da tela inteira</b><br>com o painel do tutor e o contador visíveis</td>
+      <td style="width:33%"><b>2. O passo do guia</b><br>em que a falha aconteceu (ex.: "4.2")</td>
+      <td><b>3. Horário aproximado</b><br>para localizarmos nos logs do servidor</td></tr>
+</table>
+
+<div class="obs-box">Espaço para anotações gerais:</div>
+
+<div class="footer">
+  <span>Harven AI · Guia de Testes do Aluno · v1.0</span>
+  <span>Gerado por J.A.R.V.I.S. em 15/07/2026 · eximIA</span>
+</div>
+
+</body>
+</html>
