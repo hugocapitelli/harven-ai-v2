@@ -26,9 +26,10 @@ interface DashStats {
   users_by_role?: Record<string, number>;
 }
 
+// Backend retorna log_type (não type) em /admin/logs.
 interface LogEntry {
   id: string;
-  type: string;
+  log_type: string;
   message: string;
   author?: string;
   created_at: string;
@@ -38,7 +39,7 @@ const QUICK_ACTIONS = [
   { icon: 'person_add', label: 'Criar Usuário', route: '/admin/users' },
   { icon: 'class', label: 'Gerenciar Turmas', route: '/admin/classes' },
   { icon: 'settings', label: 'Configurações', route: '/admin/settings' },
-  { icon: 'download', label: 'Backups', route: '/admin/settings?tab=backups' },
+  { icon: 'download', label: 'Relatórios', route: '/admin/settings?tab=backups' },
   { icon: 'shield', label: 'Segurança', route: '/admin/settings?tab=security' },
   { icon: 'monitoring', label: 'Performance', route: '/admin/settings?tab=performance' },
 ];
@@ -233,8 +234,8 @@ export default function AdminConsole() {
                 logs.map((log) => (
                   <tr key={log.id} className="border-b border-border last:border-0 hover:bg-muted/50">
                     <td className="px-4 py-2">
-                      <Badge variant={log.type === 'error' ? 'danger' : log.type === 'warning' ? 'warning' : 'outline'}>
-                        {log.type}
+                      <Badge variant={log.log_type === 'error' ? 'danger' : log.log_type === 'warning' ? 'warning' : 'outline'}>
+                        {log.log_type ?? '—'}
                       </Badge>
                     </td>
                     <td className="px-4 py-2 text-foreground max-w-md truncate">{log.message}</td>

@@ -41,6 +41,36 @@ const EMPTY_FORM = { name: '', ra: '', email: '', password: '', role: 'STUDENT' 
 
 const EMPTY_NOTIFY_FORM = { title: '', message: '' };
 
+// Parser CSV tolerante: remove BOM, detecta ; ou , como delimitador e
+// respeita campos entre aspas (com "" como escape).
+function parseCsvRows(text: string): string[][] {
+  const clean = text.replace(/^\uFEFF/, '').trim();
+  if (!clean) return [];
+  const lines = clean.split(/\r?\n/).filter((l) => l.trim());
+  const first = lines[0] ?? '';
+  const delim = (first.match(/;/g)?.length ?? 0) > (first.match(/,/g)?.length ?? 0) ? ';' : ',';
+  return lines.map((line) => {
+    const out: string[] = [];
+    let cur = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (inQuotes) {
+        if (ch === '"') {
+          if (line[i + 1] === '"') { cur += '"'; i++; } else inQuotes = false;
+        } else cur += ch;
+      } else if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === delim) {
+        out.push(cur.trim());
+        cur = '';
+      } else cur += ch;
+    }
+    out.push(cur.trim());
+    return out;
+  });
+}
+
 // GET /users é paginado no backend (per_page max 100, default 20); agrega
 // todas as páginas para exibir a lista completa de usuários.
 async function fetchAllUsers(params?: Record<string, unknown>): Promise<ApiUser[]> {
@@ -211,10 +241,9 @@ export default function UserManagement() {
     const file = e.target.files?.[0];
     if (!file) return;
     const text = await file.text();
-    const lines = text.trim().split('\n').slice(1);
     // Colunas: name,ra,email,role[,password] — password é opcional no CSV
-    const rows = lines.map((line) => {
-      const [name, ra, email, role, password] = line.split(',').map((s) => s.trim());
+    const rows = parseCsvRows(text).slice(1).map((cols) => {
+      const [name, ra, email, role, password] = cols;
       return { name, ra, email, role: (role?.toUpperCase() || 'STUDENT') as UserRole, password: password || '' };
     }).filter((u) => u.name && u.email);
     if (csvRef.current) csvRef.current.value = '';
@@ -408,12 +437,36 @@ export default function UserManagement() {
       <Modal.Root open={!!deletingUser} onClose={() => setDeletingUser(null)} size="sm">
         <Modal.Header title="Confirmar exclusão" onClose={() => setDeletingUser(null)} />
         <Modal.Body>
-          <p className="text-sm text-muted-foreground">
-            Excluir o usuário &quot;{deletingUser?.name}&quot;? Essa ação não pode ser desfeita.
-          </p>
+          <div className="flex flex-col gap-3">
+            <p className="text-sm text-muted-foreground">
+              Excluir o usuário &quot;{deletingUser?.name}&quot;? Essa ação não pode ser desfeita.
+            </p>
+            <div className="flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
+              <span className="material-symbols-outlined text-[16px] shrink-0">warning</span>
+              <span>
+                A exclusão apaga em cascata as sessões socráticas, notas e certificados
+                deste usuário. Se a intenção é só impedir o acesso, prefira <b>Bloquear</b>.
+              </span>
+            </div>
+          </div>
         </Modal.Body>
         <Modal.Footer>
           <Button variant="outline" onClick={() => setDeletingUser(null)}>Cancelar</Button>
+          <Button
+            variant="outline"
+            disabled={saving}
+            onClick={async () => {
+              if (!deletingUser) return;
+              try {
+                await usersApi.update(deletingUser.id, { status: 'blocked' } as Record<string, unknown>);
+                toast.success('Usuário bloqueado (dados preservados).');
+                setUsers((prev) => prev.map((x) => x.id === deletingUser.id ? { ...x, status: 'blocked' } : x));
+                setDeletingUser(null);
+              } catch { toast.error('Erro ao bloquear.'); }
+            }}
+          >
+            <span className="material-symbols-outlined text-[16px] mr-1">block</span> Bloquear
+          </Button>
           <Button variant="destructive" onClick={handleDelete} disabled={saving}>
             {saving ? 'Excluindo...' : 'Excluir'}
           </Button>

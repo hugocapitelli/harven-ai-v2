@@ -24,16 +24,17 @@ interface Backup {
   created_at: string;
 }
 
+// Shape real de GET /admin/performance; não há uptime/ram/cpu/disk no backend.
 interface PerfMetrics {
-  uptime?: string;
-  ram_usage?: number;
-  cpu_usage?: number;
-  disk_usage?: number;
+  avg_performance_score?: number;
+  avg_messages_per_session?: number;
+  active_sessions?: number;
 }
 
+// Backend retorna log_type (não type) em /admin/logs.
 interface LogEntry {
   id: string;
-  type: string;
+  log_type: string;
   message: string;
   author?: string;
   created_at: string;
@@ -42,7 +43,7 @@ interface LogEntry {
 const TABS = [
   { id: 'general', label: 'Geral', icon: 'tune' },
   { id: 'security', label: 'Segurança', icon: 'shield' },
-  { id: 'backups', label: 'Backups', icon: 'backup' },
+  { id: 'backups', label: 'Relatórios', icon: 'backup' },
   { id: 'performance', label: 'Performance', icon: 'monitoring' },
   { id: 'logs', label: 'Logs', icon: 'description' },
 ];
@@ -327,13 +328,17 @@ export default function SystemSettings() {
       {activeTab === 'backups' && (
         <Card>
           <CardHeader className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-foreground">Backups</h2>
+            <h2 className="text-sm font-semibold text-foreground">Relatórios de Dados</h2>
             <Button size="sm" onClick={async () => {
-              try { await adminApi.createBackup(); toast.success('Backup criado.'); const d = await adminApi.listBackups(); setBackups(unwrapList<Backup>(d)); } catch { toast.error('Erro.'); }
+              try { await adminApi.createBackup(); toast.success('Relatório gerado.'); const d = await adminApi.listBackups(); setBackups(unwrapList<Backup>(d)); } catch { toast.error('Erro.'); }
             }}>
-              <span className="material-symbols-outlined text-[16px] mr-1">add</span> Criar Backup
+              <span className="material-symbols-outlined text-[16px] mr-1">add</span> Gerar Relatório
             </Button>
           </CardHeader>
+          <div className="px-4 py-2.5 border-b border-border flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="material-symbols-outlined text-[16px] text-primary">info</span>
+            Estes arquivos são relatórios de contagem de registros por tabela (JSON), não um backup restaurável do banco de dados.
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -346,7 +351,7 @@ export default function SystemSettings() {
               </thead>
               <tbody>
                 {backups.length === 0 ? (
-                  <tr><td colSpan={4}><EmptyState icon="backup" title="Nenhum backup disponível" description="Crie o primeiro backup clicando em 'Criar Backup'" size="sm" /></td></tr>
+                  <tr><td colSpan={4}><EmptyState icon="backup" title="Nenhum relatório disponível" description="Gere o primeiro clicando em 'Gerar Relatório'" size="sm" /></td></tr>
                 ) : (
                   backups.map((b) => (
                     <tr key={b.id} className="border-b border-border last:border-0 hover:bg-muted/50">
@@ -377,12 +382,11 @@ export default function SystemSettings() {
       {/* Tab: Performance */}
       {activeTab === 'performance' && (
         <div className="flex flex-col gap-6">
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
             {[
-              { icon: 'timer', label: 'Uptime', value: perf.uptime ?? '—' },
-              { icon: 'memory', label: 'RAM', value: perf.ram_usage != null ? `${perf.ram_usage}%` : '—' },
-              { icon: 'developer_board', label: 'CPU', value: perf.cpu_usage != null ? `${perf.cpu_usage}%` : '—' },
-              { icon: 'storage', label: 'Disco', value: perf.disk_usage != null ? `${perf.disk_usage}%` : '—' },
+              { icon: 'grade', label: 'Score Médio das Sessões', value: perf.avg_performance_score != null ? Number(perf.avg_performance_score).toFixed(1) : '—' },
+              { icon: 'forum', label: 'Mensagens por Sessão', value: perf.avg_messages_per_session != null ? Number(perf.avg_messages_per_session).toFixed(1) : '—' },
+              { icon: 'sensors', label: 'Sessões Ativas', value: perf.active_sessions ?? '—' },
             ].map((m) => (
               <StatCard key={m.label} icon={m.icon} value={m.value} label={m.label} />
             ))}
@@ -435,7 +439,7 @@ export default function SystemSettings() {
                   logs.map((log) => (
                     <tr key={log.id} className="border-b border-border last:border-0 hover:bg-muted/50">
                       <td className="px-4 py-2">
-                        <Badge variant={log.type === 'error' ? 'danger' : log.type === 'warning' ? 'warning' : 'outline'}>{log.type}</Badge>
+                        <Badge variant={log.log_type === 'error' ? 'danger' : log.log_type === 'warning' ? 'warning' : 'outline'}>{log.log_type ?? '—'}</Badge>
                       </td>
                       <td className="px-4 py-2 text-foreground max-w-md truncate">{log.message}</td>
                       <td className="px-4 py-2 text-muted-foreground">{log.author ?? '—'}</td>

@@ -265,8 +265,18 @@ export default function ContentCreation() {
         await contentsApi.update(contentId, { title, body });
       }
 
+      // Persistir as perguntas que o professor DIGITOU (antes chamava
+      // generateQuestions, que só gera por IA e descartava as escritas à mão).
       if (contentId && questions.length > 0) {
-        await aiApi.generateQuestions({ content_id: contentId, chapter_content: body || '', chapter_title: title || '', max_questions: questions.length || 3 });
+        const items = questions
+          .filter((q) => q.question.trim())
+          .map((q) => ({
+            question_text: q.question.trim(),
+            expected_answer: q.expected_answer.trim(),
+            difficulty: q.difficulty,
+            skill: 'analyze',
+          }));
+        if (items.length > 0) await questionsApi.create(contentId, items);
       }
 
       navigate(
@@ -274,6 +284,7 @@ export default function ContentCreation() {
       );
     } catch (err) {
       console.error('Save failed', err);
+      toast.error('Erro ao salvar o conteúdo. Tente novamente.');
     } finally {
       setSaving(false);
     }

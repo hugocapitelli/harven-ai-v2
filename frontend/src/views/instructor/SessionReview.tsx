@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
-import { sessionReviewsApi, chatSessionsApi } from '../../services/api';
+import { sessionReviewsApi, chatSessionsApi, usersApi } from '../../services/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { Button } from '../../components/ui/Button';
 import { Card, CardContent, CardHeader } from '../../components/ui/Card';
@@ -24,9 +24,12 @@ interface SessionData {
 const statusLabel = (status: string) => {
   switch (status) {
     case 'pending': return { text: 'Pendente', variant: 'warning' as const };
+    case 'pending_student': return { text: 'Aguardando aluno', variant: 'warning' as const };
     case 'reviewed': return { text: 'Avaliado', variant: 'success' as const };
     case 'replied': return { text: 'Respondido', variant: 'success' as const };
     case 'closed': return { text: 'Encerrado', variant: 'outline' as const };
+    case 'active': return { text: 'Em andamento', variant: 'outline' as const };
+    case 'completed': return { text: 'Concluída', variant: 'success' as const };
     default: return { text: status, variant: 'outline' as const };
   }
 };
@@ -100,9 +103,12 @@ export default function SessionReview() {
     const load = async () => {
       try {
         setLoading(true);
-        const [msgs, reviewData] = await Promise.all([
+        const [msgs, reviewData, sessionData] = await Promise.all([
           chatSessionsApi.getMessages(sessionId),
           sessionReviewsApi.get(sessionId).catch(() => null),
+          // GET /messages devolve só a lista; a sessão (status, user_id, data)
+          // vem de GET /chat-sessions/{id}.
+          chatSessionsApi.get(sessionId).catch(() => null),
         ]);
         if (controller.signal.aborted) return;
 
@@ -118,8 +124,16 @@ export default function SessionReview() {
           }
         }
 
-        const sessionInfo = (msgs as Record<string, unknown>)?.session ?? null;
-        if (sessionInfo) setSession(sessionInfo as SessionData);
+        const sessionInfo = (sessionData ?? (msgs as Record<string, unknown>)?.session ?? null) as Record<string, unknown> | null;
+        if (sessionInfo) {
+          let studentName = (sessionInfo.student_name as string | undefined) ?? '';
+          if (!studentName && sessionInfo.user_id) {
+            const u = await usersApi.get(String(sessionInfo.user_id)).catch(() => null);
+            studentName = ((u as Record<string, unknown> | null)?.name as string | undefined) ?? '';
+          }
+          if (controller.signal.aborted) return;
+          setSession({ ...(sessionInfo as unknown as SessionData), student_name: studentName || 'Aluno' });
+        }
       } catch (err) {
         if (controller.signal.aborted) return;
         console.error('Error loading session:', err);
