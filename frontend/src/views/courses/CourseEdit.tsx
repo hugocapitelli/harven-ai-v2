@@ -75,6 +75,18 @@ export default function CourseEdit({ userRole }: CourseEditProps) {
     setDeleteTarget(null);
   };
 
+  const isPublished = course?.status === 'active';
+
+  const toggleStatus = async () => {
+    if (!courseId) return;
+    const next = isPublished ? 'draft' : 'active';
+    try {
+      await coursesApi.update(courseId, { status: next });
+      setCourse(prev => prev ? { ...prev, status: next } : prev);
+      toast.success(next === 'active' ? 'Curso publicado.' : 'Curso despublicado (rascunho).');
+    } catch { toast.error('Erro ao alterar o status do curso.'); }
+  };
+
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !courseId) return;
@@ -157,6 +169,23 @@ export default function CourseEdit({ userRole }: CourseEditProps) {
                   <label className="text-[11px] font-medium uppercase text-gray-400">Capa</label>
                   {(course?.image_url || course?.image) && <img src={String(course.image_url || course.image)} alt="" className="w-full h-32 object-cover rounded-lg mt-1" />}
                   <input type="file" accept="image/*" onChange={handleImageUpload} className="mt-2 text-xs" />
+                </div>
+                <div className="border-t border-harven-border pt-4 mt-4">
+                  <label className="text-[11px] font-medium uppercase text-gray-400">Publicação</label>
+                  <p className="text-xs text-muted-foreground mt-1 mb-2">
+                    Status atual: <span className={cn('font-bold', isPublished ? 'text-green-600' : 'text-gray-500')}>{isPublished ? 'Publicado' : 'Rascunho'}</span>
+                  </p>
+                  <button
+                    onClick={toggleStatus}
+                    className={cn(
+                      'w-full py-2 rounded-lg text-xs font-bold border transition-colors',
+                      isPublished
+                        ? 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                        : 'border-green-400 text-green-700 hover:bg-green-50',
+                    )}
+                  >
+                    {isPublished ? 'Despublicar (voltar a rascunho)' : 'Publicar Curso'}
+                  </button>
                 </div>
                 {/* DELETE /courses é ADMIN-only no backend */}
                 {userRole === 'ADMIN' && (
