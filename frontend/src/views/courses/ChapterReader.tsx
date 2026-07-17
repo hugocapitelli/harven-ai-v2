@@ -6,11 +6,13 @@ import ReactMarkdown from 'react-markdown';
 import DOMPurify from 'dompurify';
 import {
   contentsApi,
+  coursesApi,
   questionsApi,
   aiApi,
   chatSessionsApi,
   ttsApi,
   userStatsApi,
+  resolveMediaUrl,
 } from '../../services/api';
 import { useAuth } from '../../contexts/AuthContext';
 import { cn } from '../../lib/utils';
@@ -323,6 +325,16 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
             id: sessionData.id ?? sessionData.session_id,
             initialQuestionText: sessionData.initial_question_text ?? null,
           });
+          // Cross-device unlock: a session ``completed`` no SERVIDOR prova que o
+          // aluno ja esgotou as interacoes — o gate nao pode depender so do
+          // localStorage (outro device obrigava a refazer as 3 interacoes).
+          // Hidrata o flag e persiste localmente para os proximos loads.
+          setTutorDone(true);
+          if (user?.id && contentId) {
+            try {
+              localStorage.setItem(`harven_socratic_done:${user.id}:${contentId}`, '1');
+            } catch { /* best-effort — o flag em memoria ja destrava esta visita */ }
+          }
         } else {
           setActiveSession(null);
           setCompletedSession(null);
@@ -905,10 +917,21 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
       return;
     }
     setCompleting(true);
+    let courseJustFinished = false;
     try {
-      await userStatsApi.completeContent(user.id, courseId, contentId);
+      const res = await userStatsApi.completeContent(user.id, courseId, contentId);
       setCompleted(true);
       toast.success('Conteudo marcado como concluido!');
+      // Deteccao de fim de curso: o proprio completeContent devolve o progresso
+      // agregado; se nao vier, consulta o endpoint de progresso.
+      let pct = Number((res as Record<string, unknown> | null)?.progress_percent);
+      if (!Number.isFinite(pct)) {
+        try {
+          const p = await userStatsApi.getCourseProgress(user.id, courseId);
+          pct = Number(p?.progress_percent ?? 0);
+        } catch { pct = 0; }
+      }
+      courseJustFinished = pct >= 100;
     } catch (err) {
       const status = (err as { response?: { status?: number } })?.response?.status;
       if (status === 503) {
@@ -933,11 +956,28 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
         console.warn('[ChapterReader] chatSessionsApi.complete failed (non-blocking)');
       }
     }
+    // Fim de curso: progresso chegou a 100% — consolida no backend
+    // (POST /courses/{id}/complete atualiza course_progress + user_stats +
+    // activity) e emite o certificado (POST /users/{id}/certificates, que o
+    // servidor so libera com progresso 100%). Best-effort: falha aqui nunca
+    // desfaz a conclusao do conteudo. O certificado aparece no UserProfile.
+    if (courseJustFinished) {
+      try {
+        await coursesApi.complete(courseId);
+        const cert = await userStatsApi.issueCertificate(user.id, courseId);
+        const certNumber = (cert as Record<string, unknown> | null)?.certificate_number;
+        toast.success(
+          certNumber
+            ? `Curso concluido! Certificado ${String(certNumber)} emitido — veja no seu perfil.`
+            : 'Curso concluido! Certificado emitido — veja no seu perfil.',
+          { duration: 8000 },
+        );
+      } catch {
+        console.warn('[ChapterReader] course-completion/certificate chain failed (non-blocking)');
+        toast.success('Curso concluido!');
+      }
+    }
     setCompleting(false);
-    // NOTE (out of scope, documented follow-up): course-completion certificate
-    // emission (userStatsApi.issueCertificate) is intentionally NOT wired here.
-    // See docs/stories/epic-front/sf-3.md — course-completion detection is a
-    // separate follow-up; this handler closes per-content completion only.
   };
 
   // ---- Reprocess with AI ----
@@ -1242,7 +1282,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                       <video
                         controls
                         className="w-full rounded-xl shadow-lg"
-                        src={content.file_url}
+                        src={resolveMediaUrl(content.file_url)}
                         preload="metadata"
                       >
                         <track kind="captions" />
@@ -1273,7 +1313,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                       <audio
                         controls
                         className="w-full"
-                        src={content.file_url || content.audio_url}
+                        src={resolveMediaUrl(content.file_url || content.audio_url)}
                         preload="metadata"
                       />
                     ) : (
@@ -1287,7 +1327,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                   <div className="bg-white rounded-xl border border-harven-border p-4">
                     {content.file_url ? (
                       <img
-                        src={content.file_url}
+                        src={resolveMediaUrl(content.file_url)}
                         alt={content.title}
                         className="w-full rounded-xl object-contain"
                       />
@@ -1342,7 +1382,7 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
                 {/* Text — file view */}
                 {normType === 'text' && !editing && activeView === 'file' && hasFile && (
                   <iframe
-                    src={content.file_url}
+                    src={resolveMediaUrl(content.file_url)}
                     className="w-full h-[600px] rounded-xl border border-harven-border bg-white"
                     title="Arquivo"
                   />
@@ -1602,9 +1642,10 @@ export default function ChapterReader({ userRole }: ChapterReaderProps) {
           </div>
         </div>
 
-        {/* Chat Panel */}
+        {/* Chat Panel — painel lateral fixo (w-96) so cabe em >=lg; no mobile o
+            dialogo socratico vira overlay full-screen, senao fica inutilizavel. */}
         {chatOpen && (
-          <div className="w-96 border-l border-harven-border bg-white flex flex-col flex-shrink-0">
+          <div className="fixed inset-0 z-50 bg-white flex flex-col lg:static lg:inset-auto lg:z-auto lg:w-96 lg:border-l lg:border-harven-border lg:flex-shrink-0">
             <div className="h-14 flex items-center justify-between px-4 border-b border-harven-border">
               <div className="flex items-center gap-2 min-w-0">
                 <span className="material-symbols-outlined text-harven-gold">psychology</span>

@@ -28,6 +28,17 @@ export default function CourseList({ userRole }: CourseListProps) {
   const [isCreating, setIsCreating] = useState(false);
   const [instructors, setInstructors] = useState<Array<{ id: string; name: string }>>([]);
 
+  // Catalogo do aluno: enquanto o backend nao filtra a listagem por matricula
+  // (em andamento no terminal Byte), o front NAO pode exibir curso em rascunho
+  // para STUDENT. Filtro defensivo e idempotente: quando o backend passar a
+  // filtrar, este predicado apenas deixa de remover itens (nao depende de
+  // course.progress nem de campo inexistente).
+  const visibleToRole = (c: Record<string, unknown>) => {
+    if (userRole !== 'STUDENT') return true;
+    const status = String(c.status ?? '').toLowerCase();
+    return status === '' || status === 'published' || status === 'active';
+  };
+
   // Progresso real por conteudo concluido: o objeto course do backend nao traz
   // `progress` — a fonte e /users/{id}/courses/{courseId}/progress.
   const attachProgress = async (list: Record<string, unknown>[]) => {
@@ -48,7 +59,7 @@ export default function CourseList({ userRole }: CourseListProps) {
       try {
         const data = await coursesApi.list(ctrl.signal);
         if (ctrl.signal.aborted) return;
-        const list = unwrapList<Record<string, unknown>>(data).filter((c) => c.title && String(c.title).trim());
+        const list = unwrapList<Record<string, unknown>>(data).filter((c) => c.title && String(c.title).trim()).filter(visibleToRole);
         const withProgress = await attachProgress(list);
         if (ctrl.signal.aborted) return;
         setCourses(withProgress);
@@ -76,7 +87,13 @@ export default function CourseList({ userRole }: CourseListProps) {
     return courses.filter(course => {
       const progress = Number(course.progress ?? 0);
       const status = progress >= 100 ? 'Concluído' : progress > 0 ? 'Em Andamento' : 'Não Iniciado';
-      const matchesTab = activeTab === 'Todos' || activeTab === status || (activeTab === 'Favoritos' && course.isFavorite) || (activeTab === 'Não Iniciados' && status === 'Não Iniciado');
+      // Abas no plural vs status no singular: mapear explicitamente (a aba
+      // 'Concluídos' nunca casava com o status 'Concluído' por igualdade crua).
+      const matchesTab =
+        activeTab === 'Todos' ||
+        activeTab === status ||
+        (activeTab === 'Não Iniciados' && status === 'Não Iniciado') ||
+        (activeTab === 'Concluídos' && status === 'Concluído');
       const q = searchTerm.toLowerCase();
       const matchesSearch = !q || String(course.title ?? '').toLowerCase().includes(q) || String(course.instructor ?? '').toLowerCase().includes(q);
       const matchesCat = selectedCategory === 'Todas' || course.category === selectedCategory;
@@ -92,7 +109,7 @@ export default function CourseList({ userRole }: CourseListProps) {
       if (newCourse.instructor_id) payload.instructor_id = newCourse.instructor_id;
       await coursesApi.create(payload);
       const data = await coursesApi.list();
-      setCourses(await attachProgress(unwrapList<Record<string, unknown>>(data).filter((c) => c.title && String(c.title).trim())));
+      setCourses(await attachProgress(unwrapList<Record<string, unknown>>(data).filter((c) => c.title && String(c.title).trim()).filter(visibleToRole)));
       setShowCreateModal(false);
       setNewCourse({ title: '', instructor_id: '', category: 'Geral' });
       toast.success('Curso criado com sucesso');
@@ -100,7 +117,9 @@ export default function CourseList({ userRole }: CourseListProps) {
     finally { setIsCreating(false); }
   };
 
-  const tabs = ['Todos', 'Em Andamento', 'Não Iniciados', 'Concluídos', 'Favoritos'];
+  // 'Favoritos' removida: course.isFavorite nao existe no backend — a aba era
+  // permanentemente vazia. Reintroduzir junto com o recurso real de favoritos.
+  const tabs = ['Todos', 'Em Andamento', 'Não Iniciados', 'Concluídos'];
 
   if (loading) return (
     <div className="max-w-7xl mx-auto p-8 space-y-8">

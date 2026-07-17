@@ -90,12 +90,21 @@ export default function CourseDetails({ userRole }: CourseDetailsProps) {
     setDeleteTarget(null);
   };
 
+  // Recursos/Discussao sao placeholders vazios — so o instrutor os ve (contexto
+  // de construcao do curso); para o aluno seriam abas mortas.
   const tabs = [
     { id: 'content', label: 'Conteudo', icon: 'list_alt' },
     { id: 'about', label: 'Sobre', icon: 'info' },
-    { id: 'resources', label: 'Recursos', icon: 'folder_open' },
-    { id: 'discussion', label: 'Discussao', icon: 'forum' },
+    ...(isInstructor
+      ? [
+          { id: 'resources', label: 'Recursos', icon: 'folder_open' },
+          { id: 'discussion', label: 'Discussao', icon: 'forum' },
+        ]
+      : []),
   ];
+
+  // Nunca vazar status interno cru ("draft") na UI; para o aluno nem status.
+  const STATUS_LABEL: Record<string, string> = { draft: 'Rascunho', published: 'Publicado', active: 'Ativo', archived: 'Arquivado' };
 
   if (loading) return (
     <div className="flex flex-col min-h-full bg-background">
@@ -115,7 +124,7 @@ export default function CourseDetails({ userRole }: CourseDetailsProps) {
     <div className="max-w-7xl mx-auto p-8 flex flex-col gap-8 animate-in fade-in duration-500">
       <PageHeader
         title={String(course.title)}
-        subtitle={`Instrutor · ${String(course.status || 'Ativo')}`}
+        subtitle={isInstructor ? `Instrutor · ${STATUS_LABEL[String(course.status ?? '').toLowerCase()] ?? 'Ativo'}` : undefined}
         backAction={{ onClick: () => navigate(-1) }}
         breadcrumbs={[
           { label: 'Cursos', onClick: () => navigate('/courses') },

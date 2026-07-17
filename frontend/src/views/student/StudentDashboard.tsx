@@ -36,16 +36,17 @@ export default function StudentDashboard() {
           { label: 'Pontos', value: statsData?.total_points ?? 0, icon: 'emoji_events' },
         ]);
 
-        const allCourses: Record<string, unknown>[] = [];
+        // N+1 sequencial derrubava o tempo de load com muitas disciplinas —
+        // as listagens sao independentes, buscar em paralelo.
         const disciplines = unwrapList<Record<string, unknown>>(disciplinesData);
-        for (const d of disciplines) {
+        const perDiscipline = await Promise.all(disciplines.map(async (d): Promise<Record<string, unknown>[]> => {
           try {
             const c = await coursesApi.listByClass(d.id as string);
-            if (ctrl.signal.aborted) return;
-            const courseList = unwrapList<Record<string, unknown>>(c);
-            allCourses.push(...courseList.map((course) => ({ ...course, disciplineName: d.name ?? d.title })));
-          } catch { /* skip */ }
-        }
+            return unwrapList<Record<string, unknown>>(c).map((course) => ({ ...course, disciplineName: d.name ?? d.title }));
+          } catch { return []; }
+        }));
+        if (ctrl.signal.aborted) return;
+        const allCourses: Record<string, unknown>[] = perDiscipline.flat();
         // Progresso real por conteudo concluido — o objeto course do backend nao
         // traz `progress`; a fonte e /users/{id}/courses/{courseId}/progress.
         const withProgress = await Promise.all(allCourses.map(async (course) => {

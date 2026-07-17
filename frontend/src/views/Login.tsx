@@ -1,12 +1,14 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth, getDefaultRoute } from '../contexts/AuthContext';
+import { REMEMBER_KEYS } from '../services/api';
 export default function Login() {
   const { login } = useAuth();
   const navigate = useNavigate();
   const [ra, setRa] = useState('');
   const [password, setPassword] = useState('');
   const [showPw, setShowPw] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -16,6 +18,19 @@ export default function Login() {
     setLoading(true);
     try {
       await login(ra, password);
+      // "Manter conectado": espelha a sessao (que o AuthContext gravou em
+      // sessionStorage) no localStorage; o seed em services/api.ts restaura em
+      // aba/sessao nova. Desmarcado, garante que nada fique lembrado.
+      try {
+        if (rememberMe) {
+          REMEMBER_KEYS.forEach((k) => {
+            const v = sessionStorage.getItem(k);
+            if (v) localStorage.setItem(k, v);
+          });
+        } else {
+          REMEMBER_KEYS.forEach((k) => localStorage.removeItem(k));
+        }
+      } catch { /* storage indisponivel — login segue valendo para a aba */ }
       const userData = JSON.parse(sessionStorage.getItem('user-data') ?? '{}');
       navigate(getDefaultRoute(userData.role ?? 'STUDENT'), { replace: true });
     } catch (err: unknown) {
@@ -120,6 +135,16 @@ export default function Login() {
               </div>
             </div>
 
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(e) => setRememberMe(e.target.checked)}
+                className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary/30"
+              />
+              <span className="text-sm text-muted-foreground">Manter conectado neste dispositivo</span>
+            </label>
+
             {error && (
               <div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-600 text-sm font-medium rounded-xl px-4 py-3">
                 <span className="material-symbols-outlined text-[18px]">error</span>
@@ -141,10 +166,8 @@ export default function Login() {
             </button>
           </form>
 
-          <div className="mt-8 flex justify-between text-sm text-muted-foreground">
-            <a href="#" className="hover:text-harven-dark transition-colors">Esqueceu a senha?</a>
-            <a href="#" className="hover:text-harven-dark transition-colors">Primeiro acesso?</a>
-          </div>
+          {/* Links 'Esqueceu a senha?/Primeiro acesso?' removidos: eram href="#"
+              sem fluxo por tras — reintroduzir quando houver reset de senha real. */}
 
           {/* Footer */}
           <div className="mt-16 text-center">
