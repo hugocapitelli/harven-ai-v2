@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { dashboardApi, disciplinesApi, coursesApi } from '../../services/api';
+import { disciplinesApi, coursesApi, userStatsApi } from '../../services/api';
 import { unwrapList } from '../../lib/utils';
 import { StatCard } from '../../components/ui/StatCard';
 import { EmptyState } from '../../components/ui/EmptyState';
@@ -21,17 +21,19 @@ export default function StudentDashboard() {
     (async () => {
       try {
         if (!user) return;
+        // O aluno le /users/{id}/stats (proprio) — /dashboard/stats e o agregado
+        // admin e devolve chaves que nao existem para o aluno (dashboard zerado).
         const [statsData, disciplinesData] = await Promise.all([
-          dashboardApi.getStats(),
+          userStatsApi.getStats(user.id),
           disciplinesApi.list(),
         ]);
         if (ctrl.signal.aborted) return;
 
         setStats([
-          { label: 'Cursos em Andamento', value: statsData?.courses_in_progress ?? 0, icon: 'menu_book' },
+          { label: 'Cursos Concluidos', value: statsData?.courses_completed ?? 0, icon: 'menu_book' },
           { label: 'Horas Estudadas', value: `${statsData?.hours_studied ?? 0}h`, icon: 'schedule' },
           { label: 'Media Geral', value: statsData?.average_score?.toFixed?.(1) ?? '-', icon: 'trending_up' },
-          { label: 'Conquistas', value: statsData?.achievements_count ?? 0, icon: 'emoji_events' },
+          { label: 'Pontos', value: statsData?.total_points ?? 0, icon: 'emoji_events' },
         ]);
 
         const allCourses: Record<string, unknown>[] = [];
