@@ -141,10 +141,8 @@ export default function Login() {
             </button>
           </form>
 
-          <div className="mt-8 flex justify-between text-sm text-muted-foreground">
-            <a href="#" className="hover:text-harven-dark transition-colors">Esqueceu a senha?</a>
-            <a href="#" className="hover:text-harven-dark transition-colors">Primeiro acesso?</a>
-          </div>
+          {/* Links 'Esqueceu a senha?/Primeiro acesso?' removidos: eram href="#"
+              sem fluxo por tras — reintroduzir quando houver reset de senha real. */}
 
           {/* Footer */}
           <div className="mt-16 text-center">

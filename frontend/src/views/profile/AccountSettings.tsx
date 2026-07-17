@@ -9,31 +9,13 @@ import { Input } from '../../components/ui/Input';
 import { Tabs } from '../../components/ui/Tabs';
 import { Avatar } from '../../components/ui/Avatar';
 
+// Aba 'Notificações' removida: os toggles nao persistiam em lugar nenhum
+// (nenhum endpoint de preferencias confirmado) — UI decorativa engana o aluno.
+// Reintroduzir quando o backend expuser preferencias reais no contrato /me.
 const TABS = [
   { id: 'profile', label: 'Perfil', icon: 'person' },
   { id: 'security', label: 'Segurança', icon: 'lock' },
-  { id: 'notifications', label: 'Notificações', icon: 'notifications' },
 ];
-
-function Toggle({ checked, onChange, label, description }: { checked: boolean; onChange: (v: boolean) => void; label: string; description?: string }) {
-  return (
-    <label className="flex items-center justify-between py-3 border-b border-border last:border-0 cursor-pointer">
-      <div>
-        <span className="text-sm font-medium text-foreground">{label}</span>
-        {description && <p className="text-xs text-muted-foreground mt-0.5">{description}</p>}
-      </div>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        onClick={() => onChange(!checked)}
-        className={`relative h-6 w-11 rounded-full transition-colors shrink-0 ${checked ? 'bg-primary' : 'bg-muted'}`}
-      >
-        <span className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-5' : ''}`} />
-      </button>
-    </label>
-  );
-}
 
 export default function AccountSettings() {
   const { user, updateUser } = useAuth();
@@ -53,15 +35,6 @@ export default function AccountSettings() {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-
-  // Notifications
-  const [notifPrefs, setNotifPrefs] = useState({
-    email_new_content: true,
-    email_reviews: true,
-    email_achievements: true,
-    push_messages: true,
-    push_reminders: false,
-  });
 
   const handleSaveProfile = async () => {
     if (!user?.id || !name.trim()) { toast.error('Nome é obrigatório.'); return; }
@@ -114,19 +87,6 @@ export default function AccountSettings() {
       setConfirmPassword('');
     } catch {
       toast.error('Erro ao alterar senha. Verifique a senha atual.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleSaveNotifications = async () => {
-    if (!user?.id) return;
-    setSaving(true);
-    try {
-      await usersApi.updateMe({ notification_preferences: notifPrefs } as Record<string, unknown>);
-      toast.success('Preferências salvas.');
-    } catch {
-      toast.error('Erro ao salvar preferências.');
     } finally {
       setSaving(false);
     }
@@ -211,56 +171,6 @@ export default function AccountSettings() {
         </Card>
       )}
 
-      {/* Tab: Notifications */}
-      {activeTab === 'notifications' && (
-        <div className="flex flex-col gap-4">
-          <Card>
-            <CardHeader><h2 className="text-sm font-semibold text-foreground">Email</h2></CardHeader>
-            <CardContent>
-              <Toggle
-                label="Novo conteúdo disponível"
-                description="Receber email quando novos materiais forem publicados"
-                checked={notifPrefs.email_new_content}
-                onChange={(v) => setNotifPrefs((p) => ({ ...p, email_new_content: v }))}
-              />
-              <Toggle
-                label="Avaliações de sessões"
-                description="Receber email quando uma sessão for avaliada"
-                checked={notifPrefs.email_reviews}
-                onChange={(v) => setNotifPrefs((p) => ({ ...p, email_reviews: v }))}
-              />
-              <Toggle
-                label="Conquistas desbloqueadas"
-                description="Receber email ao desbloquear uma conquista"
-                checked={notifPrefs.email_achievements}
-                onChange={(v) => setNotifPrefs((p) => ({ ...p, email_achievements: v }))}
-              />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader><h2 className="text-sm font-semibold text-foreground">Push</h2></CardHeader>
-            <CardContent>
-              <Toggle
-                label="Mensagens"
-                description="Notificações de novas mensagens"
-                checked={notifPrefs.push_messages}
-                onChange={(v) => setNotifPrefs((p) => ({ ...p, push_messages: v }))}
-              />
-              <Toggle
-                label="Lembretes de estudo"
-                description="Lembretes diários para estudar"
-                checked={notifPrefs.push_reminders}
-                onChange={(v) => setNotifPrefs((p) => ({ ...p, push_reminders: v }))}
-              />
-            </CardContent>
-          </Card>
-
-          <Button onClick={handleSaveNotifications} disabled={saving}>
-            {saving ? 'Salvando...' : 'Salvar Preferências'}
-          </Button>
-        </div>
-      )}
     </div>
   );
 }
