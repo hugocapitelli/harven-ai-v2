@@ -15,9 +15,16 @@ from pydantic import BaseModel, Field
 from supabase import Client
 
 from auth import create_access_token, get_current_user, require_role
-from authz import assert_owner_or_role, load_session_or_404, require_self_or_role
+from authz import (
+    assert_owner_or_role,
+    assert_teacher_owns_content,
+    enforce_teacher_scope_on_read,
+    load_session_or_404,
+    require_self_or_role,
+)
 from config import get_settings
 from database import get_supabase
+from repositories import DisciplineRepository
 from repositories.chat_repo import ChatRepository
 from schemas.ai import AIDetectionResponse
 from schemas.chat import ChatSessionCreate
@@ -181,6 +188,15 @@ async def ai_creator_generate(
 
         # If no content provided but content_id exists, load from DB
         if not chapter_content.strip() and req.content_id:
+            # SEC-SCOPE-9: cross-teacher IDOR — a TEACHER/INSTRUCTOR passing another
+            # teacher's content_id would otherwise receive AI output generated from
+            # foreign material. Gate ownership BEFORE the content is loaded/used.
+            # No-op for ADMIN (platform authority) and STUDENT (not a teacher actor,
+            # scoped elsewhere), so this cannot regress the shared paths.
+            enforce_teacher_scope_on_read(
+                assert_teacher_owns_content, req.content_id, current_user, client,
+                DisciplineRepository(client),
+            )
             from repositories import ContentRepository
             content_repo = ContentRepository(client)
             content_record = content_repo.get_by_id(req.content_id)
@@ -218,6 +234,12 @@ async def ai_suggest_chapters(
     """Analyze uploaded content and suggest chapter splits based on headings."""
     content_text = req.chapter_content or ""
     if not content_text.strip() and req.content_id:
+        # SEC-SCOPE-9: same cross-teacher IDOR gate as /creator/generate — never
+        # suggest chapters from another teacher's material. No-op for ADMIN/STUDENT.
+        enforce_teacher_scope_on_read(
+            assert_teacher_owns_content, req.content_id, current_user, client,
+            DisciplineRepository(client),
+        )
         from repositories import ContentRepository
         content_repo = ContentRepository(client)
         content_record = content_repo.get_by_id(req.content_id)
@@ -571,6 +593,14 @@ async def tts_generate(
     # Resolve text: from body.text or from content_id
     text = body.text or ""
     if not text.strip() and body.content_id:
+        # SEC-SCOPE-9: this endpoint is get_current_user (STUDENT-reachable), so the
+        # gate must touch ONLY teachers — enforce_teacher_scope_on_read no-ops for
+        # STUDENT (scoped by enrollment elsewhere) and ADMIN, while blocking a
+        # TEACHER/INSTRUCTOR from synthesizing another teacher's content.
+        enforce_teacher_scope_on_read(
+            assert_teacher_owns_content, body.content_id, current_user, client,
+            DisciplineRepository(client),
+        )
         from repositories import ContentRepository
         content_repo = ContentRepository(client)
         content_record = content_repo.get_by_id(body.content_id)
@@ -1088,6 +1118,14 @@ async def audio_generate_from_content(
     from repositories import ContentRepository
     from repositories.tts_job_repo import TtsJobRepository
 
+    # SEC-SCOPE-9: get_current_user endpoint (STUDENT-reachable) — gate teachers
+    # only. Blocks a TEACHER/INSTRUCTOR from queueing an audio job over another
+    # teacher's content; no-op for ADMIN/STUDENT.
+    enforce_teacher_scope_on_read(
+        assert_teacher_owns_content, body.content_id, current_user, client,
+        DisciplineRepository(client),
+    )
+
     content_repo = ContentRepository(client)
     content_record = content_repo.get_by_id(body.content_id)
     if not content_record:
@@ -1220,6 +1258,15 @@ async def reprocess_content(
 ):
     """Reprocess content body with AI to improve formatting and readability."""
     from repositories import ContentRepository
+
+    # SEC-SCOPE-9: this endpoint both READS and OVERWRITES content.body (line below
+    # calls content_repo.update). A TEACHER/INSTRUCTOR passing another teacher's
+    # content_id would rewrite foreign material — gate ownership before any load or
+    # mutation. No-op for ADMIN (platform authority).
+    enforce_teacher_scope_on_read(
+        assert_teacher_owns_content, body.content_id, current_user, client,
+        DisciplineRepository(client),
+    )
 
     content_repo = ContentRepository(client)
     record = content_repo.get_by_id(body.content_id)

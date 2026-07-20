@@ -21,10 +21,32 @@ import types
 import pytest
 
 import routes_ai
-from conftest import STUDENT_A_ID, STUDENT_B_ID, TEACHER_ID
+from conftest import DISCIPLINE_ID, STUDENT_A_ID, STUDENT_B_ID, TEACHER_ID
 from fakes import FakeAsyncOpenAI, FakeSyncOpenAI
 from repositories.tts_job_repo import TtsJobRepository
 from services.ai_service import AIService
+
+# SEC-SCOPE-9: the audio route now enforces cross-teacher ownership on the
+# content_id (a TEACHER may only synthesize their OWN content). These tests act
+# as TEACHER_ID, who owns DISCIPLINE_ID (conftest seed). Link every content the
+# tests read into that discipline's tree so the owning teacher legitimately
+# passes the gate — the fix is to complete the fixture chain, never to weaken the
+# gate.
+_LIFECYCLE_COURSE = "course-tts-lifecycle"
+_LIFECYCLE_CHAPTER = "chapter-tts-lifecycle"
+
+
+def _seed_owned_course_chapter(fake):
+    """Seed the course->chapter under TEACHER_ID's owned discipline.
+
+    Content rows are seeded with ``chapter_id=_LIFECYCLE_CHAPTER`` so the ownership
+    walk (content -> chapter -> course -> discipline_teachers) resolves to
+    TEACHER_ID and the owning teacher passes the SEC-SCOPE-9 gate.
+    """
+    fake.add("courses", {"id": _LIFECYCLE_COURSE, "title": "Curso TTS",
+                         "discipline_id": DISCIPLINE_ID, "status": "active"})
+    fake.add("chapters", {"id": _LIFECYCLE_CHAPTER, "course_id": _LIFECYCLE_COURSE,
+                         "title": "Cap TTS", "order": 1})
 
 
 class _SyncThread:
@@ -58,10 +80,13 @@ def tts_setup(monkeypatch, client, fake_supabase, tmp_path):
     """
     monkeypatch.setattr(_threading, "Thread", _SyncThread)
 
+    # SEC-SCOPE-9: seed content already chained to TEACHER_ID's owned discipline
+    # (via _LIFECYCLE_CHAPTER) so the owning teacher passes the ownership gate.
     fake_supabase.seed("contents", [
-        {"id": "content-1", "body": "Conteudo academico para audio."},
-        {"id": "content-2", "body": "Outro conteudo academico."},
+        {"id": "content-1", "body": "Conteudo academico para audio.", "chapter_id": _LIFECYCLE_CHAPTER},
+        {"id": "content-2", "body": "Outro conteudo academico.", "chapter_id": _LIFECYCLE_CHAPTER},
     ])
+    _seed_owned_course_chapter(fake_supabase)
     fake_supabase.seed("tts_jobs", [])
     fake_supabase.seed("token_usage", [])
     fake_supabase.rpc = fake_supabase._rpc_entry  # type: ignore[attr-defined]
@@ -386,7 +411,7 @@ class TestChunkAndConcatenate:
         or partial result."""
         long_body = ("Um paragrafo academico bem extenso sobre o tema. " * 300)
         fake_supabase.seed("contents", fake_supabase.rows("contents") + [
-            {"id": "content-long", "body": long_body}
+            {"id": "content-long", "body": long_body, "chapter_id": _LIFECYCLE_CHAPTER}
         ])
         # Force small chunks so this text genuinely splits into several calls.
         monkeypatch.setattr(routes_ai, "TTS_MAX_CHARS_PER_CALL", 500)

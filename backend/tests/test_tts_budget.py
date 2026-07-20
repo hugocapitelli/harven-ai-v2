@@ -42,11 +42,29 @@ import types
 import pytest
 
 import routes_ai
-from conftest import TEACHER_ID, STUDENT_A_ID
+from conftest import DISCIPLINE_ID, TEACHER_ID, STUDENT_A_ID
 from fakes import FakeAsyncOpenAI, FakeSyncOpenAI, FakeSupabaseClient
 from repositories.token_usage_repo import TokenUsageRepository
 from repositories.tts_job_repo import TtsJobRepository
 from services.ai_service import AIService
+
+
+_BUDGET_CHAPTER = "chapter-tts-budget"
+
+
+def _seed_owned_course_chapter(fake):
+    """SEC-SCOPE-9: seed the course->chapter under TEACHER_ID's owned discipline.
+
+    The audio route now gates cross-teacher ownership on ``content_id``. The
+    route-level budget tests act as TEACHER_ID (who owns ``DISCIPLINE_ID`` via the
+    conftest seed); their content is seeded with ``chapter_id=_BUDGET_CHAPTER`` so
+    the ownership walk resolves to TEACHER_ID and the owning teacher passes.
+    Worker-level tests (``_run_tts_job`` direct) bypass the route and need no chain.
+    """
+    fake.add("courses", {"id": "course-tts-budget", "title": "Curso",
+                         "discipline_id": DISCIPLINE_ID, "status": "active"})
+    fake.add("chapters", {"id": _BUDGET_CHAPTER, "course_id": "course-tts-budget",
+                         "title": "Cap", "order": 1})
 
 # Each fake chat completion = 10 + 20 tokens (see tests/fakes.py::_FakeUsage).
 FAKE_LLM_TOKENS = 30
@@ -287,8 +305,9 @@ class TestPreCheckBarsOverBudgetBeforeSynthesis:
     ):
         # Content the route reads before dispatching.
         fake_supabase.seed("contents", [
-            {"id": "content-1", "body": "Conteudo academico para audio."}
+            {"id": "content-1", "body": "Conteudo academico para audio.", "chapter_id": _BUDGET_CHAPTER}
         ])
+        _seed_owned_course_chapter(fake_supabase)
         fake_supabase.seed("tts_jobs", [])
         # ElevenLabs IS configured — so a 503 here can ONLY come from the budget
         # pre-check, never from the missing-key guard.
@@ -323,8 +342,9 @@ class TestPreCheckBarsOverBudgetBeforeSynthesis:
         """Mirror oracle: a teacher WITHIN budget passes the pre-check and the job
         IS dispatched (proving the pre-check gates only over-cap users)."""
         fake_supabase.seed("contents", [
-            {"id": "content-1", "body": "Conteudo academico para audio."}
+            {"id": "content-1", "body": "Conteudo academico para audio.", "chapter_id": _BUDGET_CHAPTER}
         ])
+        _seed_owned_course_chapter(fake_supabase)
         fake_supabase.seed("tts_jobs", [])
         monkeypatch.setattr(routes_ai, "ELEVENLABS_API_KEY", "fake-key", raising=False)
         fake_async = FakeAsyncOpenAI(response_text='{"x": 1}')

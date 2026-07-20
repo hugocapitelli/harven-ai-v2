@@ -202,3 +202,190 @@ def assert_teacher_owns_discipline(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="Permissao insuficiente para esta disciplina",
     )
+
+
+# ---------------------------------------------------------------------------
+# Content-tree scoping (teacher -> course -> chapter -> content)
+# ---------------------------------------------------------------------------
+# EPIC-SEC / SEC-SCOPE-8. The discipline gate above only knows how to decide a
+# ``discipline_id``, but the whole course/chapter/content CRUD in ``main.py``
+# addresses rows by ``course_id`` / ``chapter_id`` / ``content_id``. These
+# helpers walk the ownership chain ``content -> chapter -> course -> discipline``
+# up to a ``discipline_id`` and then reuse the already-proven
+# :func:`assert_teacher_owns_discipline` decision, so ADMIN bypass and the
+# TEACHER/INSTRUCTOR scoping semantics stay in exactly one place.
+#
+# Same contract as the rest of this module:
+#   * plain functions (ownership is decided AFTER the row is loaded, from the
+#     loaded row's foreign key — never from a client-supplied body field);
+#   * pure decision + single-purpose loaders: a missing row raises ``404`` (it
+#     does not disclose whether the id exists for another teacher) and an actor
+#     that fails the scope raises ``403`` before any mutation;
+#   * ADMIN short-circuits *before* any load (platform-wide authority), matching
+#     ``assert_teacher_owns_discipline``.
+def _load_row_or_404(client: Any, table: str, row_id: str, detail: str) -> dict:
+    """Load ``table`` row by id or raise ``404`` (mirrors ``load_session_or_404``)."""
+    res = (
+        client.table(table)
+        .select("*")
+        .eq("id", row_id)
+        .maybe_single()
+        .execute()
+    )
+    data = getattr(res, "data", None) if res is not None else None
+    if not data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=detail)
+    return data
+
+
+def assert_teacher_owns_course(
+    course_id: str,
+    current_user: Mapping[str, Any],
+    client: Any,
+    repo: Any,
+) -> dict:
+    """Allow ADMIN, or a TEACHER/INSTRUCTOR scoped to the course's discipline.
+
+    ``repo`` is a ``DisciplineRepository`` (same object accepted by
+    :func:`assert_teacher_owns_discipline`); ``client`` is the Supabase client
+    used to load the course row.
+
+    Decision order:
+      1. ADMIN bypasses before any load (platform-wide authority).
+      2. The course is loaded; a missing course raises ``404``.
+      3. A course with **no** ``discipline_id`` (legacy / orphaned row) is
+         **denied** for non-ADMIN — fail-closed, since there is no discipline to
+         scope the teacher against and we must never let an unrelated teacher
+         mutate an unclaimed course.
+      4. Otherwise the course's ``discipline_id`` is handed to
+         :func:`assert_teacher_owns_discipline`, which allows only a teacher
+         linked to that discipline.
+
+    Returns the loaded course row so the caller can reuse it without a second
+    fetch. Raises ``HTTPException`` (403/404) on deny.
+    """
+    if _role_of(current_user) == "ADMIN":
+        # ADMIN still needs the row's existence enforced by the endpoint's own
+        # loader; ownership is unconditional so we do not load here.
+        return {}
+
+    course = _load_row_or_404(client, "courses", course_id, "Curso nao encontrado")
+    discipline_id = course.get("discipline_id")
+    if not discipline_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permissao insuficiente para este curso",
+        )
+    assert_teacher_owns_discipline(discipline_id, current_user, repo)
+    return course
+
+
+def assert_teacher_owns_chapter(
+    chapter_id: str,
+    current_user: Mapping[str, Any],
+    client: Any,
+    repo: Any,
+) -> dict:
+    """Allow ADMIN, or a TEACHER/INSTRUCTOR scoped to the chapter's course/discipline.
+
+    Walks ``chapter -> course`` and defers the discipline decision to
+    :func:`assert_teacher_owns_course`. A missing chapter raises ``404``.
+    Returns the loaded chapter row. Raises ``HTTPException`` (403/404) on deny.
+    """
+    if _role_of(current_user) == "ADMIN":
+        return {}
+
+    chapter = _load_row_or_404(client, "chapters", chapter_id, "Capitulo nao encontrado")
+    course_id = chapter.get("course_id")
+    if not course_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permissao insuficiente para este capitulo",
+        )
+    assert_teacher_owns_course(course_id, current_user, client, repo)
+    return chapter
+
+
+def assert_teacher_owns_content(
+    content_id: str,
+    current_user: Mapping[str, Any],
+    client: Any,
+    repo: Any,
+) -> dict:
+    """Allow ADMIN, or a TEACHER/INSTRUCTOR scoped to the content's chapter/course/discipline.
+
+    Walks ``content -> chapter`` and defers to :func:`assert_teacher_owns_chapter`.
+    A missing content raises ``404``. Returns the loaded content row. Raises
+    ``HTTPException`` (403/404) on deny.
+    """
+    if _role_of(current_user) == "ADMIN":
+        return {}
+
+    content = _load_row_or_404(client, "contents", content_id, "Conteudo nao encontrado")
+    chapter_id = content.get("chapter_id")
+    if not chapter_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permissao insuficiente para este conteudo",
+        )
+    assert_teacher_owns_chapter(chapter_id, current_user, client, repo)
+    return content
+
+
+def _is_teacher_actor(current_user: Mapping[str, Any]) -> bool:
+    """True when the actor is a TEACHER/INSTRUCTOR (not ADMIN, not STUDENT)."""
+    return _role_of(current_user) in DISCIPLINE_PRIVILEGED_ROLES
+
+
+def enforce_teacher_scope_on_read(
+    assertion: Any,
+    resource_id: str,
+    current_user: Mapping[str, Any],
+    client: Any,
+    repo: Any,
+) -> None:
+    """Apply a cross-teacher ownership gate to a shared (``get_current_user``) READ.
+
+    Several course/chapter/content READ endpoints are reachable by *any*
+    authenticated user (STUDENT enrollment scoping governs students elsewhere —
+    ``test_courses_student_scope``). The cross-teacher leak on those reads is a
+    TEACHER/INSTRUCTOR pulling *another* teacher's course tree. This helper closes
+    exactly that hole without touching STUDENT or ADMIN paths:
+
+      * TEACHER/INSTRUCTOR  -> the given ``assertion`` (one of
+        :func:`assert_teacher_owns_course` / ``_chapter`` / ``_content`` /
+        ``_question``) runs and raises 403/404 when they are out of scope.
+      * ADMIN / STUDENT     -> untouched (ADMIN has platform authority; STUDENT
+        access is scoped by their enrollment, not by teacher-ownership).
+
+    ``assertion`` is passed in (rather than branching on the resource kind here)
+    so every call-site stays explicit about which chain it walks.
+    """
+    if _is_teacher_actor(current_user):
+        assertion(resource_id, current_user, client, repo)
+
+
+def assert_teacher_owns_question(
+    question_id: str,
+    current_user: Mapping[str, Any],
+    client: Any,
+    repo: Any,
+) -> dict:
+    """Allow ADMIN, or a TEACHER/INSTRUCTOR scoped to the question's content chain.
+
+    Walks ``question -> content`` and defers to :func:`assert_teacher_owns_content`.
+    A missing question raises ``404``. Returns the loaded question row. Raises
+    ``HTTPException`` (403/404) on deny.
+    """
+    if _role_of(current_user) == "ADMIN":
+        return {}
+
+    question = _load_row_or_404(client, "questions", question_id, "Questao nao encontrada")
+    content_id = question.get("content_id")
+    if not content_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permissao insuficiente para esta questao",
+        )
+    assert_teacher_owns_content(content_id, current_user, client, repo)
+    return question

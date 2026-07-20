@@ -26,7 +26,18 @@ CHAPTER_ID = "chapter-1"
 
 @pytest.fixture(autouse=True)
 def _seed_chapter(fake_supabase):
-    """Seed a chapter row so `ChapterRepository.get_by_id` finds it."""
+    """Seed the chapter + its ownership chain so `as_teacher` legitimately owns it.
+
+    SEC-SCOPE-8 gates ``POST /chapters/{id}/upload`` by walking
+    ``chapter -> course -> discipline_teachers``, so the chapter's course must be
+    pinned to a discipline the acting teacher (``TEACHER_ID``) owns. The conftest
+    base seed already links ``DISCIPLINE_ID`` to ``TEACHER_ID``; here we add the
+    ``course-1`` row under it. Without this chain the upload would (correctly) 404.
+    """
+    from conftest import DISCIPLINE_ID
+
+    fake_supabase.seed("courses", [{"id": "course-1", "title": "Course 1",
+                                    "discipline_id": DISCIPLINE_ID, "status": "active"}])
     fake_supabase.seed("chapters", [{"id": CHAPTER_ID, "course_id": "course-1", "order": 1}])
     fake_supabase.seed("contents", [])
 

@@ -43,7 +43,15 @@ from supabase import Client
 from config import get_settings
 from database import get_supabase
 from auth import verify_password, create_access_token, get_current_user, require_role, hash_password
-from authz import require_self_or_role
+from authz import (
+    require_self_or_role,
+    assert_teacher_owns_discipline,
+    assert_teacher_owns_course,
+    assert_teacher_owns_chapter,
+    assert_teacher_owns_content,
+    assert_teacher_owns_question,
+    enforce_teacher_scope_on_read,
+)
 from repositories import (
     UserRepository,
     DisciplineRepository,
@@ -1112,6 +1120,11 @@ async def create_course(
 ):
     course_repo = CourseRepository(client)
     data = body.model_dump()
+    # SEC-SCOPE-8: a teacher may only pin a new course to a discipline they own.
+    # (ADMIN bypasses inside the helper; a teacher supplying no discipline_id is a
+    # legacy/unpinned course and is left to existing behaviour.)
+    if data.get("discipline_id") and (current_user.get("role") or "").upper() in ("TEACHER", "INSTRUCTOR"):
+        assert_teacher_owns_discipline(data["discipline_id"], current_user, DisciplineRepository(client))
     if not data.get("instructor_id"):
         data["instructor_id"] = current_user["id"]
     course = course_repo.create(data)
@@ -1124,6 +1137,11 @@ async def get_course(
     current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-SCOPE-8: a TEACHER/INSTRUCTOR may only read a course inside their own
+    # discipline; STUDENT reads are scoped by enrollment elsewhere, ADMIN bypasses.
+    enforce_teacher_scope_on_read(
+        assert_teacher_owns_course, course_id, current_user, client, DisciplineRepository(client)
+    )
     course_repo = CourseRepository(client)
     course = course_repo.get_with_chapters(course_id)
     if not course:
@@ -1137,6 +1155,10 @@ async def export_course(
     current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-SCOPE-8: exporting the full course tree is a cross-teacher leak vector.
+    enforce_teacher_scope_on_read(
+        assert_teacher_owns_course, course_id, current_user, client, DisciplineRepository(client)
+    )
     course_repo = CourseRepository(client)
     course = course_repo.export_full(course_id)
     if not course:
@@ -1151,6 +1173,8 @@ async def update_course(
     current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-SCOPE-8: only ADMIN or a teacher scoped to this course's discipline may edit it.
+    assert_teacher_owns_course(course_id, current_user, client, DisciplineRepository(client))
     course_repo = CourseRepository(client)
     data = _build_update_dict(body)
     if not data:
@@ -1182,6 +1206,8 @@ async def upload_course_image(
 ):
     if file.content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=400, detail="Tipo de imagem nao permitido")
+    # SEC-SCOPE-8: only ADMIN or the owning teacher may replace a course image.
+    assert_teacher_owns_course(course_id, current_user, client, DisciplineRepository(client))
     course_repo = CourseRepository(client)
     if not course_repo.get_by_id(course_id):
         raise HTTPException(status_code=404, detail="Curso nao encontrado")
@@ -1199,6 +1225,10 @@ async def list_discipline_courses(
     current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-SCOPE-8: a TEACHER/INSTRUCTOR may only list courses of a discipline they
+    # own; STUDENT/ADMIN paths unchanged (enrollment scoping / platform authority).
+    if (current_user.get("role") or "").upper() in ("TEACHER", "INSTRUCTOR"):
+        assert_teacher_owns_discipline(class_id, current_user, DisciplineRepository(client))
     course_repo = CourseRepository(client)
     courses, total = course_repo.get_all(
         filters={"discipline_id": class_id},
@@ -1222,6 +1252,8 @@ async def create_discipline_course(
     current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-SCOPE-8: teachers may only create courses inside their own discipline.
+    assert_teacher_owns_discipline(class_id, current_user, DisciplineRepository(client))
     course_repo = CourseRepository(client)
     data = body.model_dump()
     data["discipline_id"] = class_id
@@ -1246,6 +1278,10 @@ async def list_chapters(
     current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-SCOPE-8: a teacher may only list chapters of a course in their discipline.
+    enforce_teacher_scope_on_read(
+        assert_teacher_owns_course, course_id, current_user, client, DisciplineRepository(client)
+    )
     chapter_repo = ChapterRepository(client)
     return chapter_repo.get_by_course(course_id)
 
@@ -1257,6 +1293,8 @@ async def create_chapter(
     current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-SCOPE-8: teachers may only add chapters to a course they own.
+    assert_teacher_owns_course(course_id, current_user, client, DisciplineRepository(client))
     course_repo = CourseRepository(client)
     if not course_repo.get_by_id(course_id):
         raise HTTPException(status_code=404, detail="Curso nao encontrado")
@@ -1274,6 +1312,8 @@ async def update_chapter(
     current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-SCOPE-8: only ADMIN or the owning teacher may edit a chapter.
+    assert_teacher_owns_chapter(chapter_id, current_user, client, DisciplineRepository(client))
     chapter_repo = ChapterRepository(client)
     data = _build_update_dict(body)
     if not data:
@@ -1290,6 +1330,8 @@ async def delete_chapter(
     current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-SCOPE-8: only ADMIN or the owning teacher may delete a chapter.
+    assert_teacher_owns_chapter(chapter_id, current_user, client, DisciplineRepository(client))
     chapter_repo = ChapterRepository(client)
     if not chapter_repo.delete(chapter_id):
         raise HTTPException(status_code=404, detail="Capitulo nao encontrado")
@@ -1305,6 +1347,10 @@ async def list_contents(
     current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-SCOPE-8: a teacher may only list contents of a chapter in their discipline.
+    enforce_teacher_scope_on_read(
+        assert_teacher_owns_chapter, chapter_id, current_user, client, DisciplineRepository(client)
+    )
     content_repo = ContentRepository(client)
     return content_repo.get_by_chapter(chapter_id)
 
@@ -1316,6 +1362,8 @@ async def create_content(
     current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-SCOPE-8: teachers may only add content to a chapter they own.
+    assert_teacher_owns_chapter(chapter_id, current_user, client, DisciplineRepository(client))
     chapter_repo = ChapterRepository(client)
     if not chapter_repo.get_by_id(chapter_id):
         raise HTTPException(status_code=404, detail="Capitulo nao encontrado")
@@ -1332,6 +1380,10 @@ async def get_content(
     current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-SCOPE-8: a teacher may only read content inside their own discipline.
+    enforce_teacher_scope_on_read(
+        assert_teacher_owns_content, content_id, current_user, client, DisciplineRepository(client)
+    )
     content_repo = ContentRepository(client)
     content = content_repo.get_by_id(content_id)
     if not content:
@@ -1349,6 +1401,8 @@ async def update_content(
     current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-SCOPE-8: only ADMIN or the owning teacher may edit content.
+    assert_teacher_owns_content(content_id, current_user, client, DisciplineRepository(client))
     content_repo = ContentRepository(client)
     data = _build_update_dict(body)
     if not data:
@@ -1365,6 +1419,8 @@ async def delete_content(
     current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-SCOPE-8: only ADMIN or the owning teacher may delete content.
+    assert_teacher_owns_content(content_id, current_user, client, DisciplineRepository(client))
     content_repo = ContentRepository(client)
     if not content_repo.delete(content_id):
         raise HTTPException(status_code=404, detail="Conteudo nao encontrado")
@@ -1381,6 +1437,8 @@ async def upload_chapter_file(
     if file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(status_code=400, detail=f"Tipo de arquivo nao permitido: {file.content_type}")
 
+    # SEC-SCOPE-8: teachers may only upload into a chapter they own.
+    assert_teacher_owns_chapter(chapter_id, current_user, client, DisciplineRepository(client))
     chapter_repo = ChapterRepository(client)
     if not chapter_repo.get_by_id(chapter_id):
         raise HTTPException(status_code=404, detail="Capitulo nao encontrado")
@@ -1459,6 +1517,10 @@ async def list_questions(
     current_user: dict = Depends(get_current_user),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-SCOPE-8: a teacher may only list questions of content in their discipline.
+    enforce_teacher_scope_on_read(
+        assert_teacher_owns_content, content_id, current_user, client, DisciplineRepository(client)
+    )
     question_repo = QuestionRepository(client)
     return question_repo.get_by_content(content_id)
 
@@ -1470,6 +1532,8 @@ async def create_questions(
     current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-SCOPE-8: teachers may only add questions to content they own.
+    assert_teacher_owns_content(content_id, current_user, client, DisciplineRepository(client))
     content_repo = ContentRepository(client)
     if not content_repo.get_by_id(content_id):
         raise HTTPException(status_code=404, detail="Conteudo nao encontrado")
@@ -1486,6 +1550,8 @@ async def update_question(
     current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-SCOPE-8: only ADMIN or the owning teacher may edit a question.
+    assert_teacher_owns_question(question_id, current_user, client, DisciplineRepository(client))
     question_repo = QuestionRepository(client)
     data = _build_update_dict(body)
     if not data:
@@ -1503,6 +1569,9 @@ async def batch_update_questions(
     current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-SCOPE-8: this deletes+recreates ALL questions of the content — only ADMIN
+    # or the owning teacher may do it, never a cross-teacher actor.
+    assert_teacher_owns_content(content_id, current_user, client, DisciplineRepository(client))
     try:
         # Delete existing questions for this content
         client.table("questions").delete().eq("content_id", content_id).execute()
@@ -1524,6 +1593,8 @@ async def delete_question(
     current_user: dict = Depends(require_role("ADMIN", "TEACHER", "INSTRUCTOR")),
     client: Client = Depends(get_supabase),
 ):
+    # SEC-SCOPE-8: only ADMIN or the owning teacher may delete a question.
+    assert_teacher_owns_question(question_id, current_user, client, DisciplineRepository(client))
     question_repo = QuestionRepository(client)
     if not question_repo.delete(question_id):
         raise HTTPException(status_code=404, detail="Questao nao encontrada")
